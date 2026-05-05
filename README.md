@@ -14,6 +14,8 @@ chat session, while this server exposes deterministic project-management tools.
 - `init_project`: create missing project/backlog scaffold files
 - `draft_backlog_items`: draft typed candidate items from a goal
 - `create_backlog_item`: write one valid backlog item
+- local SQLite storage foundation under `.platy/platypus.sqlite3` for task
+  events, findings, and schema metadata
 - runtime/finding tools are exposed with structured `skipped` responses until
   durable task and finding storage is implemented
 
