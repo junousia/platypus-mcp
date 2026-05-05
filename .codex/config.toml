@@ -1,4 +1,21 @@
 [mcp_servers."platypus-rs"]
 command = "cargo"
 args = ["run", "--quiet"]
-env = { PLATYPUS_MCP_ROOT = "/home/jukka/work/pydantic" }
+
+[mcp_servers."platypus-rs".tools.ping]
+approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.inspect_status]
+approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.doctor_snapshot]
+approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.validate_backlog]
+approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.list_backlog]
+approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.draft_backlog_items]
+approval_mode = "approve"
