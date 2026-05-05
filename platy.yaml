@@ -1,0 +1,6 @@
+project:
+  name: Platypus MCP Rust
+backlog:
+  id_prefix: MCP
+  items: backlog/items
+  epics: backlog/epics

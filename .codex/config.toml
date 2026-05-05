@@ -22,3 +22,6 @@ approval_mode = "approve"
 
 [mcp_servers."platypus-rs".tools.draft_backlog_items]
 approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.create_backlog_item]
+approval_mode = "approve"
