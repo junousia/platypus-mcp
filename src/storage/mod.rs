@@ -17,6 +17,11 @@ pub struct Storage {
     pub schema_version: i32,
 }
 
+pub struct StorageConnection {
+    pub storage: Storage,
+    pub connection: Connection,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageInit {
     pub root: PathBuf,
@@ -109,6 +114,35 @@ impl Error for StorageError {
 pub type StorageResult<T> = Result<T, StorageError>;
 
 pub fn initialize(default_root: &Path, root: Option<&str>) -> StorageResult<StorageInit> {
+    let (init, _connection) = connect_inner(default_root, root)?;
+    Ok(init)
+}
+
+pub fn open(default_root: &Path, root: Option<&str>) -> StorageResult<Storage> {
+    let init = initialize(default_root, root)?;
+    Ok(Storage {
+        root: init.root,
+        db_path: init.db_path,
+        schema_version: init.schema_version,
+    })
+}
+
+pub fn connect(default_root: &Path, root: Option<&str>) -> StorageResult<StorageConnection> {
+    let (init, connection) = connect_inner(default_root, root)?;
+    Ok(StorageConnection {
+        storage: Storage {
+            root: init.root,
+            db_path: init.db_path,
+            schema_version: init.schema_version,
+        },
+        connection,
+    })
+}
+
+fn connect_inner(
+    default_root: &Path,
+    root: Option<&str>,
+) -> StorageResult<(StorageInit, Connection)> {
     let project_root = paths::resolve_project_root(default_root, root)?;
     let state = paths::prepare_state_dir(&project_root)?;
     let db_path = paths::resolve_database_path(&project_root, &state.path)?;
@@ -123,22 +157,14 @@ pub fn initialize(default_root: &Path, root: Option<&str>) -> StorageResult<Stor
         source,
     })?;
 
-    Ok(StorageInit {
+    let init = StorageInit {
         root: project_root,
         state_dir: state.path,
         db_path,
         created_state_dir: state.created,
         schema_version: SCHEMA_VERSION,
-    })
-}
-
-pub fn open(default_root: &Path, root: Option<&str>) -> StorageResult<Storage> {
-    let init = initialize(default_root, root)?;
-    Ok(Storage {
-        root: init.root,
-        db_path: init.db_path,
-        schema_version: init.schema_version,
-    })
+    };
+    Ok((init, connection))
 }
 
 #[cfg(test)]

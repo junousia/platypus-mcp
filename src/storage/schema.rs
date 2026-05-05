@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -37,7 +37,10 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
             title TEXT NOT NULL,
             status TEXT NOT NULL,
             severity TEXT,
+            required INTEGER NOT NULL DEFAULT 1,
             summary TEXT NOT NULL,
+            owner TEXT,
+            disposition_reason TEXT,
             evidence_json TEXT,
             metadata_json TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -54,6 +57,14 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
             ON findings(status);
         "#,
     )?;
+    add_column_if_missing(
+        &transaction,
+        "findings",
+        "required",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
+    add_column_if_missing(&transaction, "findings", "owner", "TEXT")?;
+    add_column_if_missing(&transaction, "findings", "disposition_reason", "TEXT")?;
     transaction.execute(
         r#"
         INSERT INTO metadata(key, value, updated_at)
@@ -66,4 +77,26 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
     )?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()
+}
+
+fn add_column_if_missing(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> rusqlite::Result<()> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let existing: String = row.get(1)?;
+        if existing == column {
+            return Ok(());
+        }
+    }
+
+    connection.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+        [],
+    )?;
+    Ok(())
 }

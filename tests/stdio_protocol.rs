@@ -19,6 +19,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"create_backlog_item"));
     assert!(tool_names.contains(&"doctor_snapshot"));
     assert!(tool_names.contains(&"init_project"));
+    assert!(tool_names.contains(&"record_finding"));
 
     client.cancel().await?;
     Ok(())
@@ -89,6 +90,82 @@ async fn stdio_server_initializes_project_scaffold() -> anyhow::Result<()> {
     assert!(response["data"]["created"].as_u64().unwrap_or(0) > 0);
     assert!(project.path().join("platy.yaml").is_file());
     assert!(project.path().join("backlog/epics/general.md").is_file());
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_records_lists_validates_and_dispositions_findings() -> anyhow::Result<()> {
+    let project = project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let recorded = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "record_finding".into(),
+            arguments: Some(json_args(json!({
+                "source_item_id": "PROJ-001",
+                "source_task_id": "task-1",
+                "title": "Follow-up needed",
+                "summary": "The worker found a required follow-up.",
+                "severity": "medium",
+                "required": true,
+                "evidence_refs": ["output/summary.md"]
+            }))),
+            task: None,
+        })
+        .await?;
+    let recorded = recorded.structured_content.expect("recorded content");
+    let finding_id = recorded["data"]["finding"]["id"]
+        .as_str()
+        .expect("finding id")
+        .to_string();
+    assert_eq!(recorded["status"], "completed");
+
+    let validation = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "validate_findings".into(),
+            arguments: Some(json_args(json!({ "source_item_id": "PROJ-001" }))),
+            task: None,
+        })
+        .await?;
+    let validation = validation.structured_content.expect("validation content");
+    assert_eq!(validation["status"], "failed");
+    assert_eq!(validation["data"]["unresolved_required_count"], 1);
+
+    let updated = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "update_finding_disposition".into(),
+            arguments: Some(json_args(json!({
+                "finding_id": finding_id,
+                "status": "resolved",
+                "owner": "manager",
+                "disposition_reason": "Covered by follow-up work.",
+                "evidence_refs": ["commit:abc123"]
+            }))),
+            task: None,
+        })
+        .await?;
+    let updated = updated.structured_content.expect("updated content");
+    assert_eq!(updated["status"], "completed");
+
+    let listed = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "list_findings".into(),
+            arguments: Some(json_args(json!({
+                "source_item_id": "PROJ-001",
+                "status": "resolved"
+            }))),
+            task: None,
+        })
+        .await?;
+    let listed = listed.structured_content.expect("listed content");
+    assert_eq!(listed["data"]["returned"], 1);
+    assert_eq!(listed["data"]["findings"][0]["status"], "resolved");
 
     client.cancel().await?;
     Ok(())

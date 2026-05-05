@@ -1,11 +1,13 @@
 use crate::{
-    backlog,
+    backlog, findings,
     models::{
         ActionResult, CreateBacklogItemParams, CreatedBacklogItemData, DoctorSnapshotData,
-        DraftBacklogData, DraftBacklogItemsParams, InitProjectParams, InspectTaskEventsParams,
+        DraftBacklogData, DraftBacklogItemsParams, FindingDispositionData, FindingListData,
+        FindingRecordData, FindingValidationData, InitProjectParams, InspectTaskEventsParams,
         LimitParams, ListFindingsParams, PingData, PingParams, ProjectScaffoldData,
-        ProjectStatusData, RootParams, SendWorkerGuidanceParams, UnsupportedData,
-        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
+        ProjectStatusData, RecordFindingParams, RootParams, SendWorkerGuidanceParams,
+        UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
+        ValidateFindingsParams,
     },
     project,
 };
@@ -324,6 +326,25 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Record Finding",
+        description = "Persist one implementation finding for later disposition.",
+        annotations(
+            title = "Record Finding",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn record_finding(
+        &self,
+        Parameters(params): Parameters<RecordFindingParams>,
+    ) -> Json<ActionResult<FindingRecordData>> {
+        Json(findings::record_finding(&self.default_root, params))
+    }
+
+    #[tool(
         title = "List Findings",
         description = "List implementation findings awaiting disposition.",
         annotations(
@@ -338,12 +359,8 @@ impl PlatypusMcp {
     pub async fn list_findings(
         &self,
         Parameters(params): Parameters<ListFindingsParams>,
-    ) -> Json<ActionResult<UnsupportedData>> {
-        Json(not_implemented(
-            "list_findings",
-            params.root.as_deref(),
-            "Finding storage is not wired into the Rust MCP server yet.",
-        ))
+    ) -> Json<ActionResult<FindingListData>> {
+        Json(findings::list_findings(&self.default_root, params))
     }
 
     #[tool(
@@ -361,12 +378,8 @@ impl PlatypusMcp {
     pub async fn validate_findings(
         &self,
         Parameters(params): Parameters<ValidateFindingsParams>,
-    ) -> Json<ActionResult<UnsupportedData>> {
-        Json(not_implemented(
-            "validate_findings",
-            params.root.as_deref(),
-            "Finding validation is not wired into the Rust MCP server yet.",
-        ))
+    ) -> Json<ActionResult<FindingValidationData>> {
+        Json(findings::validate_findings(&self.default_root, params))
     }
 
     #[tool(
@@ -384,14 +397,10 @@ impl PlatypusMcp {
     pub async fn update_finding_disposition(
         &self,
         Parameters(params): Parameters<UpdateFindingDispositionParams>,
-    ) -> Json<ActionResult<UnsupportedData>> {
-        Json(not_implemented(
-            "update_finding_disposition",
-            params.root.as_deref(),
-            &format!(
-                "Finding disposition storage is not wired yet for `{}`.",
-                params.finding_id
-            ),
+    ) -> Json<ActionResult<FindingDispositionData>> {
+        Json(findings::update_finding_disposition(
+            &self.default_root,
+            params,
         ))
     }
 }
@@ -442,6 +451,7 @@ mod tests {
             "dispatch_next_work",
             "inspect_task_events",
             "send_worker_guidance",
+            "record_finding",
             "list_findings",
             "validate_findings",
             "update_finding_disposition",
@@ -459,6 +469,7 @@ mod tests {
             "create_backlog_item",
             "dispatch_next_work",
             "send_worker_guidance",
+            "record_finding",
             "update_finding_disposition",
         ]);
 

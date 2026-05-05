@@ -96,6 +96,23 @@ pub struct SendWorkerGuidanceParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecordFindingParams {
+    pub root: Option<String>,
+    pub id: Option<String>,
+    pub source_item_id: Option<String>,
+    pub source_task_id: Option<String>,
+    pub source_finding_ref: Option<String>,
+    pub title: String,
+    pub summary: String,
+    pub severity: Option<String>,
+    pub required: Option<bool>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListFindingsParams {
     pub root: Option<String>,
     pub source_item_id: Option<String>,
@@ -291,6 +308,50 @@ pub struct CreatedBacklogItemData {
     pub item_id: String,
     pub path: String,
     pub created: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FindingRecordData {
+    pub finding: FindingRecord,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FindingListData {
+    pub root: String,
+    pub findings: Vec<FindingRecord>,
+    pub returned: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FindingValidationData {
+    pub root: String,
+    pub ok: bool,
+    pub unresolved_required_count: usize,
+    pub unresolved_required: Vec<FindingRecord>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FindingDispositionData {
+    pub finding: FindingRecord,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct FindingRecord {
+    pub id: String,
+    pub source_item_id: Option<String>,
+    pub source_task_id: Option<String>,
+    pub source_finding_ref: Option<String>,
+    pub title: String,
+    pub status: String,
+    pub severity: Option<String>,
+    pub required: bool,
+    pub summary: String,
+    pub owner: Option<String>,
+    pub disposition_reason: Option<String>,
+    pub evidence_refs: Vec<String>,
+    pub metadata: BTreeMap<String, Value>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
