@@ -1,8 +1,9 @@
 use anyhow::Result;
 use rmcp::{
-    ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    tool, tool_handler, tool_router, transport::stdio,
+    tool, tool_handler, tool_router,
+    transport::stdio,
+    ServerHandler, ServiceExt,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -46,10 +47,7 @@ impl ServerHandler for PlatypusMcp {}
 #[tool_router(router = tool_router)]
 impl PlatypusMcp {
     #[tool(description = "Health check for the Platypus MCP server.")]
-    async fn ping(
-        &self,
-        Parameters(PingParams { message }): Parameters<PingParams>,
-    ) -> String {
+    async fn ping(&self, Parameters(PingParams { message }): Parameters<PingParams>) -> String {
         let echoed = message.unwrap_or_else(|| "pong".to_string());
         json!({
             "status": "ok",
