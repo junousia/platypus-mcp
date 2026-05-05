@@ -374,6 +374,24 @@ pub struct TaskEventRecord {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
+pub struct DispatchNextWorkData {
+    pub root: String,
+    pub candidate: BacklogCandidate,
+    pub task: TaskRecord,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct TaskRecord {
+    pub id: String,
+    pub source_item_id: String,
+    pub title: String,
+    pub status: String,
+    pub worker: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct UnsupportedData {
     pub supported: bool,
     pub reason: String,

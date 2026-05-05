@@ -1,6 +1,7 @@
 use crate::{
     models::{
         ActionResult, ActionStatus, InspectTaskEventsParams, TaskEventListData, TaskEventRecord,
+        TaskRecord,
     },
     storage,
 };
@@ -18,6 +19,36 @@ pub struct NewTaskEvent {
     pub event_type: String,
     pub summary: String,
     pub payload: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewTask {
+    pub source_item_id: String,
+    pub title: String,
+    pub worker: Option<String>,
+}
+
+pub fn create_task_record(
+    default_root: &Path,
+    root: Option<&str>,
+    task: NewTask,
+) -> Result<TaskRecord, String> {
+    let storage = storage::connect(default_root, root).map_err(|error| error.to_string())?;
+    let source_item_id = clean_required("source_item_id", &task.source_item_id)?;
+    let title = clean_required("title", &task.title)?;
+    let id =
+        next_task_id(&storage.connection, &source_item_id).map_err(|error| error.to_string())?;
+    storage
+        .connection
+        .execute(
+            r#"
+            INSERT INTO tasks(id, source_item_id, title, status, worker)
+            VALUES (?1, ?2, ?3, 'queued', ?4)
+            "#,
+            params![id, source_item_id, title, clean_optional(task.worker)],
+        )
+        .map_err(|error| error.to_string())?;
+    get_task(&storage.connection, &id).map_err(|error| error.to_string())
 }
 
 pub fn record_task_event(
@@ -50,6 +81,15 @@ pub fn record_task_event(
         .map_err(|error| error.to_string())?;
 
     get_task_event(&storage.connection, &task_id, sequence).map_err(|error| error.to_string())
+}
+
+pub fn get_task_by_id(
+    default_root: &Path,
+    root: Option<&str>,
+    task_id: &str,
+) -> Result<TaskRecord, String> {
+    let storage = storage::connect(default_root, root).map_err(|error| error.to_string())?;
+    get_task(&storage.connection, task_id).map_err(|error| error.to_string())
 }
 
 pub fn inspect_task_events(
@@ -146,6 +186,34 @@ fn get_task_event(
     )
 }
 
+fn get_task(connection: &rusqlite::Connection, id: &str) -> rusqlite::Result<TaskRecord> {
+    connection.query_row(
+        r#"
+        SELECT id, source_item_id, title, status, worker, created_at, updated_at
+        FROM tasks
+        WHERE id = ?1
+        "#,
+        [id],
+        row_to_task,
+    )
+}
+
+fn next_task_id(
+    connection: &rusqlite::Connection,
+    source_item_id: &str,
+) -> rusqlite::Result<String> {
+    let existing: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM tasks WHERE source_item_id = ?1",
+        [source_item_id],
+        |row| row.get(0),
+    )?;
+    Ok(format!(
+        "{}-T{:03}",
+        safe_id_prefix(source_item_id),
+        existing + 1
+    ))
+}
+
 fn next_sequence(connection: &rusqlite::Connection, task_id: &str) -> rusqlite::Result<i64> {
     let current: Option<i64> = connection
         .query_row(
@@ -170,12 +238,56 @@ fn row_to_task_event(row: &Row<'_>) -> rusqlite::Result<TaskEventRecord> {
     })
 }
 
+fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
+    Ok(TaskRecord {
+        id: row.get("id")?,
+        source_item_id: row.get("source_item_id")?,
+        title: row.get("title")?,
+        status: row.get("status")?,
+        worker: row.get("worker")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
 fn clean_required(field: &str, value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         Err(format!("{field} is required"))
     } else {
         Ok(trimmed.to_string())
+    }
+}
+
+fn clean_optional(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn safe_id_prefix(value: &str) -> String {
+    let prefix: String = value
+        .chars()
+        .filter_map(|character| {
+            if character.is_ascii_alphanumeric() {
+                Some(character.to_ascii_uppercase())
+            } else if character == '-' || character == '_' {
+                Some('-')
+            } else {
+                None
+            }
+        })
+        .collect();
+    let prefix = prefix.trim_matches('-');
+    if prefix.is_empty() {
+        "TASK".to_string()
+    } else {
+        prefix.to_string()
     }
 }
 

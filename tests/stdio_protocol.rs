@@ -243,6 +243,67 @@ async fn stdio_server_returns_skipped_for_unknown_task_events() -> anyhow::Resul
     Ok(())
 }
 
+#[tokio::test]
+async fn stdio_server_dispatches_next_work_without_running_worker() -> anyhow::Result<()> {
+    let project = dispatch_project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let result = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "dispatch_next_work".into(),
+            arguments: Some(JsonObject::new()),
+            task: None,
+        })
+        .await?;
+    let response = result.structured_content.expect("dispatch content");
+    let task_id = response["data"]["task"]["id"].as_str().expect("task id");
+
+    assert_eq!(response["status"], "completed");
+    assert_eq!(response["data"]["candidate"]["item_id"], "PROJ-001");
+    assert_eq!(response["data"]["task"]["status"], "queued");
+
+    let events = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "inspect_task_events".into(),
+            arguments: Some(json_args(json!({ "task_id": task_id }))),
+            task: None,
+        })
+        .await?;
+    let events = events.structured_content.expect("events content");
+
+    assert_eq!(events["status"], "completed");
+    assert_eq!(events["data"]["events"][0]["event_type"], "task_queued");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_skips_dispatch_when_backlog_has_no_runnable_items() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    fs::write(project.path().join("platy.yaml"), "project: test\n")?;
+    fs::create_dir_all(project.path().join("backlog/items"))?;
+    fs::create_dir_all(project.path().join("backlog/epics"))?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let result = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "dispatch_next_work".into(),
+            arguments: Some(JsonObject::new()),
+            task: None,
+        })
+        .await?;
+    let response = result.structured_content.expect("dispatch content");
+
+    assert_eq!(response["status"], "skipped");
+
+    client.cancel().await?;
+    Ok(())
+}
+
 async fn start_client(
     project_root: Option<&str>,
 ) -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleClient, ()>> {
@@ -275,5 +336,59 @@ fn project_fixture() -> TempDir {
     fs::create_dir_all(temp.path().join("backlog/items")).expect("items dir");
     fs::create_dir_all(temp.path().join("backlog/epics")).expect("epics dir");
     fs::write(temp.path().join("backlog/items/PROJ-001.md"), "# item\n").expect("item");
+    temp
+}
+
+fn dispatch_project_fixture() -> TempDir {
+    let temp = TempDir::new().expect("temp dir");
+    fs::write(temp.path().join("platy.yaml"), "project: test\n").expect("config");
+    fs::create_dir(temp.path().join(".git")).expect("git metadata");
+    fs::create_dir_all(temp.path().join("backlog/items")).expect("items dir");
+    fs::create_dir_all(temp.path().join("backlog/epics")).expect("epics dir");
+    fs::write(
+        temp.path().join("backlog/epics/general.md"),
+        r#"---
+id: general
+title: General
+status: active
+priority: P1
+area: general
+---
+
+# General
+"#,
+    )
+    .expect("epic");
+    fs::write(
+        temp.path().join("backlog/items/PROJ-001.md"),
+        r#"---
+id: PROJ-001
+title: First runnable work
+status: ready
+priority: P1
+type: foundation
+area: general
+epic: general
+depends_on: []
+blocks: []
+suggested_worker: coder
+---
+
+# PROJ-001 First runnable work
+
+## Goal
+
+Create the first task.
+
+## Implementation Contract
+
+Queue work without running a worker.
+
+## Acceptance
+
+- Dispatch creates a task record.
+"#,
+    )
+    .expect("item");
     temp
 }

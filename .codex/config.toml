@@ -40,3 +40,6 @@ approval_mode = "approve"
 
 [mcp_servers."platypus-rs".tools.inspect_task_events]
 approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.dispatch_next_work]
+approval_mode = "approve"

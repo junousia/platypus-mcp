@@ -1,13 +1,13 @@
 use crate::{
-    backlog, findings,
+    backlog, dispatch, findings,
     models::{
-        ActionResult, CreateBacklogItemParams, CreatedBacklogItemData, DoctorSnapshotData,
-        DraftBacklogData, DraftBacklogItemsParams, FindingDispositionData, FindingListData,
-        FindingRecordData, FindingValidationData, InitProjectParams, InspectTaskEventsParams,
-        LimitParams, ListFindingsParams, PingData, PingParams, ProjectScaffoldData,
-        ProjectStatusData, RecordFindingParams, RootParams, SendWorkerGuidanceParams,
-        TaskEventListData, UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams,
+        ActionResult, CreateBacklogItemParams, CreatedBacklogItemData, DispatchNextWorkData,
+        DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams, FindingDispositionData,
+        FindingListData, FindingRecordData, FindingValidationData, InitProjectParams,
+        InspectTaskEventsParams, LimitParams, ListFindingsParams, PingData, PingParams,
+        ProjectScaffoldData, ProjectStatusData, RecordFindingParams, RootParams,
+        SendWorkerGuidanceParams, TaskEventListData, UnsupportedData,
+        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
     },
     project, tasks,
 };
@@ -265,12 +265,8 @@ impl PlatypusMcp {
     pub async fn dispatch_next_work(
         &self,
         Parameters(params): Parameters<RootParams>,
-    ) -> Json<ActionResult<UnsupportedData>> {
-        Json(not_implemented(
-            "dispatch_next_work",
-            params.root.as_deref(),
-            "Worker runtime dispatch is not wired into the Rust MCP server yet.",
-        ))
+    ) -> Json<ActionResult<DispatchNextWorkData>> {
+        Json(dispatch::dispatch_next_work(&self.default_root, params))
     }
 
     #[tool(

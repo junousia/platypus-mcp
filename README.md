@@ -19,10 +19,12 @@ chat session, while this server exposes deterministic project-management tools.
 - `validate_findings`: fail when required findings remain unresolved
 - `update_finding_disposition`: resolve, reject, defer, or assign findings
 - `inspect_task_events`: replay bounded task supervision events
+- `dispatch_next_work`: select the next runnable backlog item and create a
+  queued task record for external harness execution
 - local SQLite storage foundation under `.platy/platypus.sqlite3` for task
   events, findings, and schema metadata
-- runtime dispatch tools are exposed with structured `skipped` responses until
-  worker dispatch is implemented
+- worker execution remains external; the Rust MCP server does not run arbitrary
+  shell commands or harnesses
 
 ## Structure
 

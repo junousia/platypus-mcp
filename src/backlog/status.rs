@@ -29,8 +29,8 @@ pub fn inspect_status(
         git_metadata: root.join(".git").exists(),
         backlog_items: validation.items.len(),
         runnable_backlog_items: candidates.len(),
-        tasks_supported: false,
-        findings_supported: false,
+        tasks_supported: true,
+        findings_supported: true,
     };
     ActionResult::completed(action, "Project status inspected.", data)
 }
