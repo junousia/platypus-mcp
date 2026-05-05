@@ -2,8 +2,7 @@ use super::{
     filesystem::{read_markdown_paths, resolve_root},
     parse::{parse_backlog_item, parse_epic},
     types::{
-        BacklogValidation, ParsedBacklogItem, REQUIRED_SECTIONS, VALID_PRIORITIES, VALID_STATUSES,
-        VALID_TYPES,
+        BacklogValidation, ParsedBacklogItem, REQUIRED_SECTIONS, VALID_PRIORITIES, VALID_TYPES,
     },
 };
 use crate::models::{ActionResult, BacklogValidationData};
@@ -120,15 +119,6 @@ pub(super) fn validate_backlog_at_root(root: &Path, include_errors: bool) -> Bac
                 ));
             }
         }
-        for blocked in &item.frontmatter.blocks {
-            if !item_ids.contains(blocked) {
-                errors.push(format!(
-                    "{}: unknown blocked item `{}`",
-                    item.path.display(),
-                    blocked
-                ));
-            }
-        }
     }
     BacklogValidation {
         ok: errors.is_empty(),
@@ -177,13 +167,6 @@ fn validate_item_shape(
         errors.push(format!(
             "{}: required frontmatter field is empty",
             path.display()
-        ));
-    }
-    if !VALID_STATUSES.contains(&frontmatter.status.as_str()) {
-        errors.push(format!(
-            "{}: invalid status `{}`",
-            path.display(),
-            frontmatter.status
         ));
     }
     if !VALID_PRIORITIES.contains(&frontmatter.priority.as_str()) {

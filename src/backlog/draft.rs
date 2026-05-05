@@ -22,8 +22,6 @@ pub fn draft_backlog_items(params: DraftBacklogItemsParams) -> ActionResult<Draf
             objective: format!("Clarify scope, constraints, and acceptance for {}.", goal),
             owned_surfaces: params.owned_surfaces.clone(),
             suggested_worker: worker.clone(),
-            required_capability_tags: params.required_capability_tags.clone(),
-            complexity_tier: params.complexity_tier.clone(),
             verification_command: verification.clone(),
         },
         DraftBacklogItem {
@@ -35,8 +33,6 @@ pub fn draft_backlog_items(params: DraftBacklogItemsParams) -> ActionResult<Draf
             ),
             owned_surfaces: params.owned_surfaces.clone(),
             suggested_worker: worker.clone(),
-            required_capability_tags: params.required_capability_tags.clone(),
-            complexity_tier: params.complexity_tier.clone(),
             verification_command: verification.clone(),
         },
         DraftBacklogItem {
@@ -48,8 +44,6 @@ pub fn draft_backlog_items(params: DraftBacklogItemsParams) -> ActionResult<Draf
             ),
             owned_surfaces: params.owned_surfaces,
             suggested_worker: worker,
-            required_capability_tags: params.required_capability_tags,
-            complexity_tier: params.complexity_tier,
             verification_command: verification,
         },
     ];

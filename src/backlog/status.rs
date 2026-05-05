@@ -1,5 +1,6 @@
 use super::{
-    filesystem::resolve_root, types::ParsedBacklogItem, validate::validate_backlog_at_root,
+    closure::closed_item_ids, filesystem::resolve_root, types::ParsedBacklogItem,
+    validate::validate_backlog_at_root,
 };
 use crate::models::{
     ActionResult, ActionStatus, BacklogCandidate, BacklogListData, ProjectStatusData,
@@ -17,8 +18,9 @@ pub fn inspect_status(
         Err(error) => return ActionResult::failed(action, "Could not inspect project.", error),
     };
     let validation = validate_backlog_at_root(&root, false);
+    let closed_ids = closed_item_ids(&root);
     let candidates = if validation.ok {
-        runnable_backlog_candidates(&validation.items, limit.unwrap_or(10))
+        runnable_backlog_candidates(&validation.items, &closed_ids, limit.unwrap_or(10))
     } else {
         Vec::new()
     };
@@ -53,7 +55,9 @@ pub fn list_backlog(
             validation.errors.join("\n"),
         );
     }
-    let candidates = runnable_backlog_candidates(&validation.items, limit.unwrap_or(10));
+    let closed_ids = closed_item_ids(&root);
+    let candidates =
+        runnable_backlog_candidates(&validation.items, &closed_ids, limit.unwrap_or(10));
     if candidates.is_empty() {
         return ActionResult {
             action: action.to_string(),
@@ -77,26 +81,24 @@ pub fn list_backlog(
     )
 }
 
-fn runnable_backlog_candidates(items: &[ParsedBacklogItem], limit: usize) -> Vec<BacklogCandidate> {
-    let done_ids: BTreeSet<&str> = items
-        .iter()
-        .filter(|item| item.frontmatter.status == "done")
-        .map(|item| item.frontmatter.id.as_str())
-        .collect();
+fn runnable_backlog_candidates(
+    items: &[ParsedBacklogItem],
+    closed_ids: &BTreeSet<String>,
+    limit: usize,
+) -> Vec<BacklogCandidate> {
     let mut candidates: Vec<&ParsedBacklogItem> = items
         .iter()
-        .filter(|item| matches!(item.frontmatter.status.as_str(), "todo" | "ready"))
+        .filter(|item| !closed_ids.contains(&item.frontmatter.id))
         .filter(|item| {
             item.frontmatter
                 .depends_on
                 .iter()
-                .all(|dependency| done_ids.contains(dependency.as_str()))
+                .all(|dependency| closed_ids.contains(dependency))
         })
         .collect();
     candidates.sort_by_key(|item| {
         (
             priority_rank(&item.frontmatter.priority),
-            status_rank(&item.frontmatter.status),
             item.frontmatter.id.clone(),
         )
     });
@@ -107,10 +109,10 @@ fn runnable_backlog_candidates(items: &[ParsedBacklogItem], limit: usize) -> Vec
             source: "backlog".to_string(),
             item_id: item.frontmatter.id.clone(),
             title: item.frontmatter.title.clone(),
-            status: item.frontmatter.status.clone(),
             priority: item.frontmatter.priority.clone(),
             area: item.frontmatter.area.clone(),
             suggested_worker: item.frontmatter.suggested_worker.clone(),
+            owned_surfaces: item.frontmatter.owned_surfaces.clone(),
         })
         .collect()
 }
@@ -120,14 +122,6 @@ fn priority_rank(priority: &str) -> u8 {
         "P0" => 0,
         "P1" => 1,
         "P2" => 2,
-        _ => 9,
-    }
-}
-
-fn status_rank(status: &str) -> u8 {
-    match status {
-        "ready" => 0,
-        "todo" => 1,
         _ => 9,
     }
 }

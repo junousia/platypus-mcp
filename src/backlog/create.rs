@@ -162,27 +162,14 @@ fn backlog_item_text(
     let frontmatter = BacklogItemFrontmatterOut {
         id: item_id.to_string(),
         title: params.title.trim().to_string(),
-        status: "todo".to_string(),
         priority: priority.to_string(),
         item_type: item_type.to_string(),
         area: clean_optional(params.area.clone()).unwrap_or_else(|| "tooling".to_string()),
         epic: epic.to_string(),
         depends_on: clean_vec(params.depends_on.clone()),
-        blocks: clean_vec(params.blocks.clone()),
-        owner_role: clean_optional(params.owner_role.clone()),
-        assigned_worker: clean_optional(params.assigned_worker.clone()),
-        assignment_reason: clean_optional(params.assignment_reason.clone()),
         suggested_worker: clean_optional(params.suggested_worker.clone())
             .or_else(|| Some("coder".to_string())),
-        required_capability_tags: clean_vec(params.required_capability_tags.clone()),
-        complexity_tier: clean_optional(params.complexity_tier.clone()),
         owned_surfaces: clean_vec(params.owned_surfaces.clone()),
-        github_issue: None,
-        github_project_item: None,
-        prs: Vec::new(),
-        source_item_id: clean_optional(params.source_item_id.clone()),
-        source_task_id: clean_optional(params.source_task_id.clone()),
-        source_finding_ref: clean_optional(params.source_finding_ref.clone()),
     };
     let yaml = serde_yaml::to_string(&frontmatter).map_err(|error| error.to_string())?;
     let mut body = format!(

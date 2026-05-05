@@ -1,3 +1,4 @@
+mod closure;
 mod create;
 mod draft;
 mod filesystem;
@@ -21,15 +22,8 @@ mod tests {
     #[test]
     fn validates_and_lists_runnable_backlog_items() {
         let temp = project_fixture();
-        write_item(temp.path(), "PROJ-001", "First task", "P1", "ready", &[]);
-        write_item(
-            temp.path(),
-            "PROJ-002",
-            "Second task",
-            "P0",
-            "todo",
-            &["PROJ-001"],
-        );
+        write_item(temp.path(), "PROJ-001", "First task", "P1", &[]);
+        write_item(temp.path(), "PROJ-002", "Second task", "P0", &["PROJ-001"]);
 
         let root = root_arg(temp.path());
         let validation = validate_backlog(temp.path(), Some(root.as_str()), true);
@@ -45,7 +39,7 @@ mod tests {
     #[test]
     fn create_backlog_item_allocates_next_id_and_writes_valid_markdown() {
         let temp = project_fixture();
-        write_item(temp.path(), "PROJ-001", "Existing", "P1", "done", &[]);
+        write_item(temp.path(), "PROJ-001", "Existing", "P1", &[]);
 
         let result = create_backlog_item(
             temp.path(),
@@ -59,22 +53,13 @@ mod tests {
                 area: Some("tooling".to_string()),
                 epic: Some("general".to_string()),
                 depends_on: vec!["PROJ-001".to_string()],
-                blocks: Vec::new(),
-                owner_role: None,
-                assigned_worker: None,
-                assignment_reason: None,
                 suggested_worker: Some("coder".to_string()),
-                required_capability_tags: Vec::new(),
-                complexity_tier: None,
                 owned_surfaces: vec!["src".to_string()],
                 goal: "Create the feature.".to_string(),
                 implementation_contract: Some("Implement the scoped change.".to_string()),
                 contract: None,
                 acceptance: vec!["Feature works.".to_string()],
                 notes: None,
-                source_item_id: None,
-                source_task_id: None,
-                source_finding_ref: None,
             },
         );
 
@@ -94,8 +79,6 @@ mod tests {
             goal: "Build MCP tools".to_string(),
             suggested_worker: Some("coder".to_string()),
             owned_surfaces: vec!["src".to_string()],
-            required_capability_tags: Vec::new(),
-            complexity_tier: Some("medium".to_string()),
             verification_command: vec!["cargo".to_string(), "test".to_string()],
         });
 
@@ -116,14 +99,7 @@ mod tests {
         temp
     }
 
-    fn write_item(
-        root: &Path,
-        id: &str,
-        title: &str,
-        priority: &str,
-        status: &str,
-        depends_on: &[&str],
-    ) {
+    fn write_item(root: &Path, id: &str, title: &str, priority: &str, depends_on: &[&str]) {
         let depends = if depends_on.is_empty() {
             "[]".to_string()
         } else {
@@ -137,7 +113,7 @@ mod tests {
             )
         };
         let text = format!(
-            "---\nid: {id}\ntitle: {title}\nstatus: {status}\npriority: {priority}\ntype: feature\narea: tooling\nepic: general\ndepends_on: {depends}\nblocks: []\nsuggested_worker: coder\n---\n\n# {id} {title}\n\n## Goal\n\nGoal.\n\n## Implementation Contract\n\nContract.\n\n## Acceptance\n\n- Done.\n"
+            "---\nid: {id}\ntitle: {title}\npriority: {priority}\ntype: feature\narea: tooling\nepic: general\ndepends_on: {depends}\nsuggested_worker: coder\nowned_surfaces: []\n---\n\n# {id} {title}\n\n## Goal\n\nGoal.\n\n## Implementation Contract\n\nContract.\n\n## Acceptance\n\n- Done.\n"
         );
         fs::write(root.join(format!("backlog/items/{id}.md")), text).expect("item");
     }

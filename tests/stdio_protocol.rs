@@ -364,14 +364,13 @@ area: general
         r#"---
 id: PROJ-001
 title: First runnable work
-status: ready
 priority: P1
 type: foundation
 area: general
 epic: general
 depends_on: []
-blocks: []
 suggested_worker: coder
+owned_surfaces: []
 ---
 
 # PROJ-001 First runnable work

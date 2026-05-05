@@ -39,9 +39,6 @@ pub struct DraftBacklogItemsParams {
     #[serde(default)]
     pub owned_surfaces: Vec<String>,
     #[serde(default)]
-    pub required_capability_tags: Vec<String>,
-    pub complexity_tier: Option<String>,
-    #[serde(default)]
     pub verification_command: Vec<String>,
 }
 
@@ -58,15 +55,7 @@ pub struct CreateBacklogItemParams {
     pub epic: Option<String>,
     #[serde(default)]
     pub depends_on: Vec<String>,
-    #[serde(default)]
-    pub blocks: Vec<String>,
-    pub owner_role: Option<String>,
-    pub assigned_worker: Option<String>,
-    pub assignment_reason: Option<String>,
     pub suggested_worker: Option<String>,
-    #[serde(default)]
-    pub required_capability_tags: Vec<String>,
-    pub complexity_tier: Option<String>,
     #[serde(default)]
     pub owned_surfaces: Vec<String>,
     pub goal: String,
@@ -75,9 +64,6 @@ pub struct CreateBacklogItemParams {
     #[serde(default)]
     pub acceptance: Vec<String>,
     pub notes: Option<String>,
-    pub source_item_id: Option<String>,
-    pub source_task_id: Option<String>,
-    pub source_finding_ref: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -265,10 +251,10 @@ pub struct BacklogCandidate {
     pub source: String,
     pub item_id: String,
     pub title: String,
-    pub status: String,
     pub priority: String,
     pub area: String,
     pub suggested_worker: Option<String>,
+    pub owned_surfaces: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -298,8 +284,6 @@ pub struct DraftBacklogItem {
     pub objective: String,
     pub owned_surfaces: Vec<String>,
     pub suggested_worker: Option<String>,
-    pub required_capability_tags: Vec<String>,
-    pub complexity_tier: Option<String>,
     pub verification_command: Vec<String>,
 }
 

@@ -1,14 +1,13 @@
 ---
 id: MCP-000
 title: Item title
-status: todo
 priority: P1
 type: feature
 area: general
 epic: general
 depends_on: []
-blocks: []
 suggested_worker: coder
+owned_surfaces: []
 ---
 
 # MCP-000 Item title

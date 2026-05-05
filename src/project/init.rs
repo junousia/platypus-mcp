@@ -164,7 +164,7 @@ fn general_epic() -> String {
 }
 
 fn item_template() -> String {
-    "---\nid: PROJ-000\ntitle: Item title\nstatus: todo\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nblocks: []\nsuggested_worker: coder\n---\n\n# PROJ-000 Item title\n\n## Goal\n\nDescribe the goal.\n\n## Implementation Contract\n\nDescribe the expected implementation boundaries.\n\n## Acceptance\n\n- Describe a verifiable acceptance criterion.\n".to_string()
+    "---\nid: PROJ-000\ntitle: Item title\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nsuggested_worker: coder\nowned_surfaces: []\n---\n\n# PROJ-000 Item title\n\n## Goal\n\nDescribe the goal.\n\n## Implementation Contract\n\nDescribe the expected implementation boundaries.\n\n## Acceptance\n\n- Describe a verifiable acceptance criterion.\n".to_string()
 }
 
 fn epic_template() -> String {

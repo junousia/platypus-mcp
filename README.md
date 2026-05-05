@@ -35,6 +35,23 @@ chat session, while this server exposes deterministic project-management tools.
 
 Keep new behavior in focused modules. Avoid adding large all-purpose files.
 
+## Backlog State Model
+
+Backlog markdown is intentionally declarative. Items describe intent,
+constraints, dependencies, surfaces, and acceptance criteria. They do not carry
+runtime fields such as status, assignment, PRs, task attempts, or closure
+metadata.
+
+Closure is derived from reachable Git trailers:
+
+```text
+Platypus-Closes: MCP-123
+Platypus-Verification: make check
+```
+
+Runtime state such as queued/running tasks, task events, findings, claims, and
+future worker attempts belongs in `.platy/platypus.sqlite3`.
+
 ## Verify
 
 ```bash
