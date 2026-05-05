@@ -40,6 +40,12 @@ Returns a deterministic setup snapshot for project config, backlog directories,
 Git metadata, and backlog item count. This is the first recovery tool a client
 should call when a project cannot dispatch or mutate backlog safely.
 
+### `init_project`
+
+Creates the minimal Platypus scaffold in an existing project directory:
+`platy.yaml`, `WORKFLOW.md`, `backlog/`, a `general` epic, and backlog
+templates. Existing files are skipped unless `overwrite` is explicitly true.
+
 ### `draft_backlog_items`
 
 Generates a deterministic three-step backlog draft from a goal: shape,

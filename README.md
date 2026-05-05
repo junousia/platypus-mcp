@@ -11,6 +11,7 @@ chat session, while this server exposes deterministic project-management tools.
 - `list_backlog`: list runnable backlog candidates
 - `validate_backlog`: validate structured backlog files
 - `doctor_snapshot`: inspect setup issues and recovery guidance
+- `init_project`: create missing project/backlog scaffold files
 - `draft_backlog_items`: draft typed candidate items from a goal
 - `create_backlog_item`: write one valid backlog item
 - runtime/finding tools are exposed with structured `skipped` responses until

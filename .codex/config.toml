@@ -11,6 +11,9 @@ approval_mode = "approve"
 [mcp_servers."platypus-rs".tools.doctor_snapshot]
 approval_mode = "approve"
 
+[mcp_servers."platypus-rs".tools.init_project]
+approval_mode = "approve"
+
 [mcp_servers."platypus-rs".tools.validate_backlog]
 approval_mode = "approve"
 

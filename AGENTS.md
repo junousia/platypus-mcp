@@ -64,6 +64,7 @@ If `cargo fmt` is unavailable, report that `rustfmt` is missing and still run
 The first production tool set should cover:
 
 - `inspect_status`
+- `init_project`
 - `list_backlog`
 - `validate_backlog`
 - `draft_backlog_items`

@@ -14,6 +14,13 @@ pub struct RootParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct InitProjectParams {
+    pub root: Option<String>,
+    pub project_name: Option<String>,
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct LimitParams {
     pub root: Option<String>,
     pub limit: Option<usize>,
@@ -212,6 +219,28 @@ pub enum DoctorCheckStatus {
     Pass,
     Warn,
     Fail,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ProjectScaffoldData {
+    pub root: String,
+    pub created: usize,
+    pub skipped: usize,
+    pub entries: Vec<ScaffoldEntry>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ScaffoldEntry {
+    pub path: String,
+    pub kind: String,
+    pub status: ScaffoldEntryStatus,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScaffoldEntryStatus {
+    Created,
+    Skipped,
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]

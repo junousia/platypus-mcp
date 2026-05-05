@@ -1,8 +1,6 @@
+use super::paths::resolve_root;
 use crate::models::{ActionResult, DoctorCheck, DoctorCheckStatus, DoctorSnapshotData};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, path::Path};
 
 pub fn doctor_snapshot(
     default_root: &Path,
@@ -16,19 +14,19 @@ pub fn doctor_snapshot(
     let mut checks = Vec::new();
     checks.push(file_check(
         "project_config",
-        root.join("platy.yaml"),
+        &root.join("platy.yaml"),
         "platy.yaml exists.",
         "Create project config or run Platypus initialization.",
     ));
     checks.push(directory_check(
         "backlog_items",
-        root.join("backlog/items"),
+        &root.join("backlog/items"),
         "backlog/items exists.",
         "Create backlog directory structure before using backlog tools.",
     ));
     checks.push(directory_check(
         "backlog_epics",
-        root.join("backlog/epics"),
+        &root.join("backlog/epics"),
         "backlog/epics exists.",
         "Create at least the general epic before creating backlog items.",
     ));
@@ -59,19 +57,7 @@ pub fn doctor_snapshot(
     }
 }
 
-fn resolve_root(default_root: &Path, root: Option<&str>) -> std::result::Result<PathBuf, String> {
-    let requested = root
-        .map(PathBuf::from)
-        .unwrap_or_else(|| default_root.to_path_buf());
-    let canonical = fs::canonicalize(&requested)
-        .map_err(|error| format!("{}: {}", requested.display(), error))?;
-    if !canonical.is_dir() {
-        return Err(format!("{} is not a directory", canonical.display()));
-    }
-    Ok(canonical)
-}
-
-fn file_check(name: &str, path: PathBuf, pass_summary: &str, next_action: &str) -> DoctorCheck {
+fn file_check(name: &str, path: &Path, pass_summary: &str, next_action: &str) -> DoctorCheck {
     if path.is_file() {
         DoctorCheck {
             name: name.to_string(),
@@ -89,12 +75,7 @@ fn file_check(name: &str, path: PathBuf, pass_summary: &str, next_action: &str) 
     }
 }
 
-fn directory_check(
-    name: &str,
-    path: PathBuf,
-    pass_summary: &str,
-    next_action: &str,
-) -> DoctorCheck {
+fn directory_check(name: &str, path: &Path, pass_summary: &str, next_action: &str) -> DoctorCheck {
     if path.is_dir() {
         DoctorCheck {
             name: name.to_string(),

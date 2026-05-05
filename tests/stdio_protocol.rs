@@ -18,6 +18,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"inspect_status"));
     assert!(tool_names.contains(&"create_backlog_item"));
     assert!(tool_names.contains(&"doctor_snapshot"));
+    assert!(tool_names.contains(&"init_project"));
 
     client.cancel().await?;
     Ok(())
@@ -63,6 +64,31 @@ async fn stdio_server_calls_project_doctor_with_configured_root() -> anyhow::Res
     assert_eq!(response["action"], "doctor_snapshot");
     assert_eq!(response["status"], "completed");
     assert_eq!(response["data"]["ok"], true);
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_initializes_project_scaffold() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let result = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "init_project".into(),
+            arguments: Some(json_args(json!({ "project_name": "MCP Test" }))),
+            task: None,
+        })
+        .await?;
+    let response = result.structured_content.expect("structured content");
+
+    assert_eq!(response["action"], "init_project");
+    assert_eq!(response["status"], "completed");
+    assert!(response["data"]["created"].as_u64().unwrap_or(0) > 0);
+    assert!(project.path().join("platy.yaml").is_file());
+    assert!(project.path().join("backlog/epics/general.md").is_file());
 
     client.cancel().await?;
     Ok(())

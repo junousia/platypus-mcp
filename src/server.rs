@@ -2,10 +2,10 @@ use crate::{
     backlog,
     models::{
         ActionResult, CreateBacklogItemParams, CreatedBacklogItemData, DoctorSnapshotData,
-        DraftBacklogData, DraftBacklogItemsParams, InspectTaskEventsParams, LimitParams,
-        ListFindingsParams, PingData, PingParams, ProjectStatusData, RootParams,
-        SendWorkerGuidanceParams, UnsupportedData, UpdateFindingDispositionParams,
-        ValidateBacklogParams, ValidateFindingsParams,
+        DraftBacklogData, DraftBacklogItemsParams, InitProjectParams, InspectTaskEventsParams,
+        LimitParams, ListFindingsParams, PingData, PingParams, ProjectScaffoldData,
+        ProjectStatusData, RootParams, SendWorkerGuidanceParams, UnsupportedData,
+        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
     },
     project,
 };
@@ -123,6 +123,14 @@ impl PlatypusMcp {
             &self.default_root,
             params.root.as_deref(),
         ))
+    }
+
+    #[tool(description = "Initialize missing Platypus project scaffold files.")]
+    pub async fn init_project(
+        &self,
+        Parameters(params): Parameters<InitProjectParams>,
+    ) -> Json<ActionResult<ProjectScaffoldData>> {
+        Json(project::init_project(&self.default_root, params))
     }
 
     #[tool(description = "Draft typed backlog candidates from a product goal.")]
@@ -262,6 +270,7 @@ mod tests {
             "list_backlog",
             "validate_backlog",
             "doctor_snapshot",
+            "init_project",
             "draft_backlog_items",
             "create_backlog_item",
             "dispatch_next_work",
