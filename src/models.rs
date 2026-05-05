@@ -183,11 +183,35 @@ pub struct ProjectStatusData {
     pub root: String,
     pub platy_yaml: bool,
     pub backlog_dir: bool,
-    pub git_dir: bool,
+    pub git_metadata: bool,
     pub backlog_items: usize,
     pub runnable_backlog_items: usize,
     pub tasks_supported: bool,
     pub findings_supported: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DoctorSnapshotData {
+    pub root: String,
+    pub ok: bool,
+    pub checks: Vec<DoctorCheck>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DoctorCheck {
+    pub name: String,
+    pub status: DoctorCheckStatus,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_action: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DoctorCheckStatus {
+    Pass,
+    Warn,
+    Fail,
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]

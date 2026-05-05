@@ -34,6 +34,12 @@ Returns runnable backlog candidates. Items are runnable when they are `todo` or
 Validates backlog item and epic frontmatter, required sections, dependency
 references, and basic enum values.
 
+### `doctor_snapshot`
+
+Returns a deterministic setup snapshot for project config, backlog directories,
+Git metadata, and backlog item count. This is the first recovery tool a client
+should call when a project cannot dispatch or mutate backlog safely.
+
 ### `draft_backlog_items`
 
 Generates a deterministic three-step backlog draft from a goal: shape,

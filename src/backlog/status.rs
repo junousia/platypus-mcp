@@ -26,7 +26,7 @@ pub fn inspect_status(
         root: root.display().to_string(),
         platy_yaml: root.join("platy.yaml").is_file(),
         backlog_dir: root.join("backlog").is_dir(),
-        git_dir: root.join(".git").is_dir(),
+        git_metadata: root.join(".git").exists(),
         backlog_items: validation.items.len(),
         runnable_backlog_items: candidates.len(),
         tasks_supported: false,

@@ -1,12 +1,13 @@
 use crate::{
     backlog,
     models::{
-        ActionResult, CreateBacklogItemParams, CreatedBacklogItemData, DraftBacklogData,
-        DraftBacklogItemsParams, InspectTaskEventsParams, LimitParams, ListFindingsParams,
-        PingData, PingParams, ProjectStatusData, RootParams, SendWorkerGuidanceParams,
-        UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams,
+        ActionResult, CreateBacklogItemParams, CreatedBacklogItemData, DoctorSnapshotData,
+        DraftBacklogData, DraftBacklogItemsParams, InspectTaskEventsParams, LimitParams,
+        ListFindingsParams, PingData, PingParams, ProjectStatusData, RootParams,
+        SendWorkerGuidanceParams, UnsupportedData, UpdateFindingDispositionParams,
+        ValidateBacklogParams, ValidateFindingsParams,
     },
+    project,
 };
 use anyhow::Result;
 use rmcp::{
@@ -110,6 +111,17 @@ impl PlatypusMcp {
             &self.default_root,
             params.root.as_deref(),
             params.include_errors.unwrap_or(true),
+        ))
+    }
+
+    #[tool(description = "Inspect project setup and recovery guidance.")]
+    pub async fn doctor_snapshot(
+        &self,
+        Parameters(params): Parameters<RootParams>,
+    ) -> Json<ActionResult<DoctorSnapshotData>> {
+        Json(project::doctor_snapshot(
+            &self.default_root,
+            params.root.as_deref(),
         ))
     }
 
@@ -249,6 +261,7 @@ mod tests {
             "project_status",
             "list_backlog",
             "validate_backlog",
+            "doctor_snapshot",
             "draft_backlog_items",
             "create_backlog_item",
             "dispatch_next_work",
