@@ -28,15 +28,13 @@ Keep new behavior in focused modules. Avoid adding large all-purpose files.
 ## Verify
 
 ```bash
-cargo fmt --check
-cargo check
-cargo test
+make check
 ```
 
 ## Run
 
 ```bash
-cargo run
+make run
 ```
 
 By default the server uses the current directory as the Platypus project root.

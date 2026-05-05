@@ -1,9 +1,10 @@
 use rmcp::{transport::TokioChildProcess, ServiceExt};
+use std::path::PathBuf;
 use tokio::process::Command;
 
 #[tokio::test]
 async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
-    let transport = TokioChildProcess::new(Command::new(env!("CARGO_BIN_EXE_platypus-mcp-rs")))?;
+    let transport = TokioChildProcess::new(Command::new(server_binary()))?;
     let client = ().serve(transport).await?;
 
     let tools = client.list_all_tools().await?;
@@ -15,4 +16,14 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
 
     client.cancel().await?;
     Ok(())
+}
+
+fn server_binary() -> PathBuf {
+    let mut path = std::env::current_exe().expect("current test executable");
+    path.pop();
+    if path.ends_with("deps") {
+        path.pop();
+    }
+    path.push("platypus-mcp-rs");
+    path
 }

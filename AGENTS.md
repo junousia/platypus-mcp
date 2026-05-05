@@ -9,11 +9,19 @@ transports. The first supported transport is stdio.
 
 ## Project Commands
 
+- Full verification: `make check`
+- Format: `make format`
+- Lint/build-check: `make lint`
+- Test: `make test`
+- Run stdio server: `make run`
 - Build-check: `cargo check`
 - Test: `cargo test`
 - Format check: `cargo fmt --check`
 - Format: `cargo fmt`
 - Run stdio server: `cargo run`
+
+Prefer Makefile targets for normal development and CI-style checks. Use direct
+Cargo commands when debugging a specific compiler or test issue.
 
 If `cargo fmt` is unavailable, report that `rustfmt` is missing and still run
 `cargo check` and `cargo test`.
@@ -94,9 +102,7 @@ Near-term extensions:
 - Stage only files that belong to the current task.
 - Keep unrelated changes out of the commit.
 - Run verification before committing:
-  - `cargo fmt --check` when `rustfmt` is available
-  - `cargo check`
-  - `cargo test`
+  - `make check`
 - Use concise imperative commit messages, for example
   `Add backlog validation tool`.
 
