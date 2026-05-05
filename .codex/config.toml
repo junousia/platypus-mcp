@@ -1,0 +1,4 @@
+[mcp_servers."platypus-rs"]
+command = "cargo"
+args = ["run", "--quiet"]
+env = { PLATYPUS_MCP_ROOT = "/home/jukka/work/pydantic" }
