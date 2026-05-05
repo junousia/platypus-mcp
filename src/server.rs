@@ -52,7 +52,18 @@ impl ServerHandler for PlatypusMcp {}
 
 #[tool_router(router = tool_router)]
 impl PlatypusMcp {
-    #[tool(description = "Health check for the Platypus MCP server.")]
+    #[tool(
+        title = "Ping",
+        description = "Health check for the Platypus MCP server.",
+        annotations(
+            title = "Ping",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn ping(
         &self,
         Parameters(params): Parameters<PingParams>,
@@ -66,7 +77,18 @@ impl PlatypusMcp {
         ))
     }
 
-    #[tool(description = "Inspect current project and backlog status.")]
+    #[tool(
+        title = "Inspect Status",
+        description = "Inspect current project and backlog status.",
+        annotations(
+            title = "Inspect Status",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn inspect_status(
         &self,
         Parameters(params): Parameters<LimitParams>,
@@ -78,7 +100,18 @@ impl PlatypusMcp {
         ))
     }
 
-    #[tool(description = "Compatibility alias for inspect_status.")]
+    #[tool(
+        title = "Project Status",
+        description = "Compatibility alias for inspect_status.",
+        annotations(
+            title = "Project Status",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn project_status(
         &self,
         Parameters(params): Parameters<RootParams>,
@@ -90,7 +123,18 @@ impl PlatypusMcp {
         ))
     }
 
-    #[tool(description = "List runnable backlog candidates.")]
+    #[tool(
+        title = "List Backlog",
+        description = "List runnable backlog candidates.",
+        annotations(
+            title = "List Backlog",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn list_backlog(
         &self,
         Parameters(params): Parameters<LimitParams>,
@@ -102,7 +146,18 @@ impl PlatypusMcp {
         ))
     }
 
-    #[tool(description = "Validate structured Platypus backlog files.")]
+    #[tool(
+        title = "Validate Backlog",
+        description = "Validate structured Platypus backlog files.",
+        annotations(
+            title = "Validate Backlog",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn validate_backlog(
         &self,
         Parameters(params): Parameters<ValidateBacklogParams>,
@@ -114,7 +169,18 @@ impl PlatypusMcp {
         ))
     }
 
-    #[tool(description = "Inspect project setup and recovery guidance.")]
+    #[tool(
+        title = "Doctor Snapshot",
+        description = "Inspect project setup and recovery guidance.",
+        annotations(
+            title = "Doctor Snapshot",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn doctor_snapshot(
         &self,
         Parameters(params): Parameters<RootParams>,
@@ -125,7 +191,18 @@ impl PlatypusMcp {
         ))
     }
 
-    #[tool(description = "Initialize missing Platypus project scaffold files.")]
+    #[tool(
+        title = "Init Project",
+        description = "Initialize missing Platypus project scaffold files.",
+        annotations(
+            title = "Init Project",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn init_project(
         &self,
         Parameters(params): Parameters<InitProjectParams>,
@@ -133,7 +210,18 @@ impl PlatypusMcp {
         Json(project::init_project(&self.default_root, params))
     }
 
-    #[tool(description = "Draft typed backlog candidates from a product goal.")]
+    #[tool(
+        title = "Draft Backlog Items",
+        description = "Draft typed backlog candidates from a product goal.",
+        annotations(
+            title = "Draft Backlog Items",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn draft_backlog_items(
         &self,
         Parameters(params): Parameters<DraftBacklogItemsParams>,
@@ -141,7 +229,18 @@ impl PlatypusMcp {
         Json(backlog::draft_backlog_items(params))
     }
 
-    #[tool(description = "Create one structured backlog item.")]
+    #[tool(
+        title = "Create Backlog Item",
+        description = "Create one structured backlog item.",
+        annotations(
+            title = "Create Backlog Item",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn create_backlog_item(
         &self,
         Parameters(params): Parameters<CreateBacklogItemParams>,
@@ -149,7 +248,18 @@ impl PlatypusMcp {
         Json(backlog::create_backlog_item(&self.default_root, params))
     }
 
-    #[tool(description = "Dispatch the next runnable backlog item.")]
+    #[tool(
+        title = "Dispatch Next Work",
+        description = "Dispatch the next runnable backlog item.",
+        annotations(
+            title = "Dispatch Next Work",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn dispatch_next_work(
         &self,
         Parameters(params): Parameters<RootParams>,
@@ -161,7 +271,18 @@ impl PlatypusMcp {
         ))
     }
 
-    #[tool(description = "Inspect recent task supervision events.")]
+    #[tool(
+        title = "Inspect Task Events",
+        description = "Inspect recent task supervision events.",
+        annotations(
+            title = "Inspect Task Events",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn inspect_task_events(
         &self,
         Parameters(params): Parameters<InspectTaskEventsParams>,
@@ -176,7 +297,18 @@ impl PlatypusMcp {
         ))
     }
 
-    #[tool(description = "Send guidance to a running worker task.")]
+    #[tool(
+        title = "Send Worker Guidance",
+        description = "Send guidance to a running worker task.",
+        annotations(
+            title = "Send Worker Guidance",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn send_worker_guidance(
         &self,
         Parameters(params): Parameters<SendWorkerGuidanceParams>,
@@ -191,7 +323,18 @@ impl PlatypusMcp {
         ))
     }
 
-    #[tool(description = "List implementation findings awaiting disposition.")]
+    #[tool(
+        title = "List Findings",
+        description = "List implementation findings awaiting disposition.",
+        annotations(
+            title = "List Findings",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn list_findings(
         &self,
         Parameters(params): Parameters<ListFindingsParams>,
@@ -203,7 +346,18 @@ impl PlatypusMcp {
         ))
     }
 
-    #[tool(description = "Validate finding dispositions.")]
+    #[tool(
+        title = "Validate Findings",
+        description = "Validate finding dispositions.",
+        annotations(
+            title = "Validate Findings",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn validate_findings(
         &self,
         Parameters(params): Parameters<ValidateFindingsParams>,
@@ -215,7 +369,18 @@ impl PlatypusMcp {
         ))
     }
 
-    #[tool(description = "Persist a manager disposition for one finding.")]
+    #[tool(
+        title = "Update Finding Disposition",
+        description = "Persist a manager disposition for one finding.",
+        annotations(
+            title = "Update Finding Disposition",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
     pub async fn update_finding_disposition(
         &self,
         Parameters(params): Parameters<UpdateFindingDispositionParams>,
@@ -258,6 +423,7 @@ fn not_implemented(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmcp::model::TaskSupport;
 
     #[test]
     fn tool_router_exposes_basic_tool_set() {
@@ -281,6 +447,67 @@ mod tests {
             "update_finding_disposition",
         ] {
             assert!(names.contains(expected), "missing tool {expected}");
+        }
+    }
+
+    #[test]
+    fn tools_expose_schema_annotations_and_execution_hints() {
+        let server = PlatypusMcp::new();
+        let tools = server.tool_router.list_all();
+        let mutating_tools = BTreeSet::from([
+            "init_project",
+            "create_backlog_item",
+            "dispatch_next_work",
+            "send_worker_guidance",
+            "update_finding_disposition",
+        ]);
+
+        for tool in tools {
+            let name = tool.name.as_ref();
+            assert!(tool.title.is_some(), "{name} missing title");
+            assert!(tool.description.is_some(), "{name} missing description");
+            assert!(
+                tool.output_schema.is_some(),
+                "{name} missing structured output schema"
+            );
+
+            let annotations = tool
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} missing annotations"));
+            let is_mutating = mutating_tools.contains(name);
+            assert_eq!(
+                annotations.read_only_hint,
+                Some(!is_mutating),
+                "{name} has wrong read-only hint"
+            );
+            assert_eq!(
+                annotations.open_world_hint,
+                Some(false),
+                "{name} should be closed-world"
+            );
+            assert_eq!(
+                annotations.destructive_hint,
+                Some(name == "init_project"),
+                "{name} has wrong destructive hint"
+            );
+
+            let expected_idempotent = !is_mutating || name == "update_finding_disposition";
+            assert_eq!(
+                annotations.idempotent_hint,
+                Some(expected_idempotent),
+                "{name} has wrong idempotent hint"
+            );
+
+            let execution = tool
+                .execution
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} missing execution metadata"));
+            assert_eq!(
+                execution.task_support,
+                Some(TaskSupport::Forbidden),
+                "{name} should forbid task invocation"
+            );
         }
     }
 }
