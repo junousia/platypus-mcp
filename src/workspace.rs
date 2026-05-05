@@ -1,0 +1,603 @@
+use crate::{
+    models::{
+        ActionResult, ActionStatus, WorktreeCreateParams, WorktreeData, WorktreeStatusParams,
+    },
+    storage,
+    tasks::{self, NewTaskEvent},
+};
+use rusqlite::{params, OptionalExtension};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+const GIT_TIMEOUT: Duration = Duration::from_secs(10);
+const OUTPUT_LIMIT: usize = 4_000;
+
+#[derive(Debug)]
+struct WorkspaceTask {
+    id: String,
+    workspace_path: Option<String>,
+    workspace_branch: Option<String>,
+    workspace_base_ref: Option<String>,
+}
+
+pub fn worktree_create(
+    default_root: &Path,
+    params: WorktreeCreateParams,
+) -> ActionResult<WorktreeData> {
+    let action = "worktree_create";
+    let task_id = match clean_task_id(&params.task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => return ActionResult::failed(action, "Could not create worktree.", error),
+    };
+    let base_ref = match clean_base_ref(params.base_ref.as_deref()) {
+        Ok(base_ref) => base_ref,
+        Err(error) => return ActionResult::failed(action, "Could not create worktree.", error),
+    };
+    let storage = match storage::connect(default_root, params.root.as_deref()) {
+        Ok(storage) => storage,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not open workspace storage.",
+                error.to_string(),
+            )
+        }
+    };
+    let root = storage.storage.root;
+    let root_string = root.display().to_string();
+    if let Err(error) = ensure_git_project_root(&root) {
+        return ActionResult::failed(action, "Could not create worktree.", error);
+    }
+
+    let task = match load_task(&storage.connection, &task_id) {
+        Ok(Some(task)) => task,
+        Ok(None) => {
+            return ActionResult::skipped(
+                action,
+                format!("Task `{task_id}` was not found."),
+                "Dispatch work before creating a task worktree.",
+            )
+        }
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect task.", error.to_string())
+        }
+    };
+    if let Some(existing) = existing_workspace_data(action, &root, &task, false, true) {
+        return existing;
+    }
+
+    let safe_task_id = safe_task_component(&task_id);
+    let worktrees_dir = match prepare_worktrees_dir(&root) {
+        Ok(path) => path,
+        Err(error) => return ActionResult::failed(action, "Could not create worktree.", error),
+    };
+    let worktree_path = worktrees_dir.join(&safe_task_id);
+    if worktree_path.exists() {
+        return ActionResult::failed(
+            action,
+            "Could not create worktree.",
+            format!(
+                "{} already exists without matching task workspace metadata",
+                worktree_path.display()
+            ),
+        );
+    }
+
+    let commit = match resolve_base_commit(&root, &base_ref) {
+        Ok(commit) => commit,
+        Err(error) => return ActionResult::failed(action, "Could not create worktree.", error),
+    };
+    let branch = format!("platy/task/{safe_task_id}");
+    if let Err(error) = run_git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            branch.as_str(),
+            path_arg(&worktree_path).as_str(),
+            commit.as_str(),
+        ],
+    ) {
+        return ActionResult::failed(action, "Could not create worktree.", error);
+    }
+    let canonical_worktree = match fs::canonicalize(&worktree_path) {
+        Ok(path) => path,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not inspect created worktree.",
+                error.to_string(),
+            )
+        }
+    };
+    if !canonical_worktree.starts_with(&worktrees_dir) {
+        return ActionResult::failed(
+            action,
+            "Created worktree escaped project state.",
+            format!(
+                "{} is outside {}",
+                canonical_worktree.display(),
+                worktrees_dir.display()
+            ),
+        );
+    }
+
+    if let Err(error) = persist_workspace(
+        &storage.connection,
+        &task_id,
+        &canonical_worktree,
+        &branch,
+        &commit,
+    ) {
+        return ActionResult::failed(
+            action,
+            "Could not persist worktree metadata.",
+            error.to_string(),
+        );
+    }
+    if let Err(error) = tasks::record_task_event(
+        default_root,
+        Some(root_string.as_str()),
+        NewTaskEvent {
+            task_id: task_id.clone(),
+            sequence: None,
+            event_type: "worktree_created".to_string(),
+            summary: format!("Created worktree for task `{task_id}`."),
+            payload: Some(serde_json::json!({
+                "path": canonical_worktree.display().to_string(),
+                "branch": branch,
+                "base_ref": commit
+            })),
+        },
+    ) {
+        return ActionResult::failed(action, "Could not record worktree event.", error);
+    }
+
+    ActionResult::completed(
+        action,
+        format!("Created worktree for task `{task_id}`."),
+        WorktreeData {
+            root: root_string,
+            task_id,
+            path: canonical_worktree.display().to_string(),
+            branch,
+            base_ref: commit,
+            created: true,
+        },
+    )
+}
+
+pub fn worktree_status(
+    default_root: &Path,
+    params: WorktreeStatusParams,
+) -> ActionResult<WorktreeData> {
+    let action = "worktree_status";
+    let task_id = match clean_task_id(&params.task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => return ActionResult::failed(action, "Could not inspect worktree.", error),
+    };
+    let storage = match storage::connect(default_root, params.root.as_deref()) {
+        Ok(storage) => storage,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not open workspace storage.",
+                error.to_string(),
+            )
+        }
+    };
+    let root = storage.storage.root;
+    let task = match load_task(&storage.connection, &task_id) {
+        Ok(Some(task)) => task,
+        Ok(None) => {
+            return ActionResult::skipped(
+                action,
+                format!("Task `{task_id}` was not found."),
+                "Dispatch work before inspecting a task worktree.",
+            )
+        }
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect task.", error.to_string())
+        }
+    };
+    existing_workspace_data(action, &root, &task, false, false).unwrap_or_else(|| {
+        ActionResult::skipped(
+            action,
+            format!("Task `{task_id}` does not have a worktree yet."),
+            "Run worktree_create for the task.",
+        )
+    })
+}
+
+fn existing_workspace_data(
+    action: &str,
+    root: &Path,
+    task: &WorkspaceTask,
+    created: bool,
+    skipped: bool,
+) -> Option<ActionResult<WorktreeData>> {
+    let path = task.workspace_path.as_ref()?;
+    let branch = task.workspace_branch.as_ref()?;
+    let base_ref = task.workspace_base_ref.as_ref()?;
+    let worktrees_dir = match canonical_worktrees_dir(root) {
+        Ok(path) => path,
+        Err(error) => {
+            return Some(ActionResult::failed(
+                action,
+                "Could not inspect worktree.",
+                error,
+            ))
+        }
+    };
+    let canonical = match fs::canonicalize(path) {
+        Ok(path) => path,
+        Err(error) => {
+            return Some(ActionResult::failed(
+                action,
+                "Persisted worktree path is not available.",
+                error.to_string(),
+            ))
+        }
+    };
+    if !canonical.starts_with(&worktrees_dir) {
+        return Some(ActionResult::failed(
+            action,
+            "Persisted worktree path escaped project state.",
+            format!(
+                "{} is outside {}",
+                canonical.display(),
+                worktrees_dir.display()
+            ),
+        ));
+    }
+    Some(ActionResult {
+        action: action.to_string(),
+        status: if skipped {
+            ActionStatus::Skipped
+        } else {
+            ActionStatus::Completed
+        },
+        summary: format!("Task `{}` already has a worktree.", task.id),
+        next_action: if created {
+            None
+        } else {
+            Some("Use the persisted worktree for task execution.".to_string())
+        },
+        data: Some(WorktreeData {
+            root: root.display().to_string(),
+            task_id: task.id.clone(),
+            path: canonical.display().to_string(),
+            branch: branch.clone(),
+            base_ref: base_ref.clone(),
+            created,
+        }),
+        error: None,
+    })
+}
+
+fn load_task(
+    connection: &rusqlite::Connection,
+    task_id: &str,
+) -> rusqlite::Result<Option<WorkspaceTask>> {
+    connection
+        .query_row(
+            r#"
+            SELECT id, workspace_path, workspace_branch, workspace_base_ref
+            FROM tasks
+            WHERE id = ?1
+            "#,
+            [task_id],
+            |row| {
+                Ok(WorkspaceTask {
+                    id: row.get("id")?,
+                    workspace_path: row.get("workspace_path")?,
+                    workspace_branch: row.get("workspace_branch")?,
+                    workspace_base_ref: row.get("workspace_base_ref")?,
+                })
+            },
+        )
+        .optional()
+}
+
+fn persist_workspace(
+    connection: &rusqlite::Connection,
+    task_id: &str,
+    path: &Path,
+    branch: &str,
+    base_ref: &str,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        r#"
+        UPDATE tasks
+        SET workspace_path = ?2,
+            workspace_branch = ?3,
+            workspace_base_ref = ?4,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?1
+        "#,
+        params![task_id, path.display().to_string(), branch, base_ref],
+    )?;
+    Ok(())
+}
+
+fn ensure_git_project_root(root: &Path) -> Result<(), String> {
+    let top_level = run_git(root, &["rev-parse", "--show-toplevel"])?;
+    let top_level = fs::canonicalize(top_level.trim()).map_err(|error| error.to_string())?;
+    if top_level != root {
+        return Err(format!(
+            "project root {} is not the Git top-level {}",
+            root.display(),
+            top_level.display()
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_base_commit(root: &Path, base_ref: &str) -> Result<String, String> {
+    let rev = format!("{base_ref}^{{commit}}");
+    let output = run_git(root, &["rev-parse", "--verify", rev.as_str()])?;
+    let commit = output.lines().next().unwrap_or_default().trim();
+    if commit.is_empty() {
+        Err(format!("base_ref `{base_ref}` is not a commit"))
+    } else {
+        Ok(commit.to_string())
+    }
+}
+
+fn prepare_worktrees_dir(root: &Path) -> Result<PathBuf, String> {
+    let state_dir = root.join(".platy");
+    fs::create_dir_all(&state_dir).map_err(|error| error.to_string())?;
+    let state_dir = fs::canonicalize(&state_dir).map_err(|error| error.to_string())?;
+    if !state_dir.starts_with(root) {
+        return Err(format!(
+            "state directory {} escapes project root {}",
+            state_dir.display(),
+            root.display()
+        ));
+    }
+    let worktrees_dir = state_dir.join("worktrees");
+    fs::create_dir_all(&worktrees_dir).map_err(|error| error.to_string())?;
+    fs::canonicalize(&worktrees_dir).map_err(|error| error.to_string())
+}
+
+fn canonical_worktrees_dir(root: &Path) -> Result<PathBuf, String> {
+    let worktrees_dir = root.join(".platy").join("worktrees");
+    let worktrees_dir = fs::canonicalize(&worktrees_dir).map_err(|error| error.to_string())?;
+    if !worktrees_dir.starts_with(root) {
+        return Err(format!(
+            "worktrees directory {} escapes project root {}",
+            worktrees_dir.display(),
+            root.display()
+        ));
+    }
+    Ok(worktrees_dir)
+}
+
+fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to start git: {error}"))?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| format!("failed to collect git output: {error}"))?;
+                if output.status.success() {
+                    return Ok(limit_output(
+                        String::from_utf8_lossy(&output.stdout).as_ref(),
+                    ));
+                }
+                let stderr = limit_output(String::from_utf8_lossy(&output.stderr).as_ref());
+                return Err(if stderr.is_empty() {
+                    format!("git {:?} failed with {}", args, output.status)
+                } else {
+                    stderr
+                });
+            }
+            Ok(None) => {
+                if started.elapsed() > GIT_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("git {:?} timed out", args));
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(format!("failed to poll git: {error}")),
+        }
+    }
+}
+
+fn clean_task_id(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("task_id is required".to_string());
+    }
+    if trimmed != safe_task_component(trimmed) {
+        return Err("task_id must contain only ASCII letters, numbers, '-' or '_'".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn safe_task_component(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || *character == '-' || *character == '_'
+        })
+        .collect()
+}
+
+fn clean_base_ref(value: Option<&str>) -> Result<String, String> {
+    let base_ref = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("HEAD");
+    if base_ref.starts_with('-')
+        || base_ref.contains("..")
+        || base_ref.contains("@{")
+        || !base_ref
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "/._-".contains(character))
+    {
+        return Err("base_ref contains unsupported characters".to_string());
+    }
+    Ok(base_ref.to_string())
+}
+
+fn path_arg(path: &Path) -> String {
+    path.as_os_str().to_string_lossy().into_owned()
+}
+
+fn limit_output(value: &str) -> String {
+    let mut output = value.trim().to_string();
+    if output.len() > OUTPUT_LIMIT {
+        output.truncate(OUTPUT_LIMIT);
+        output.push_str("...");
+    }
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tasks::{create_task_record, inspect_task_events, NewTask};
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn creates_worktree_and_persists_task_metadata() {
+        let project = git_project();
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Workspace task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+
+        let result = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        );
+        let data = result.data.expect("worktree data");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert!(Path::new(&data.path).is_dir());
+        assert_eq!(data.branch, format!("platy/task/{}", task.id));
+        assert!(data.created);
+
+        let status = worktree_status(
+            project.path(),
+            WorktreeStatusParams {
+                root: None,
+                task_id: task.id.clone(),
+            },
+        );
+        let status_data = status.data.expect("status data");
+        assert!(matches!(status.status, ActionStatus::Completed));
+        assert_eq!(status_data.path, data.path);
+
+        let task = tasks::get_task_by_id(project.path(), None, &task.id).expect("task");
+        assert_eq!(task.workspace_path.as_deref(), Some(data.path.as_str()));
+        assert_eq!(task.workspace_branch.as_deref(), Some(data.branch.as_str()));
+        assert_eq!(
+            task.workspace_base_ref.as_deref(),
+            Some(data.base_ref.as_str())
+        );
+
+        let events = inspect_task_events(
+            project.path(),
+            crate::models::InspectTaskEventsParams {
+                root: None,
+                task_id: task.id,
+                limit: None,
+            },
+        );
+        let events = events.data.expect("event data");
+        assert_eq!(events.returned, 1);
+        assert_eq!(events.events[0].event_type, "worktree_created");
+    }
+
+    #[test]
+    fn rejects_unborn_head() {
+        let project = TempDir::new().expect("temp dir");
+        run_git(project.path(), &["init"]).expect("git init");
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Workspace task".to_string(),
+                worker: None,
+            },
+        )
+        .expect("task");
+
+        let result = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id,
+                base_ref: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .expect("error")
+            .contains("Needed a single revision"));
+    }
+
+    #[test]
+    fn rejects_task_id_path_escape() {
+        let project = git_project();
+
+        let result = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: "../task".to_string(),
+                base_ref: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result.error.expect("error").contains("task_id"));
+    }
+
+    fn git_project() -> TempDir {
+        let project = TempDir::new().expect("temp dir");
+        run_git(project.path(), &["init"]).expect("git init");
+        run_git(project.path(), &["config", "user.name", "Platypus Test"]).expect("git name");
+        run_git(
+            project.path(),
+            &["config", "user.email", "platypus@example.invalid"],
+        )
+        .expect("git email");
+        fs::write(project.path().join("README.md"), "# Test\n").expect("readme");
+        run_git(project.path(), &["add", "README.md"]).expect("git add");
+        run_git(project.path(), &["commit", "-m", "Initial commit"]).expect("git commit");
+        project
+    }
+}

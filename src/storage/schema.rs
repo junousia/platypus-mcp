@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 5;
 
 pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -39,6 +39,9 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
             claimed_at TEXT,
             started_at TEXT,
             finished_at TEXT,
+            workspace_path TEXT,
+            workspace_branch TEXT,
+            workspace_base_ref TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
@@ -93,6 +96,9 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
     add_column_if_missing(&transaction, "tasks", "claimed_at", "TEXT")?;
     add_column_if_missing(&transaction, "tasks", "started_at", "TEXT")?;
     add_column_if_missing(&transaction, "tasks", "finished_at", "TEXT")?;
+    add_column_if_missing(&transaction, "tasks", "workspace_path", "TEXT")?;
+    add_column_if_missing(&transaction, "tasks", "workspace_branch", "TEXT")?;
+    add_column_if_missing(&transaction, "tasks", "workspace_base_ref", "TEXT")?;
     transaction.execute(
         r#"
         INSERT INTO metadata(key, value, updated_at)

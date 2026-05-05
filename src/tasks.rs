@@ -354,7 +354,8 @@ fn get_task(connection: &rusqlite::Connection, id: &str) -> rusqlite::Result<Tas
     connection.query_row(
         r#"
         SELECT id, source_item_id, title, status, worker, claimed_by, claimed_at, started_at,
-               finished_at, created_at, updated_at
+               finished_at, workspace_path, workspace_branch, workspace_base_ref, created_at,
+               updated_at
         FROM tasks
         WHERE id = ?1
         "#,
@@ -371,7 +372,8 @@ fn select_next_queued_task(
         .query_row(
             r#"
             SELECT id, source_item_id, title, status, worker, claimed_by, claimed_at, started_at,
-                   finished_at, created_at, updated_at
+                   finished_at, workspace_path, workspace_branch, workspace_base_ref, created_at,
+                   updated_at
             FROM tasks
             WHERE status = 'queued'
               AND (?1 IS NULL OR worker IS NULL OR worker = ?1)
@@ -435,6 +437,9 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         claimed_at: row.get("claimed_at")?,
         started_at: row.get("started_at")?,
         finished_at: row.get("finished_at")?,
+        workspace_path: row.get("workspace_path")?,
+        workspace_branch: row.get("workspace_branch")?,
+        workspace_base_ref: row.get("workspace_base_ref")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })

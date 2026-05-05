@@ -24,6 +24,8 @@ chat session, while this server exposes deterministic project-management tools.
 - `inspect_task`: inspect one persisted task lifecycle record
 - `claim_next_task`: atomically claim the next queued task for an external
   runner
+- `worktree_create`: create an isolated Git worktree for a task
+- `worktree_status`: inspect a task worktree recorded in storage
 - local SQLite storage foundation under `.platy/platypus.sqlite3` for task
   events, findings, and schema metadata
 - worker execution remains external; the Rust MCP server does not run arbitrary

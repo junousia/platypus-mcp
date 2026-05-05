@@ -8,9 +8,9 @@ use crate::{
         ListFindingsParams, PingData, PingParams, ProjectScaffoldData, ProjectStatusData,
         RecordFindingParams, RootParams, SendWorkerGuidanceParams, TaskEventListData,
         TaskRecordData, UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams,
+        ValidateFindingsParams, WorktreeCreateParams, WorktreeData, WorktreeStatusParams,
     },
-    project, tasks,
+    project, tasks, workspace,
 };
 use anyhow::Result;
 use rmcp::{
@@ -309,6 +309,44 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Worktree Create",
+        description = "Create an isolated Git worktree for a task.",
+        annotations(
+            title = "Worktree Create",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn worktree_create(
+        &self,
+        Parameters(params): Parameters<WorktreeCreateParams>,
+    ) -> Json<ActionResult<WorktreeData>> {
+        Json(workspace::worktree_create(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Worktree Status",
+        description = "Inspect the persisted Git worktree for a task.",
+        annotations(
+            title = "Worktree Status",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn worktree_status(
+        &self,
+        Parameters(params): Parameters<WorktreeStatusParams>,
+    ) -> Json<ActionResult<WorktreeData>> {
+        Json(workspace::worktree_status(&self.default_root, params))
+    }
+
+    #[tool(
         title = "Inspect Task Events",
         description = "Inspect recent task supervision events.",
         annotations(
@@ -479,6 +517,8 @@ mod tests {
             "dispatch_next_work",
             "inspect_task",
             "claim_next_task",
+            "worktree_create",
+            "worktree_status",
             "inspect_task_events",
             "send_worker_guidance",
             "record_finding",
@@ -499,6 +539,7 @@ mod tests {
             "create_backlog_item",
             "dispatch_next_work",
             "claim_next_task",
+            "worktree_create",
             "send_worker_guidance",
             "record_finding",
             "update_finding_disposition",

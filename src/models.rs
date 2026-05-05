@@ -87,6 +87,19 @@ pub struct ClaimNextTaskParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct WorktreeCreateParams {
+    pub root: Option<String>,
+    pub task_id: String,
+    pub base_ref: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WorktreeStatusParams {
+    pub root: Option<String>,
+    pub task_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SendWorkerGuidanceParams {
     pub root: Option<String>,
     pub task_id: String,
@@ -388,6 +401,9 @@ pub struct TaskRecord {
     pub claimed_at: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+    pub workspace_path: Option<String>,
+    pub workspace_branch: Option<String>,
+    pub workspace_base_ref: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -396,6 +412,16 @@ pub struct TaskRecord {
 pub struct TaskRecordData {
     pub root: String,
     pub task: TaskRecord,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorktreeData {
+    pub root: String,
+    pub task_id: String,
+    pub path: String,
+    pub branch: String,
+    pub base_ref: String,
+    pub created: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

@@ -24,6 +24,8 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"record_finding"));
     assert!(tool_names.contains(&"inspect_task"));
     assert!(tool_names.contains(&"claim_next_task"));
+    assert!(tool_names.contains(&"worktree_create"));
+    assert!(tool_names.contains(&"worktree_status"));
 
     client.cancel().await?;
     Ok(())
