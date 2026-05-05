@@ -1,13 +1,14 @@
 use crate::{
     backlog, dispatch, findings,
     models::{
-        ActionResult, CreateBacklogItemParams, CreatedBacklogItemData, DispatchNextWorkData,
-        DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams, FindingDispositionData,
-        FindingListData, FindingRecordData, FindingValidationData, InitProjectParams,
-        InspectTaskEventsParams, LimitParams, ListFindingsParams, PingData, PingParams,
-        ProjectScaffoldData, ProjectStatusData, RecordFindingParams, RootParams,
-        SendWorkerGuidanceParams, TaskEventListData, UnsupportedData,
-        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
+        ActionResult, ClaimNextTaskParams, CreateBacklogItemParams, CreatedBacklogItemData,
+        DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
+        FindingDispositionData, FindingListData, FindingRecordData, FindingValidationData,
+        InitProjectParams, InspectTaskEventsParams, InspectTaskParams, LimitParams,
+        ListFindingsParams, PingData, PingParams, ProjectScaffoldData, ProjectStatusData,
+        RecordFindingParams, RootParams, SendWorkerGuidanceParams, TaskEventListData,
+        TaskRecordData, UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
+        ValidateFindingsParams,
     },
     project, tasks,
 };
@@ -270,6 +271,44 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Inspect Task",
+        description = "Inspect one persisted task record.",
+        annotations(
+            title = "Inspect Task",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn inspect_task(
+        &self,
+        Parameters(params): Parameters<InspectTaskParams>,
+    ) -> Json<ActionResult<TaskRecordData>> {
+        Json(tasks::inspect_task(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Claim Next Task",
+        description = "Atomically claim the next queued task for an external runner.",
+        annotations(
+            title = "Claim Next Task",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn claim_next_task(
+        &self,
+        Parameters(params): Parameters<ClaimNextTaskParams>,
+    ) -> Json<ActionResult<TaskRecordData>> {
+        Json(tasks::claim_next_task(&self.default_root, params))
+    }
+
+    #[tool(
         title = "Inspect Task Events",
         description = "Inspect recent task supervision events.",
         annotations(
@@ -438,6 +477,8 @@ mod tests {
             "draft_backlog_items",
             "create_backlog_item",
             "dispatch_next_work",
+            "inspect_task",
+            "claim_next_task",
             "inspect_task_events",
             "send_worker_guidance",
             "record_finding",
@@ -457,6 +498,7 @@ mod tests {
             "init_project",
             "create_backlog_item",
             "dispatch_next_work",
+            "claim_next_task",
             "send_worker_guidance",
             "record_finding",
             "update_finding_disposition",

@@ -1,7 +1,7 @@
 use crate::{
     models::{
-        ActionResult, ActionStatus, InspectTaskEventsParams, TaskEventListData, TaskEventRecord,
-        TaskRecord,
+        ActionResult, ActionStatus, ClaimNextTaskParams, InspectTaskEventsParams,
+        InspectTaskParams, TaskEventListData, TaskEventRecord, TaskRecord, TaskRecordData,
     },
     storage,
 };
@@ -38,16 +38,21 @@ pub fn create_task_record(
     let title = clean_required("title", &task.title)?;
     let id =
         next_task_id(&storage.connection, &source_item_id).map_err(|error| error.to_string())?;
-    storage
-        .connection
-        .execute(
-            r#"
-            INSERT INTO tasks(id, source_item_id, title, status, worker)
-            VALUES (?1, ?2, ?3, 'queued', ?4)
-            "#,
-            params![id, source_item_id, title, clean_optional(task.worker)],
-        )
-        .map_err(|error| error.to_string())?;
+    let inserted = storage.connection.execute(
+        r#"
+        INSERT INTO tasks(id, source_item_id, title, status, worker)
+        VALUES (?1, ?2, ?3, 'queued', ?4)
+        "#,
+        params![id, source_item_id, title, clean_optional(task.worker)],
+    );
+    if let Err(error) = inserted {
+        if is_unique_constraint_error(&error) {
+            return Err(format!(
+                "active task already exists for backlog item `{source_item_id}`"
+            ));
+        }
+        return Err(error.to_string());
+    }
     get_task(&storage.connection, &id).map_err(|error| error.to_string())
 }
 
@@ -90,6 +95,165 @@ pub fn get_task_by_id(
 ) -> Result<TaskRecord, String> {
     let storage = storage::connect(default_root, root).map_err(|error| error.to_string())?;
     get_task(&storage.connection, task_id).map_err(|error| error.to_string())
+}
+
+pub fn inspect_task(
+    default_root: &Path,
+    params: InspectTaskParams,
+) -> ActionResult<TaskRecordData> {
+    let action = "inspect_task";
+    let task_id = params.task_id.trim();
+    if task_id.is_empty() {
+        return ActionResult::failed(action, "Could not inspect task.", "task_id is required");
+    }
+    let storage = match storage::connect(default_root, params.root.as_deref()) {
+        Ok(storage) => storage,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not open task storage.", error.to_string())
+        }
+    };
+    match get_task(&storage.connection, task_id) {
+        Ok(task) => ActionResult::completed(
+            action,
+            format!("Task `{}` inspected.", task.id),
+            TaskRecordData {
+                root: storage.storage.root.display().to_string(),
+                task,
+            },
+        ),
+        Err(rusqlite::Error::QueryReturnedNoRows) => ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Skipped,
+            summary: format!("Task `{task_id}` was not found."),
+            next_action: Some("Dispatch work before inspecting a task id.".to_string()),
+            data: None,
+            error: None,
+        },
+        Err(error) => ActionResult::failed(action, "Could not inspect task.", error.to_string()),
+    }
+}
+
+pub fn claim_next_task(
+    default_root: &Path,
+    params: ClaimNextTaskParams,
+) -> ActionResult<TaskRecordData> {
+    let action = "claim_next_task";
+    let worker = clean_optional(params.worker);
+    let claimant = clean_optional(params.claimant).unwrap_or_else(|| "runner".to_string());
+    let mut storage = match storage::connect(default_root, params.root.as_deref()) {
+        Ok(storage) => storage,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not open task storage.", error.to_string())
+        }
+    };
+    let root = storage.storage.root.display().to_string();
+
+    let transaction = match storage.connection.transaction() {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not begin task claim.", error.to_string())
+        }
+    };
+
+    let Some(task) = (match select_next_queued_task(&transaction, worker.as_deref()) {
+        Ok(task) => task,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not select queued task.", error.to_string())
+        }
+    }) else {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Skipped,
+            summary: "No queued task is available to claim.".to_string(),
+            next_action: Some("Dispatch runnable backlog work first.".to_string()),
+            data: None,
+            error: None,
+        };
+    };
+
+    let updated = match transaction.execute(
+        r#"
+        UPDATE tasks
+        SET status = 'claimed',
+            claimed_by = ?2,
+            claimed_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?1 AND status = 'queued'
+        "#,
+        params![task.id, claimant],
+    ) {
+        Ok(updated) => updated,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not claim task.", error.to_string())
+        }
+    };
+    if updated == 0 {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Skipped,
+            summary: format!("Task `{}` was already claimed.", task.id),
+            next_action: Some("Retry claim_next_task to claim another queued task.".to_string()),
+            data: None,
+            error: None,
+        };
+    }
+
+    let claimed = match get_task(&transaction, &task.id) {
+        Ok(task) => task,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not load claimed task.", error.to_string())
+        }
+    };
+    let sequence = match next_sequence(&transaction, &claimed.id) {
+        Ok(sequence) => sequence,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not allocate task event.",
+                error.to_string(),
+            )
+        }
+    };
+    let payload = serde_json::json!({
+        "worker": claimed.worker.as_deref(),
+        "claimed_by": claimed.claimed_by.as_deref(),
+        "status": claimed.status.as_str()
+    });
+    let payload_json = match serde_json::to_string(&payload) {
+        Ok(payload_json) => payload_json,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not encode claim event.", error.to_string())
+        }
+    };
+    if let Err(error) = transaction.execute(
+        r#"
+        INSERT INTO task_events(task_id, sequence, event_type, summary, payload_json)
+        VALUES (?1, ?2, 'task_claimed', ?3, ?4)
+        "#,
+        params![
+            claimed.id,
+            sequence,
+            format!(
+                "Task claimed by `{}`.",
+                claimed.claimed_by.as_deref().unwrap_or("runner")
+            ),
+            payload_json
+        ],
+    ) {
+        return ActionResult::failed(action, "Could not record claim event.", error.to_string());
+    }
+    if let Err(error) = transaction.commit() {
+        return ActionResult::failed(action, "Could not commit task claim.", error.to_string());
+    }
+
+    ActionResult::completed(
+        action,
+        format!("Claimed task `{}`.", claimed.id),
+        TaskRecordData {
+            root,
+            task: claimed,
+        },
+    )
 }
 
 pub fn inspect_task_events(
@@ -189,13 +353,35 @@ fn get_task_event(
 fn get_task(connection: &rusqlite::Connection, id: &str) -> rusqlite::Result<TaskRecord> {
     connection.query_row(
         r#"
-        SELECT id, source_item_id, title, status, worker, created_at, updated_at
+        SELECT id, source_item_id, title, status, worker, claimed_by, claimed_at, started_at,
+               finished_at, created_at, updated_at
         FROM tasks
         WHERE id = ?1
         "#,
         [id],
         row_to_task,
     )
+}
+
+fn select_next_queued_task(
+    connection: &rusqlite::Connection,
+    worker: Option<&str>,
+) -> rusqlite::Result<Option<TaskRecord>> {
+    connection
+        .query_row(
+            r#"
+            SELECT id, source_item_id, title, status, worker, claimed_by, claimed_at, started_at,
+                   finished_at, created_at, updated_at
+            FROM tasks
+            WHERE status = 'queued'
+              AND (?1 IS NULL OR worker IS NULL OR worker = ?1)
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            "#,
+            [worker],
+            row_to_task,
+        )
+        .optional()
 }
 
 fn next_task_id(
@@ -245,9 +431,21 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         title: row.get("title")?,
         status: row.get("status")?,
         worker: row.get("worker")?,
+        claimed_by: row.get("claimed_by")?,
+        claimed_at: row.get("claimed_at")?,
+        started_at: row.get("started_at")?,
+        finished_at: row.get("finished_at")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
+}
+
+fn is_unique_constraint_error(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(error, _)
+            if error.code == rusqlite::ErrorCode::ConstraintViolation
+    )
 }
 
 fn clean_required(field: &str, value: &str) -> Result<String, String> {
@@ -391,5 +589,77 @@ mod tests {
 
         assert_eq!(first.sequence, 1);
         assert_eq!(second.sequence, 2);
+    }
+
+    #[test]
+    fn prevents_duplicate_active_task_for_backlog_item() {
+        let project = TempDir::new().expect("temp dir");
+        create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "First task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("first task");
+
+        let duplicate = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Duplicate task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        );
+
+        assert!(duplicate
+            .expect_err("duplicate active task")
+            .contains("active task already exists"));
+    }
+
+    #[test]
+    fn claims_next_queued_task_and_records_event() {
+        let project = TempDir::new().expect("temp dir");
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Claimable task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+
+        let claimed = claim_next_task(
+            project.path(),
+            ClaimNextTaskParams {
+                root: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("runner-1".to_string()),
+            },
+        );
+        let claimed_task = claimed.data.expect("claimed data").task;
+
+        assert!(matches!(claimed.status, ActionStatus::Completed));
+        assert_eq!(claimed_task.id, task.id);
+        assert_eq!(claimed_task.status, "claimed");
+        assert_eq!(claimed_task.claimed_by.as_deref(), Some("runner-1"));
+        assert!(claimed_task.claimed_at.is_some());
+
+        let events = inspect_task_events(
+            project.path(),
+            InspectTaskEventsParams {
+                root: None,
+                task_id: task.id,
+                limit: None,
+            },
+        );
+        let events = events.data.expect("event data");
+        assert_eq!(events.returned, 1);
+        assert_eq!(events.events[0].event_type, "task_claimed");
     }
 }

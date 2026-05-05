@@ -74,6 +74,19 @@ pub struct InspectTaskEventsParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct InspectTaskParams {
+    pub root: Option<String>,
+    pub task_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ClaimNextTaskParams {
+    pub root: Option<String>,
+    pub worker: Option<String>,
+    pub claimant: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SendWorkerGuidanceParams {
     pub root: Option<String>,
     pub task_id: String,
@@ -371,8 +384,18 @@ pub struct TaskRecord {
     pub title: String,
     pub status: String,
     pub worker: Option<String>,
+    pub claimed_by: Option<String>,
+    pub claimed_at: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TaskRecordData {
+    pub root: String,
+    pub task: TaskRecord,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

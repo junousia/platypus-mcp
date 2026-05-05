@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 3;
+pub const SCHEMA_VERSION: i32 = 4;
 
 pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -35,6 +35,10 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
             title TEXT NOT NULL,
             status TEXT NOT NULL,
             worker TEXT,
+            claimed_by TEXT,
+            claimed_at TEXT,
+            started_at TEXT,
+            finished_at TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
@@ -44,6 +48,10 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_tasks_status
             ON tasks(status);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_one_active_source_item
+            ON tasks(source_item_id)
+            WHERE status IN ('queued', 'claimed', 'running');
 
         CREATE TABLE IF NOT EXISTS findings (
             id TEXT PRIMARY KEY,
@@ -81,6 +89,10 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
     )?;
     add_column_if_missing(&transaction, "findings", "owner", "TEXT")?;
     add_column_if_missing(&transaction, "findings", "disposition_reason", "TEXT")?;
+    add_column_if_missing(&transaction, "tasks", "claimed_by", "TEXT")?;
+    add_column_if_missing(&transaction, "tasks", "claimed_at", "TEXT")?;
+    add_column_if_missing(&transaction, "tasks", "started_at", "TEXT")?;
+    add_column_if_missing(&transaction, "tasks", "finished_at", "TEXT")?;
     transaction.execute(
         r#"
         INSERT INTO metadata(key, value, updated_at)
