@@ -8,6 +8,8 @@ use std::{fs, path::PathBuf};
 use tempfile::TempDir;
 use tokio::process::Command;
 
+use platypus_mcp_rs::tasks::{record_task_event, NewTaskEvent};
+
 #[tokio::test]
 async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     let client = start_client(None).await?;
@@ -166,6 +168,76 @@ async fn stdio_server_records_lists_validates_and_dispositions_findings() -> any
     let listed = listed.structured_content.expect("listed content");
     assert_eq!(listed["data"]["returned"], 1);
     assert_eq!(listed["data"]["findings"][0]["status"], "resolved");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_replays_task_events() -> anyhow::Result<()> {
+    let project = project_fixture();
+    record_task_event(
+        project.path(),
+        None,
+        NewTaskEvent {
+            task_id: "task-1".to_string(),
+            sequence: None,
+            event_type: "worker_started".to_string(),
+            summary: "Worker started.".to_string(),
+            payload: Some(json!({ "worker": "coder" })),
+        },
+    )
+    .map_err(anyhow::Error::msg)?;
+    record_task_event(
+        project.path(),
+        None,
+        NewTaskEvent {
+            task_id: "task-1".to_string(),
+            sequence: None,
+            event_type: "worker_result".to_string(),
+            summary: "Worker completed.".to_string(),
+            payload: Some(json!({ "status": "completed" })),
+        },
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+    let result = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "inspect_task_events".into(),
+            arguments: Some(json_args(json!({ "task_id": "task-1" }))),
+            task: None,
+        })
+        .await?;
+    let response = result.structured_content.expect("task event content");
+
+    assert_eq!(response["status"], "completed");
+    assert_eq!(response["data"]["returned"], 2);
+    assert_eq!(response["data"]["events"][0]["sequence"], 1);
+    assert_eq!(response["data"]["events"][1]["event_type"], "worker_result");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_returns_skipped_for_unknown_task_events() -> anyhow::Result<()> {
+    let project = project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let result = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "inspect_task_events".into(),
+            arguments: Some(json_args(json!({ "task_id": "missing" }))),
+            task: None,
+        })
+        .await?;
+    let response = result.structured_content.expect("task event content");
+
+    assert_eq!(response["status"], "skipped");
+    assert_eq!(response["data"]["returned"], 0);
 
     client.cancel().await?;
     Ok(())

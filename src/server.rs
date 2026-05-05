@@ -6,10 +6,10 @@ use crate::{
         FindingRecordData, FindingValidationData, InitProjectParams, InspectTaskEventsParams,
         LimitParams, ListFindingsParams, PingData, PingParams, ProjectScaffoldData,
         ProjectStatusData, RecordFindingParams, RootParams, SendWorkerGuidanceParams,
-        UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
+        TaskEventListData, UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
         ValidateFindingsParams,
     },
-    project,
+    project, tasks,
 };
 use anyhow::Result;
 use rmcp::{
@@ -288,15 +288,8 @@ impl PlatypusMcp {
     pub async fn inspect_task_events(
         &self,
         Parameters(params): Parameters<InspectTaskEventsParams>,
-    ) -> Json<ActionResult<UnsupportedData>> {
-        Json(not_implemented(
-            "inspect_task_events",
-            params.root.as_deref(),
-            &format!(
-                "Task event storage is not wired yet for task `{}`.",
-                params.task_id
-            ),
-        ))
+    ) -> Json<ActionResult<TaskEventListData>> {
+        Json(tasks::inspect_task_events(&self.default_root, params))
     }
 
     #[tool(

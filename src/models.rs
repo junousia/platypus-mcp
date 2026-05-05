@@ -355,6 +355,25 @@ pub struct FindingRecord {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
+pub struct TaskEventListData {
+    pub root: String,
+    pub task_id: String,
+    pub events: Vec<TaskEventRecord>,
+    pub returned: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct TaskEventRecord {
+    pub task_id: String,
+    pub sequence: i64,
+    pub event_type: String,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Value>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct UnsupportedData {
     pub supported: bool,
     pub reason: String,

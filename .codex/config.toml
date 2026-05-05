@@ -37,3 +37,6 @@ approval_mode = "approve"
 
 [mcp_servers."platypus-rs".tools.update_finding_disposition]
 approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.inspect_task_events]
+approval_mode = "approve"

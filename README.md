@@ -18,10 +18,11 @@ chat session, while this server exposes deterministic project-management tools.
 - `list_findings`: list stored findings with filters
 - `validate_findings`: fail when required findings remain unresolved
 - `update_finding_disposition`: resolve, reject, defer, or assign findings
+- `inspect_task_events`: replay bounded task supervision events
 - local SQLite storage foundation under `.platy/platypus.sqlite3` for task
   events, findings, and schema metadata
-- runtime tools are exposed with structured `skipped` responses until durable
-  task storage and dispatch are implemented
+- runtime dispatch tools are exposed with structured `skipped` responses until
+  worker dispatch is implemented
 
 ## Structure
 
