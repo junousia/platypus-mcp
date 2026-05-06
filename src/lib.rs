@@ -1,4 +1,5 @@
 pub mod approvals;
+pub mod assignments;
 pub mod backlog;
 pub mod bundle;
 pub mod config;

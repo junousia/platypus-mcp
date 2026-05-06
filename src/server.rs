@@ -1,21 +1,23 @@
 use crate::{
-    approvals, backlog, bundle, config, dispatch, events, evidence, findings,
+    approvals, assignments, backlog, bundle, config, dispatch, events, evidence, findings,
     models::{
         ActionResult, AgentProfileData, AgentProfilesData, AgentProfilesParams, ApprovalListData,
         ApprovalListParams, ApprovalRespondParams, ApprovalResponseData, ClaimNextTaskParams,
-        ConfigureAgentProfileParams, CreateBacklogItemParams, CreatedBacklogItemData,
-        DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
-        EventsReplayData, EventsReplayParams, EvidenceListData, EvidenceRecordData,
-        FindingDispositionData, FindingListData, FindingRecordData, FindingValidationData,
-        GenerateTaskBundleParams, InitProjectParams, InspectTaskEventsParams, InspectTaskParams,
-        LimitParams, ListEvidenceParams, ListFindingsParams, PingData, PingParams,
-        ProjectScaffoldData, ProjectStatusData, ReconcileParams, ReconciliationData,
-        RecordEvidenceParams, RecordFindingParams, RootParams, RunnerPrepareParams,
-        RunnerReportData, SendWorkerGuidanceParams, TaskBundleData, TaskEventListData,
-        TaskRecordData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams, WorkerGuidanceData, WorktreeCleanupData, WorktreeCleanupParams,
-        WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffParams,
-        WorktreeStatusParams,
+        CompleteWorkerExecutionParams, ConfigureAgentProfileParams, CreateBacklogItemParams,
+        CreatedBacklogItemData, DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData,
+        DraftBacklogItemsParams, EventsReplayData, EventsReplayParams, EvidenceListData,
+        EvidenceRecordData, FindingDispositionData, FindingListData, FindingRecordData,
+        FindingValidationData, GenerateTaskBundleParams, InitProjectParams,
+        InspectTaskEventsParams, InspectTaskParams, InspectWorkerAssignmentParams, LimitParams,
+        ListEvidenceParams, ListFindingsParams, PingData, PingParams,
+        PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData, ReconcileParams,
+        ReconciliationData, RecordEvidenceParams, RecordFindingParams, RecordWorkerEventParams,
+        RootParams, RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams,
+        StartWorkerExecutionParams, TaskBundleData, TaskEventListData, TaskRecordData,
+        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
+        WorkerAssignmentData, WorkerAssignmentEventData, WorkerGuidanceData, WorktreeCleanupData,
+        WorktreeCleanupParams, WorktreeCreateParams, WorktreeData, WorktreeDiffData,
+        WorktreeDiffParams, WorktreeStatusParams,
     },
     project, reconcile, runner, tasks, workspace,
 };
@@ -411,6 +413,113 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Prepare Worker Assignment",
+        description = "Claim a task, create or reuse its worktree, generate a worker bundle, and persist a single assignment handoff object.",
+        annotations(
+            title = "Prepare Worker Assignment",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn prepare_worker_assignment(
+        &self,
+        Parameters(params): Parameters<PrepareWorkerAssignmentParams>,
+    ) -> Json<ActionResult<WorkerAssignmentData>> {
+        Json(assignments::prepare_worker_assignment(
+            &self.default_root,
+            params,
+        ))
+    }
+
+    #[tool(
+        title = "Inspect Worker Assignment",
+        description = "Inspect one persisted worker assignment handoff object.",
+        annotations(
+            title = "Inspect Worker Assignment",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn inspect_worker_assignment(
+        &self,
+        Parameters(params): Parameters<InspectWorkerAssignmentParams>,
+    ) -> Json<ActionResult<WorkerAssignmentData>> {
+        Json(assignments::inspect_worker_assignment(
+            &self.default_root,
+            params,
+        ))
+    }
+
+    #[tool(
+        title = "Start Worker Execution",
+        description = "Mark a prepared worker assignment and its task as running.",
+        annotations(
+            title = "Start Worker Execution",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn start_worker_execution(
+        &self,
+        Parameters(params): Parameters<StartWorkerExecutionParams>,
+    ) -> Json<ActionResult<WorkerAssignmentData>> {
+        Json(assignments::start_worker_execution(
+            &self.default_root,
+            params,
+        ))
+    }
+
+    #[tool(
+        title = "Record Worker Event",
+        description = "Persist a progress event for a running worker assignment.",
+        annotations(
+            title = "Record Worker Event",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn record_worker_event(
+        &self,
+        Parameters(params): Parameters<RecordWorkerEventParams>,
+    ) -> Json<ActionResult<WorkerAssignmentEventData>> {
+        Json(assignments::record_worker_event(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Complete Worker Execution",
+        description = "Persist a worker result and finish the assigned task with guarded result data.",
+        annotations(
+            title = "Complete Worker Execution",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn complete_worker_execution(
+        &self,
+        Parameters(params): Parameters<CompleteWorkerExecutionParams>,
+    ) -> Json<ActionResult<WorkerAssignmentData>> {
+        Json(assignments::complete_worker_execution(
+            &self.default_root,
+            params,
+        ))
+    }
+
+    #[tool(
         title = "Runner Prepare Next",
         description = "Claim queued tasks and prepare worktrees and bundles without executing workers.",
         annotations(
@@ -732,6 +841,11 @@ mod tests {
             "worktree_diff",
             "worktree_cleanup",
             "generate_task_bundle",
+            "prepare_worker_assignment",
+            "inspect_worker_assignment",
+            "start_worker_execution",
+            "record_worker_event",
+            "complete_worker_execution",
             "runner_prepare_next",
             "inspect_task_events",
             "approval_list",
@@ -763,6 +877,10 @@ mod tests {
             "claim_next_task",
             "worktree_create",
             "worktree_cleanup",
+            "prepare_worker_assignment",
+            "start_worker_execution",
+            "record_worker_event",
+            "complete_worker_execution",
             "runner_prepare_next",
             "approval_respond",
             "record_evidence",

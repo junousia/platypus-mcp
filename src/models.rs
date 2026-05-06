@@ -121,6 +121,51 @@ pub struct GenerateTaskBundleParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct PrepareWorkerAssignmentParams {
+    pub root: Option<String>,
+    pub task_id: Option<String>,
+    pub worker: Option<String>,
+    pub claimant: Option<String>,
+    pub base_ref: Option<String>,
+    #[serde(default)]
+    pub verification_command: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InspectWorkerAssignmentParams {
+    pub root: Option<String>,
+    pub assignment_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StartWorkerExecutionParams {
+    pub root: Option<String>,
+    pub assignment_id: String,
+    pub worker_session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecordWorkerEventParams {
+    pub root: Option<String>,
+    pub assignment_id: String,
+    pub event_type: String,
+    pub summary: String,
+    #[serde(default)]
+    pub payload: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CompleteWorkerExecutionParams {
+    pub root: Option<String>,
+    pub assignment_id: String,
+    pub status: String,
+    pub summary: String,
+    #[serde(default)]
+    pub changed_files: Vec<String>,
+    pub verification_status: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunnerPrepareParams {
     pub root: Option<String>,
     pub worker: Option<String>,
@@ -567,7 +612,7 @@ pub struct TaskBundleData {
     pub bundle: TaskBundle,
 }
 
-#[derive(Debug, Serialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
 pub struct TaskBundle {
     pub task_id: String,
     pub item_id: String,
@@ -581,6 +626,40 @@ pub struct TaskBundle {
     pub owned_surfaces: Vec<String>,
     pub verification_command: Vec<String>,
     pub brief: String,
+}
+
+#[derive(Debug, Serialize, Clone, JsonSchema)]
+pub struct WorkerAssignmentData {
+    pub root: String,
+    pub assignment: WorkerAssignment,
+}
+
+#[derive(Debug, Serialize, Clone, JsonSchema)]
+pub struct WorkerAssignment {
+    pub id: String,
+    pub task_id: String,
+    pub worker: Option<String>,
+    pub status: String,
+    pub assigned_by: Option<String>,
+    pub worktree_path: String,
+    pub bundle: TaskBundle,
+    pub worker_session: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub result_status: Option<String>,
+    pub summary: Option<String>,
+    pub changed_files: Vec<String>,
+    pub verification_status: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkerAssignmentEventData {
+    pub root: String,
+    pub assignment_id: String,
+    pub task_id: String,
+    pub event: TaskEventRecord,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 7;
+pub const SCHEMA_VERSION: i32 = 8;
 
 pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -136,6 +136,35 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_evidence_kind
             ON evidence(kind);
+
+        CREATE TABLE IF NOT EXISTS worker_assignments (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            worker TEXT,
+            status TEXT NOT NULL,
+            assigned_by TEXT,
+            worktree_path TEXT NOT NULL,
+            bundle_json TEXT NOT NULL,
+            worker_session TEXT,
+            started_at TEXT,
+            completed_at TEXT,
+            result_status TEXT,
+            summary TEXT,
+            changed_files_json TEXT,
+            verification_status TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_worker_assignments_task_id
+            ON worker_assignments(task_id);
+
+        CREATE INDEX IF NOT EXISTS idx_worker_assignments_status
+            ON worker_assignments(status);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_assignments_one_active_task
+            ON worker_assignments(task_id)
+            WHERE status IN ('prepared', 'running');
         "#,
     )?;
     add_column_if_missing(

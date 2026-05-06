@@ -29,6 +29,11 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"worktree_diff"));
     assert!(tool_names.contains(&"worktree_cleanup"));
     assert!(tool_names.contains(&"generate_task_bundle"));
+    assert!(tool_names.contains(&"prepare_worker_assignment"));
+    assert!(tool_names.contains(&"inspect_worker_assignment"));
+    assert!(tool_names.contains(&"start_worker_execution"));
+    assert!(tool_names.contains(&"record_worker_event"));
+    assert!(tool_names.contains(&"complete_worker_execution"));
     assert!(tool_names.contains(&"runner_prepare_next"));
     assert!(tool_names.contains(&"approval_list"));
     assert!(tool_names.contains(&"approval_respond"));
@@ -399,6 +404,118 @@ async fn stdio_server_claims_and_inspects_queued_task() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn stdio_server_runs_worker_assignment_lifecycle() -> anyhow::Result<()> {
+    let project = assignment_project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let dispatched = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "dispatch_next_work".into(),
+            arguments: Some(JsonObject::new()),
+            task: None,
+        })
+        .await?;
+    let dispatched = dispatched.structured_content.expect("dispatch content");
+    let task_id = dispatched["data"]["task"]["id"]
+        .as_str()
+        .expect("task id")
+        .to_string();
+
+    let prepared = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "prepare_worker_assignment".into(),
+            arguments: Some(json_args(json!({
+                "task_id": task_id,
+                "worker": "coder",
+                "claimant": "stdio-test",
+                "verification_command": ["make", "check"]
+            }))),
+            task: None,
+        })
+        .await?;
+    let prepared = prepared.structured_content.expect("prepared content");
+    let assignment_id = prepared["data"]["assignment"]["id"]
+        .as_str()
+        .expect("assignment id")
+        .to_string();
+
+    assert_eq!(prepared["status"], "completed");
+    assert_eq!(prepared["data"]["assignment"]["status"], "prepared");
+    assert!(prepared["data"]["assignment"]["worktree_path"].is_string());
+
+    let started = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "start_worker_execution".into(),
+            arguments: Some(json_args(json!({
+                "assignment_id": assignment_id,
+                "worker_session": "subagent-stdio"
+            }))),
+            task: None,
+        })
+        .await?;
+    let started = started.structured_content.expect("started content");
+
+    assert_eq!(started["status"], "completed");
+    assert_eq!(started["data"]["assignment"]["status"], "running");
+
+    let progress = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "record_worker_event".into(),
+            arguments: Some(json_args(json!({
+                "assignment_id": assignment_id,
+                "event_type": "worker_progress",
+                "summary": "README changed."
+            }))),
+            task: None,
+        })
+        .await?;
+    let progress = progress.structured_content.expect("progress content");
+    assert_eq!(progress["status"], "completed");
+    assert_eq!(progress["data"]["event"]["event_type"], "worker_progress");
+
+    let completed = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "complete_worker_execution".into(),
+            arguments: Some(json_args(json!({
+                "assignment_id": assignment_id,
+                "status": "completed",
+                "summary": "README updated.",
+                "changed_files": ["README.md"],
+                "verification_status": "passed"
+            }))),
+            task: None,
+        })
+        .await?;
+    let completed = completed.structured_content.expect("completed content");
+
+    assert_eq!(completed["status"], "completed");
+    assert_eq!(completed["data"]["assignment"]["status"], "completed");
+    assert_eq!(
+        completed["data"]["assignment"]["result_status"],
+        "completed"
+    );
+
+    let inspected = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "inspect_task".into(),
+            arguments: Some(json_args(json!({ "task_id": task_id }))),
+            task: None,
+        })
+        .await?;
+    let inspected = inspected.structured_content.expect("inspect content");
+    assert_eq!(inspected["data"]["task"]["status"], "completed");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_skips_dispatch_when_backlog_has_no_runnable_items() -> anyhow::Result<()> {
     let project = TempDir::new()?;
     fs::write(project.path().join("platy.yaml"), "project: test\n")?;
@@ -508,4 +625,81 @@ Queue work without running a worker.
     )
     .expect("item");
     temp
+}
+
+fn assignment_project_fixture() -> TempDir {
+    let temp = TempDir::new().expect("temp dir");
+    git(temp.path(), &["init"]);
+    git(temp.path(), &["config", "user.name", "Platypus Test"]);
+    git(
+        temp.path(),
+        &["config", "user.email", "platypus@example.invalid"],
+    );
+    fs::write(temp.path().join("README.md"), "# Test\n").expect("readme");
+    git(temp.path(), &["add", "README.md"]);
+    git(temp.path(), &["commit", "-m", "Initial commit"]);
+    fs::write(temp.path().join("platy.yaml"), "project: test\n").expect("config");
+    fs::create_dir_all(temp.path().join("backlog/items")).expect("items dir");
+    fs::create_dir_all(temp.path().join("backlog/epics")).expect("epics dir");
+    fs::write(
+        temp.path().join("backlog/epics/general.md"),
+        r#"---
+id: general
+title: General
+status: active
+priority: P1
+area: general
+---
+
+# General
+"#,
+    )
+    .expect("epic");
+    fs::write(
+        temp.path().join("backlog/items/PROJ-001.md"),
+        r#"---
+id: PROJ-001
+title: First assignment work
+priority: P1
+type: foundation
+area: general
+epic: general
+depends_on: []
+suggested_worker: coder
+owned_surfaces:
+- README.md
+---
+
+# PROJ-001 First assignment work
+
+## Goal
+
+Create the first assignment.
+
+## Implementation Contract
+
+Keep changes in README.md.
+
+## Acceptance
+
+- Assignment completes.
+"#,
+    )
+    .expect("item");
+    temp
+}
+
+fn git(root: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .expect("git command");
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

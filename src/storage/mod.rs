@@ -203,7 +203,13 @@ mod tests {
 
         let connection = Connection::open(&init.db_path).expect("open db");
         assert_eq!(read_user_version(&connection), SCHEMA_VERSION);
-        for table in ["metadata", "tasks", "task_events", "findings"] {
+        for table in [
+            "metadata",
+            "tasks",
+            "task_events",
+            "findings",
+            "worker_assignments",
+        ] {
             assert!(table_exists(&connection, table), "missing table {table}");
         }
     }
