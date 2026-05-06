@@ -4,6 +4,9 @@ This document collects the main architectural and workflow diagrams from
 different perspectives. Keep these diagrams aligned with the MCP tool contract
 when adding new lifecycle states, durable records, or host-facing tools.
 
+Unless a node or edge is labelled as future or conceptual, diagrams describe
+the current intended MCP tool contract.
+
 ## System Boundary
 
 Platypus is the deterministic local state boundary. MCP hosts own conversation
@@ -31,7 +34,8 @@ flowchart LR
 ## Task State Machine
 
 Task status is runtime state. It belongs in the local store, not in backlog
-markdown.
+markdown. The cancellation and retry transitions are planned lifecycle states,
+not current tool behavior.
 
 ```mermaid
 stateDiagram-v2
@@ -111,7 +115,9 @@ flowchart TD
 ## Durable State Model
 
 Backlog markdown remains declarative. Runtime records are keyed from backlog
-items and task ids, then reconciled against Git trailers and evidence.
+items and task ids, then reconciled against Git trailers and evidence. This is
+a conceptual model: `GIT_TRAILER` is derived from Git history, not stored as a
+SQLite table.
 
 ```mermaid
 erDiagram

@@ -28,24 +28,6 @@ diagrams from additional perspectives.
 3. Configure manager and worker profiles with `configure_agent_profile`.
 4. Inspect workflow policy with `inspect_workflow_config`.
 
-```mermaid
-sequenceDiagram
-    participant Host as MCP host
-    participant Platy as Platypus MCP
-    participant Repo as Project repository
-    participant State as .platy state
-
-    Host->>Platy: init_project
-    Platy->>Repo: create missing scaffold files
-    Host->>Platy: doctor_snapshot
-    Platy->>Repo: inspect config, backlog, and Git
-    Platy->>State: inspect runtime store
-    Host->>Platy: configure_agent_profile
-    Platy->>Repo: update platy.yaml
-    Host->>Platy: inspect_workflow_config
-    Platy-->>Host: effective integration policy
-```
-
 ## Backlog Shaping
 
 1. Use `draft_backlog_items` for a deterministic first pass from a goal.
@@ -68,19 +50,6 @@ status, task attempts, PR metadata, or closure state.
 
 The worker should operate in the assigned worktree, not in the manager
 workspace.
-
-```mermaid
-flowchart TD
-    safe["next_safe_action"] --> dispatch{"dispatch_next_work?"}
-    dispatch -->|yes| queued["queued task"]
-    queued --> safe2["next_safe_action"]
-    safe2 --> handoff{"prepare_worker_handoff?"}
-    handoff -->|yes| bundle["assignment bundle"]
-    bundle --> worktree["isolated Git worktree"]
-    worktree --> worker["external worker harness"]
-    worker --> progress["record_worker_progress"]
-    worker --> done["complete_worker_task"]
-```
 
 ## Worker Progress And Result
 
@@ -116,21 +85,3 @@ default.
 The tool uses `workflow.integration.merge_style` from `platy.yaml` and creates
 closure commits with `Platypus-Closes` and `Platypus-Verification` trailers.
 If integration cannot proceed, the tool returns structured recovery guidance.
-
-```mermaid
-flowchart TD
-    completed["completed worker task"] --> worktree["recorded task worktree"]
-    worktree --> verify{"verification evidence?"}
-    verify -->|missing| stopVerify["skip with recovery guidance"]
-    verify -->|present| clean{"manager workspace clean?"}
-    clean -->|dirty| stopClean["skip with recovery guidance"]
-    clean -->|clean| style{"workflow.integration.merge_style"}
-    style -->|merge_commit| merge["merge --no-ff --no-commit"]
-    style -->|fast_forward| ff["merge --ff-only"]
-    style -->|squash| squash["merge --squash"]
-    merge --> commit["closure commit with trailers"]
-    ff --> commit
-    squash --> commit
-    commit --> evidence["record commit evidence"]
-    evidence --> reconcile["reconcile_project"]
-```
