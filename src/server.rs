@@ -1,5 +1,6 @@
 use crate::{
     approvals, assignments, backlog, bundle, config, dispatch, events, evidence, findings,
+    guidance,
     models::{
         ActionResult, AgentProfileData, AgentProfilesData, AgentProfilesParams, ApprovalListData,
         ApprovalListParams, ApprovalRespondParams, ApprovalResponseData, ClaimNextTaskParams,
@@ -9,15 +10,15 @@ use crate::{
         EvidenceRecordData, FindingDispositionData, FindingListData, FindingRecordData,
         FindingValidationData, GenerateTaskBundleParams, InitProjectParams,
         InspectTaskEventsParams, InspectTaskParams, InspectWorkerAssignmentParams, LimitParams,
-        ListEvidenceParams, ListFindingsParams, PingData, PingParams,
-        PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData, ReconcileParams,
-        ReconciliationData, RecordEvidenceParams, RecordFindingParams, RecordWorkerEventParams,
-        RootParams, RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams,
-        StartWorkerExecutionParams, TaskBundleData, TaskEventListData, TaskRecordData,
-        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
-        WorkerAssignmentData, WorkerAssignmentEventData, WorkerGuidanceData, WorktreeCleanupData,
-        WorktreeCleanupParams, WorktreeCreateParams, WorktreeData, WorktreeDiffData,
-        WorktreeDiffParams, WorktreeStatusParams,
+        ListEvidenceParams, ListFindingsParams, NextSafeActionData, NextSafeActionParams, PingData,
+        PingParams, PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData,
+        ReconcileParams, ReconciliationData, RecordEvidenceParams, RecordFindingParams,
+        RecordVerificationEvidenceParams, RecordWorkerEventParams, RootParams, RunnerPrepareParams,
+        RunnerReportData, SendWorkerGuidanceParams, StartWorkerExecutionParams, TaskBundleData,
+        TaskEventListData, TaskRecordData, UpdateFindingDispositionParams, ValidateBacklogParams,
+        ValidateFindingsParams, WorkerAssignmentData, WorkerAssignmentEventData,
+        WorkerGuidanceData, WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams,
+        WorktreeData, WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams,
     },
     project, reconcile, runner, tasks, workspace,
 };
@@ -133,6 +134,25 @@ impl PlatypusMcp {
             params.root.as_deref(),
             Some(20),
         ))
+    }
+
+    #[tool(
+        title = "Next Safe Action",
+        description = "Recommend the next safe Platypus tool call for the current project state.",
+        annotations(
+            title = "Next Safe Action",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn next_safe_action(
+        &self,
+        Parameters(params): Parameters<NextSafeActionParams>,
+    ) -> Json<ActionResult<NextSafeActionData>> {
+        Json(guidance::next_safe_action(&self.default_root, params))
     }
 
     #[tool(
@@ -375,6 +395,27 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Inspect Worktree Changes",
+        description = "Friendly alias for worktree_diff. Inspect bounded changes in a persisted task worktree.",
+        annotations(
+            title = "Inspect Worktree Changes",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn inspect_worktree_changes(
+        &self,
+        Parameters(params): Parameters<WorktreeDiffParams>,
+    ) -> Json<ActionResult<WorktreeDiffData>> {
+        let mut result = workspace::worktree_diff(&self.default_root, params);
+        result.action = "inspect_worktree_changes".to_string();
+        Json(result)
+    }
+
+    #[tool(
         title = "Worktree Cleanup",
         description = "Remove a persisted task worktree when it is clean or explicitly forced.",
         annotations(
@@ -435,6 +476,27 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Prepare Worker Handoff",
+        description = "Friendly alias for prepare_worker_assignment. Prepare a single handoff object for an external worker.",
+        annotations(
+            title = "Prepare Worker Handoff",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn prepare_worker_handoff(
+        &self,
+        Parameters(params): Parameters<PrepareWorkerAssignmentParams>,
+    ) -> Json<ActionResult<WorkerAssignmentData>> {
+        let mut result = assignments::prepare_worker_assignment(&self.default_root, params);
+        result.action = "prepare_worker_handoff".to_string();
+        Json(result)
+    }
+
+    #[tool(
         title = "Inspect Worker Assignment",
         description = "Inspect one persisted worker assignment handoff object.",
         annotations(
@@ -479,6 +541,27 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Start Worker Task",
+        description = "Friendly alias for start_worker_execution. Mark a prepared worker handoff as running.",
+        annotations(
+            title = "Start Worker Task",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn start_worker_task(
+        &self,
+        Parameters(params): Parameters<StartWorkerExecutionParams>,
+    ) -> Json<ActionResult<WorkerAssignmentData>> {
+        let mut result = assignments::start_worker_execution(&self.default_root, params);
+        result.action = "start_worker_task".to_string();
+        Json(result)
+    }
+
+    #[tool(
         title = "Record Worker Event",
         description = "Persist a progress event for a running worker assignment.",
         annotations(
@@ -495,6 +578,27 @@ impl PlatypusMcp {
         Parameters(params): Parameters<RecordWorkerEventParams>,
     ) -> Json<ActionResult<WorkerAssignmentEventData>> {
         Json(assignments::record_worker_event(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Record Worker Progress",
+        description = "Friendly alias for record_worker_event. Persist a progress update for a running worker task.",
+        annotations(
+            title = "Record Worker Progress",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn record_worker_progress(
+        &self,
+        Parameters(params): Parameters<RecordWorkerEventParams>,
+    ) -> Json<ActionResult<WorkerAssignmentEventData>> {
+        let mut result = assignments::record_worker_event(&self.default_root, params);
+        result.action = "record_worker_progress".to_string();
+        Json(result)
     }
 
     #[tool(
@@ -517,6 +621,27 @@ impl PlatypusMcp {
             &self.default_root,
             params,
         ))
+    }
+
+    #[tool(
+        title = "Complete Worker Task",
+        description = "Friendly alias for complete_worker_execution. Persist a worker result and finish the assigned task.",
+        annotations(
+            title = "Complete Worker Task",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn complete_worker_task(
+        &self,
+        Parameters(params): Parameters<CompleteWorkerExecutionParams>,
+    ) -> Json<ActionResult<WorkerAssignmentData>> {
+        let mut result = assignments::complete_worker_execution(&self.default_root, params);
+        result.action = "complete_worker_task".to_string();
+        Json(result)
     }
 
     #[tool(
@@ -631,6 +756,28 @@ impl PlatypusMcp {
         Parameters(params): Parameters<RecordEvidenceParams>,
     ) -> Json<ActionResult<EvidenceRecordData>> {
         Json(evidence::record_evidence(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Record Verification Evidence",
+        description = "Record verification evidence for a completed task without requiring the caller to remember the evidence kind.",
+        annotations(
+            title = "Record Verification Evidence",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn record_verification_evidence(
+        &self,
+        Parameters(params): Parameters<RecordVerificationEvidenceParams>,
+    ) -> Json<ActionResult<EvidenceRecordData>> {
+        Json(evidence::record_verification_evidence(
+            &self.default_root,
+            params,
+        ))
     }
 
     #[tool(
@@ -827,6 +974,7 @@ mod tests {
             "ping",
             "inspect_status",
             "project_status",
+            "next_safe_action",
             "list_backlog",
             "validate_backlog",
             "doctor_snapshot",
@@ -839,19 +987,25 @@ mod tests {
             "worktree_create",
             "worktree_status",
             "worktree_diff",
+            "inspect_worktree_changes",
             "worktree_cleanup",
             "generate_task_bundle",
             "prepare_worker_assignment",
+            "prepare_worker_handoff",
             "inspect_worker_assignment",
             "start_worker_execution",
+            "start_worker_task",
             "record_worker_event",
+            "record_worker_progress",
             "complete_worker_execution",
+            "complete_worker_task",
             "runner_prepare_next",
             "inspect_task_events",
             "approval_list",
             "approval_respond",
             "events_replay",
             "record_evidence",
+            "record_verification_evidence",
             "list_evidence",
             "reconcile_project",
             "list_agent_profiles",
@@ -878,12 +1032,17 @@ mod tests {
             "worktree_create",
             "worktree_cleanup",
             "prepare_worker_assignment",
+            "prepare_worker_handoff",
             "start_worker_execution",
+            "start_worker_task",
             "record_worker_event",
+            "record_worker_progress",
             "complete_worker_execution",
+            "complete_worker_task",
             "runner_prepare_next",
             "approval_respond",
             "record_evidence",
+            "record_verification_evidence",
             "configure_agent_profile",
             "send_worker_guidance",
             "record_finding",

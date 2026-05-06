@@ -8,6 +8,9 @@ approval_mode = "approve"
 [mcp_servers."platypus".tools.inspect_status]
 approval_mode = "approve"
 
+[mcp_servers."platypus".tools.next_safe_action]
+approval_mode = "approve"
+
 [mcp_servers."platypus".tools.doctor_snapshot]
 approval_mode = "approve"
 
@@ -62,22 +65,37 @@ approval_mode = "approve"
 [mcp_servers."platypus".tools.prepare_worker_assignment]
 approval_mode = "approve"
 
+[mcp_servers."platypus".tools.prepare_worker_handoff]
+approval_mode = "approve"
+
 [mcp_servers."platypus".tools.inspect_worker_assignment]
 approval_mode = "approve"
 
 [mcp_servers."platypus".tools.start_worker_execution]
 approval_mode = "approve"
 
+[mcp_servers."platypus".tools.start_worker_task]
+approval_mode = "approve"
+
 [mcp_servers."platypus".tools.record_worker_event]
 approval_mode = "approve"
 
+[mcp_servers."platypus".tools.record_worker_progress]
+approval_mode = "approve"
+
 [mcp_servers."platypus".tools.complete_worker_execution]
+approval_mode = "approve"
+
+[mcp_servers."platypus".tools.complete_worker_task]
 approval_mode = "approve"
 
 [mcp_servers."platypus".tools.runner_prepare_next]
 approval_mode = "approve"
 
 [mcp_servers."platypus".tools.worktree_diff]
+approval_mode = "approve"
+
+[mcp_servers."platypus".tools.inspect_worktree_changes]
 approval_mode = "approve"
 
 [mcp_servers."platypus".tools.worktree_cleanup]
@@ -93,6 +111,9 @@ approval_mode = "approve"
 approval_mode = "approve"
 
 [mcp_servers."platypus".tools.record_evidence]
+approval_mode = "approve"
+
+[mcp_servers."platypus".tools.record_verification_evidence]
 approval_mode = "approve"
 
 [mcp_servers."platypus".tools.list_evidence]

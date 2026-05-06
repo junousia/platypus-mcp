@@ -484,6 +484,13 @@ pub fn complete_worker_execution(
         }
     };
     let verification_status = clean_optional(params.verification_status);
+    if status == "completed" && verification_status.is_none() {
+        return ActionResult::failed(
+            action,
+            "Could not complete worker execution.",
+            "verification_status is required when status is completed; use passed, failed, skipped, or not_run",
+        );
+    }
     let mut storage = match storage::connect(default_root, params.root.as_deref()) {
         Ok(storage) => storage,
         Err(error) => {
@@ -641,11 +648,18 @@ pub fn complete_worker_execution(
             error.to_string(),
         );
     }
-    ActionResult::completed(
+    let mut result = ActionResult::completed(
         action,
         format!("Completed worker assignment `{}`.", assignment.id),
         WorkerAssignmentData { root, assignment },
-    )
+    );
+    if status == "completed" && verification_status.as_deref() != Some("passed") {
+        result.next_action = Some(
+            "Record verification evidence with record_verification_evidence, or rerun verification before claiming the work is reconciled."
+                .to_string(),
+        );
+    }
+    result
 }
 
 #[cfg(test)]

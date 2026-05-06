@@ -1,7 +1,7 @@
 use crate::{
     models::{
         ActionResult, ActionStatus, EvidenceListData, EvidenceRecord, EvidenceRecordData,
-        ListEvidenceParams, RecordEvidenceParams,
+        ListEvidenceParams, RecordEvidenceParams, RecordVerificationEvidenceParams,
     },
     storage,
 };
@@ -100,6 +100,32 @@ pub fn record_evidence(
             error.to_string(),
         ),
     }
+}
+
+pub fn record_verification_evidence(
+    default_root: &Path,
+    params: RecordVerificationEvidenceParams,
+) -> ActionResult<EvidenceRecordData> {
+    let mut result = record_evidence(
+        default_root,
+        RecordEvidenceParams {
+            root: params.root,
+            id: params.id,
+            source_item_id: params.source_item_id,
+            source_task_id: Some(params.source_task_id),
+            kind: "verification".to_string(),
+            summary: params.summary,
+            refs: params.refs,
+            metadata: params.metadata,
+        },
+    );
+    result.action = "record_verification_evidence".to_string();
+    if matches!(result.status, ActionStatus::Completed) {
+        if let Some(evidence) = result.data.as_ref() {
+            result.summary = format!("Recorded verification evidence `{}`.", evidence.evidence.id);
+        }
+    }
+    result
 }
 
 pub fn list_evidence(

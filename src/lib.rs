@@ -7,6 +7,7 @@ pub mod dispatch;
 pub mod events;
 pub mod evidence;
 pub mod findings;
+pub mod guidance;
 pub mod models;
 pub mod project;
 pub mod reconcile;

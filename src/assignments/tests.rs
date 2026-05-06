@@ -192,7 +192,7 @@ fn refuses_completion_before_start_and_unowned_files() {
             status: "completed".to_string(),
             summary: "Done.".to_string(),
             changed_files: vec!["README.md".to_string()],
-            verification_status: None,
+            verification_status: Some("passed".to_string()),
         },
     );
     assert!(matches!(premature.status, ActionStatus::Skipped));
@@ -214,7 +214,7 @@ fn refuses_completion_before_start_and_unowned_files() {
             status: "completed".to_string(),
             summary: "Done.".to_string(),
             changed_files: vec!["src/lib.rs".to_string()],
-            verification_status: None,
+            verification_status: Some("passed".to_string()),
         },
     );
     assert!(matches!(unowned.status, ActionStatus::Failed));
@@ -222,6 +222,61 @@ fn refuses_completion_before_start_and_unowned_files() {
         .error
         .expect("error")
         .contains("outside owned surfaces"));
+}
+
+#[test]
+fn requires_verification_status_for_completed_assignment() {
+    let project = project_with_backlog();
+    let task = create_task_record(
+        project.path(),
+        None,
+        NewTask {
+            source_item_id: "PROJ-001".to_string(),
+            title: "External assignment".to_string(),
+            worker: Some("coder".to_string()),
+        },
+    )
+    .expect("task");
+    let assignment = prepare_worker_assignment(
+        project.path(),
+        PrepareWorkerAssignmentParams {
+            root: None,
+            task_id: Some(task.id),
+            worker: None,
+            claimant: None,
+            base_ref: None,
+            verification_command: Vec::new(),
+        },
+    )
+    .data
+    .expect("assignment")
+    .assignment;
+    start_worker_execution(
+        project.path(),
+        StartWorkerExecutionParams {
+            root: None,
+            assignment_id: assignment.id.clone(),
+            worker_session: None,
+        },
+    );
+
+    let result = complete_worker_execution(
+        project.path(),
+        CompleteWorkerExecutionParams {
+            root: None,
+            assignment_id: assignment.id,
+            status: "completed".to_string(),
+            summary: "Done.".to_string(),
+            changed_files: vec!["README.md".to_string()],
+            verification_status: None,
+        },
+    );
+
+    assert!(matches!(result.status, ActionStatus::Failed));
+    assert!(result
+        .error
+        .expect("error")
+        .contains("verification_status is required"));
 }
 
 fn project_with_backlog() -> TempDir {

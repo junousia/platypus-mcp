@@ -14,6 +14,11 @@ pub struct RootParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct NextSafeActionParams {
+    pub root: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct InitProjectParams {
     pub root: Option<String>,
     pub project_name: Option<String>,
@@ -215,6 +220,19 @@ pub struct RecordEvidenceParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecordVerificationEvidenceParams {
+    pub root: Option<String>,
+    pub id: Option<String>,
+    pub source_item_id: Option<String>,
+    pub source_task_id: String,
+    pub summary: String,
+    #[serde(default)]
+    pub refs: Vec<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListEvidenceParams {
     pub root: Option<String>,
     pub source_item_id: Option<String>,
@@ -371,6 +389,15 @@ pub struct ProjectStatusData {
     pub runnable_backlog_items: usize,
     pub tasks_supported: bool,
     pub findings_supported: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct NextSafeActionData {
+    pub root: String,
+    pub recommended_tool: String,
+    pub summary: String,
+    pub reason: String,
+    pub params: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
