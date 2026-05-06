@@ -6,51 +6,18 @@ chat session, while this server exposes deterministic project-management tools.
 
 ## Current scope
 
-- `ping`: health-check tool
-- `inspect_status` / `project_status`: inspect project shape and runnable work
-- `list_backlog`: list runnable backlog candidates
-- `validate_backlog`: validate structured backlog files
-- `doctor_snapshot`: inspect setup issues and recovery guidance
-- `init_project`: create missing project/backlog scaffold files
-- `draft_backlog_items`: draft typed candidate items from a goal
-- `create_backlog_item`: write one valid backlog item
-- `record_finding`: persist a worker or manager follow-up finding
-- `list_findings`: list stored findings with filters
-- `validate_findings`: fail when required findings remain unresolved
-- `update_finding_disposition`: resolve, reject, defer, or assign findings
-- `inspect_task_events`: replay bounded task supervision events
-- `dispatch_next_work`: select the next runnable backlog item and create a
-  queued task record for external harness execution
-- `inspect_task`: inspect one persisted task lifecycle record
-- `claim_next_task`: atomically claim the next queued task for an external
-  runner
-- `worktree_create`: create an isolated Git worktree for a task
-- `worktree_status`: inspect a task worktree recorded in storage
-- `worktree_diff` / `worktree_cleanup`: inspect bounded worktree changes and
-  safely remove clean or explicitly forced task worktrees
-- `generate_task_bundle`: generate a deterministic worker brief for a task
-- `runner_prepare_next`: claim queued tasks and prepare worktrees and bundles
-  without executing workers
-- `send_worker_guidance`: persist task-scoped worker steering messages for
-  queued, claimed, or running tasks
-- `approval_list` / `approval_respond`: inspect and resolve durable approval
-  requests
-- `events_replay`: replay bounded project, task, approval, and worker events
-- `record_evidence` / `list_evidence`: store and inspect audit evidence for
-  tasks, findings, and backlog items
-- `reconcile_project`: compare Git trailer closure, task state, findings, and
-  evidence for required gaps
-- `list_agent_profiles` / `configure_agent_profile`: inspect and update
-  manager and worker profile configuration in `platy.yaml`
-- worker adapter boundary with a fake adapter test path for runner integration
-- Codex adapter skeleton for typed configuration validation and safe app-server
-  event mapping
-- Claude adapter skeleton for typed configuration validation and safe stream JSON
-  event mapping
-- local SQLite storage foundation under `.platy/platypus.sqlite3` for task
-  events, findings, and schema metadata
-- worker execution is opt-in through explicit Codex or Claude harness adapter
-  configuration; the Rust MCP server does not run arbitrary shell commands
+Platypus currently supports project initialization, backlog authoring,
+deterministic task dispatch, isolated Git worktrees, worker handoff bundles,
+worker progress/result recording, approvals, events, findings, evidence, agent
+profiles, workflow integration configuration, and reconciliation.
+
+Use `next_safe_action` as the host-facing guide for the next safe tool call.
+The preferred workflow is documented in [docs/workflow.md](docs/workflow.md),
+and the full tool surface is documented in [docs/tools.md](docs/tools.md).
+
+The major near-term gap is managed integration of completed worker worktrees
+back into the manager workspace. That roadmap is documented in
+[docs/roadmap.md](docs/roadmap.md).
 
 ## Structure
 
@@ -60,6 +27,8 @@ chat session, while this server exposes deterministic project-management tools.
 - `src/backlog/`: backlog parsing, validation, listing, drafting, and creation
 - `src/storage/`: SQLite setup plus typed repository APIs; see
   [docs/storage.md](docs/storage.md)
+- `docs/workflow.md`: current MCP host workflow
+- `docs/roadmap.md`: product direction and near-term roadmap
 
 Keep new behavior in focused modules. Avoid adding large all-purpose files.
 
@@ -97,6 +66,14 @@ Run the local preparation runner:
 ```bash
 cargo run -- runner --max-tasks 1
 ```
+
+Inspect the current workflow integration policy:
+
+```bash
+PLATYPUS_MCP_ROOT=/path/to/project cargo run
+```
+
+Then call the MCP tool `inspect_workflow_config` from the host.
 
 By default the server uses the current directory as the Platypus project root.
 Set `PLATYPUS_MCP_ROOT` to bind tools to a specific project:

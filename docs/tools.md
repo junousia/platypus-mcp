@@ -9,65 +9,117 @@ Platypus tools return typed JSON with a shared envelope:
 - `data`: typed result payload
 - `error`: optional failure detail
 
-## Available Tools
+Hosts should prefer `next_safe_action` when deciding what to do next. The
+lower-level tools remain available for precise control and testing.
 
-### `ping`
+## Recommended Host Flow
 
-Health check. Returns the supplied `message` or `pong`.
+1. Bootstrap and inspect: `init_project`, `doctor_snapshot`,
+   `inspect_status`, `inspect_workflow_config`.
+2. Shape backlog: `draft_backlog_items`, `create_backlog_item`,
+   `validate_backlog`, `list_backlog`.
+3. Dispatch work: `next_safe_action`, `dispatch_next_work`,
+   `prepare_worker_handoff`.
+4. Run worker externally: pass the generated bundle/worktree to Codex, Claude,
+   or another harness.
+5. Record worker activity: `start_worker_task`, `record_worker_progress`,
+   `complete_worker_task`.
+6. Inspect and verify: `inspect_worktree_changes`,
+   `record_verification_evidence`, `record_finding`, `validate_findings`.
+7. Reconcile and clean up: `reconcile_project`, `worktree_cleanup`.
 
-### `inspect_status`
+Managed integration back into the manager workspace is planned next. Until
+`integrate_worker_result` exists, the host must review and apply worker
+worktree changes outside MCP, then record evidence and reconcile.
 
-Inspects the configured project root and reports whether `platy.yaml`,
-`backlog/`, and `.git` exist, plus backlog item counts.
+## Tool Groups
 
-### `project_status`
+### Project And Configuration
 
-Compatibility alias for `inspect_status`.
+- `ping`: health check.
+- `init_project`: create missing project scaffold files.
+- `doctor_snapshot`: inspect setup issues and recovery guidance.
+- `inspect_status` / `project_status`: inspect project shape and runnable work.
+- `inspect_workflow_config`: inspect effective workflow integration defaults.
+- `list_agent_profiles`: list configured manager and worker profiles.
+- `configure_agent_profile`: create or update one agent profile.
 
-### `list_backlog`
+### Backlog
 
-Returns runnable backlog candidates. Items are runnable when they are `todo` or
-`ready` and all dependencies are `done`.
+- `draft_backlog_items`: draft deterministic candidate backlog items from a
+  goal.
+- `create_backlog_item`: write one structured backlog item.
+- `validate_backlog`: validate backlog item and epic files.
+- `list_backlog`: list runnable backlog candidates.
 
-### `validate_backlog`
+### Task And Workspace Lifecycle
 
-Validates backlog item and epic frontmatter, required sections, dependency
-references, and basic enum values.
+- `next_safe_action`: recommend the next safe tool call and parameters.
+- `dispatch_next_work`: create a queued task from the next runnable backlog
+  item.
+- `inspect_task`: inspect one task lifecycle record.
+- `claim_next_task`: atomically claim a queued task.
+- `worktree_create`: create an isolated task worktree.
+- `worktree_status`: inspect recorded worktree metadata.
+- `worktree_diff` / `inspect_worktree_changes`: inspect bounded worktree
+  changes.
+- `worktree_cleanup`: remove a clean or explicitly forced task worktree.
+- `generate_task_bundle`: generate a deterministic worker brief.
+- `runner_prepare_next`: claim queued tasks and prepare worktrees/bundles.
 
-### `doctor_snapshot`
+### Worker Handoff And Results
 
-Returns a deterministic setup snapshot for project config, backlog directories,
-Git metadata, and backlog item count. This is the first recovery tool a client
-should call when a project cannot dispatch or mutate backlog safely.
+- `prepare_worker_assignment` / `prepare_worker_handoff`: persist a worker
+  handoff object.
+- `inspect_worker_assignment`: inspect a persisted worker assignment.
+- `start_worker_execution` / `start_worker_task`: mark a prepared assignment as
+  running.
+- `record_worker_event` / `record_worker_progress`: persist worker progress.
+- `complete_worker_execution` / `complete_worker_task`: finish a worker task
+  with result, changed files, and verification status.
+- `send_worker_guidance`: persist steering messages for active tasks.
 
-### `init_project`
+### Supervision, Evidence, And Findings
 
-Creates the minimal Platypus scaffold in an existing project directory:
-`platy.yaml`, `WORKFLOW.md`, `backlog/`, a `general` epic, and backlog
-templates. Existing files are skipped unless `overwrite` is explicitly true.
+- `approval_list` / `approval_respond`: inspect and resolve durable approval
+  requests.
+- `events_replay`: replay bounded project/task/approval/worker events.
+- `inspect_task_events`: replay task-scoped events.
+- `record_evidence` / `record_verification_evidence`: persist audit evidence.
+- `list_evidence`: inspect evidence records.
+- `reconcile_project`: report required gaps across tasks, findings, evidence,
+  and closure trailers.
+- `record_finding`: persist a follow-up finding.
+- `list_findings`: list stored findings.
+- `validate_findings`: fail when required findings remain unresolved.
+- `update_finding_disposition`: resolve, reject, defer, or assign findings.
 
-### `draft_backlog_items`
+## Example: Guided Dispatch
 
-Generates a deterministic three-step backlog draft from a goal: shape,
-implement, and verify.
+```json
+{
+  "tool": "next_safe_action",
+  "arguments": {}
+}
+```
 
-### `create_backlog_item`
+When a backlog item is runnable, the result recommends `dispatch_next_work`.
+After dispatch, the same tool recommends `prepare_worker_handoff`, then
+`start_worker_task`, then `record_worker_progress` while the assignment is
+running.
 
-Creates one structured backlog item under `backlog/items/`. Required semantic
-fields are `title`, `goal`, `implementation_contract` or `contract`, and at
-least one `acceptance` criterion.
+## Workflow Configuration
 
-### Runtime And Finding Tools
+New projects include:
 
-These tools are intentionally present but return `skipped` until durable storage
-and runtime integration are implemented:
+```yaml
+workflow:
+  integration:
+    merge_style: merge_commit
+    require_clean_manager_workspace: true
+    require_verification_evidence: true
+```
 
-- `dispatch_next_work`
-- `inspect_task_events`
-- `send_worker_guidance`
-- `list_findings`
-- `validate_findings`
-- `update_finding_disposition`
-
-Keeping these names stable lets MCP clients discover the intended product shape
-without guessing hidden commands.
+Current valid merge styles are `merge_commit`, `fast_forward`, and `squash`.
+The config is intentionally present before managed integration is implemented,
+so future integration tools can use the same stable project policy.
