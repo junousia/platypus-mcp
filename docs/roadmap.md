@@ -14,28 +14,56 @@ state machine.
 - Workers run in isolated worktrees with explicit handoff bundles.
 - Every important state transition is inspectable, auditable, and recoverable.
 
+```mermaid
+flowchart TB
+    vision["Local-first autonomous project orchestration"]
+    contract["Stable MCP contract"]
+    state["Durable local project state"]
+    workers["Harness-neutral worker lifecycle"]
+    audit["Evidence, findings, approvals, and reconciliation"]
+    clients["Codex, Claude, and future MCP clients"]
+
+    vision --> contract
+    contract --> clients
+    contract --> state
+    state --> workers
+    state --> audit
+    workers --> audit
+```
+
 ## Near-Term Direction
 
-1. Close the worker lifecycle by adding managed integration from task worktree
-   back into the manager workspace.
-2. Make integration produce closure commits with `Platypus-Closes` and
-   `Platypus-Verification` trailers.
-3. Strengthen reconciliation so completed work is not considered handled until
+1. Strengthen reconciliation so completed work is not considered handled until
    verification, integration, and required findings are resolved.
-4. Add full lifecycle smoke tests that use only MCP tools and fake/local
+2. Add full lifecycle smoke tests that use only MCP tools and fake/local
    worker fixtures.
-5. Expose MCP resources or prompts so hosts can discover the recommended
+3. Expose MCP resources or prompts so hosts can discover the recommended
    workflow without relying on external chat instructions.
+
+```mermaid
+flowchart LR
+    done["MCP-020<br/>managed integration"]
+    docs["MCP-023<br/>workflow and roadmap docs"]
+    rec["MCP-021<br/>reconciliation coverage"]
+    smoke["MCP-022<br/>lifecycle smoke test"]
+    prompts["MCP-024<br/>resources and prompts"]
+
+    done --> rec
+    docs --> rec
+    rec --> smoke
+    docs --> prompts
+    smoke --> prompts
+```
 
 ## Backlog Tranche
 
-- `MCP-020`: managed worker result integration.
 - `MCP-021`: integration evidence and reconciliation coverage.
 - `MCP-022`: full lifecycle smoke scenario.
 - `MCP-024`: MCP resources and prompts for host guidance.
 
-`MCP-023` refreshed these repository-level docs so future work items stay
-aligned with the current tooling and intended product direction.
+`MCP-020` added managed worker result integration, and `MCP-023` refreshed
+these repository-level docs so future work items stay aligned with the current
+tooling and intended product direction.
 
 ## Design Defaults
 

@@ -9,17 +9,18 @@ use crate::{
         DraftBacklogItemsParams, EventsReplayData, EventsReplayParams, EvidenceListData,
         EvidenceRecordData, FindingDispositionData, FindingListData, FindingRecordData,
         FindingValidationData, GenerateTaskBundleParams, InitProjectParams,
-        InspectTaskEventsParams, InspectTaskParams, InspectWorkerAssignmentParams, LimitParams,
-        ListEvidenceParams, ListFindingsParams, NextSafeActionData, NextSafeActionParams, PingData,
-        PingParams, PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData,
-        ReconcileParams, ReconciliationData, RecordEvidenceParams, RecordFindingParams,
+        InspectTaskEventsParams, InspectTaskParams, InspectWorkerAssignmentParams,
+        IntegrateWorkerResultParams, LimitParams, ListEvidenceParams, ListFindingsParams,
+        NextSafeActionData, NextSafeActionParams, PingData, PingParams,
+        PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData, ReconcileParams,
+        ReconciliationData, RecordEvidenceParams, RecordFindingParams,
         RecordVerificationEvidenceParams, RecordWorkerEventParams, RootParams, RunnerPrepareParams,
         RunnerReportData, SendWorkerGuidanceParams, StartWorkerExecutionParams, TaskBundleData,
         TaskEventListData, TaskRecordData, UpdateFindingDispositionParams, ValidateBacklogParams,
         ValidateFindingsParams, WorkerAssignmentData, WorkerAssignmentEventData,
-        WorkerGuidanceData, WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData,
-        WorktreeCleanupParams, WorktreeCreateParams, WorktreeData, WorktreeDiffData,
-        WorktreeDiffParams, WorktreeStatusParams,
+        WorkerGuidanceData, WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams,
+        WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams, WorktreeData,
+        WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams,
     },
     project, reconcile, runner, tasks, workspace,
 };
@@ -433,6 +434,28 @@ impl PlatypusMcp {
         Parameters(params): Parameters<WorktreeCleanupParams>,
     ) -> Json<ActionResult<WorktreeCleanupData>> {
         Json(workspace::worktree_cleanup(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Integrate Worker Result",
+        description = "Integrate a completed verified worker task worktree into the manager workspace.",
+        annotations(
+            title = "Integrate Worker Result",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn integrate_worker_result(
+        &self,
+        Parameters(params): Parameters<IntegrateWorkerResultParams>,
+    ) -> Json<ActionResult<WorkerResultIntegrationData>> {
+        Json(workspace::integrate_worker_result(
+            &self.default_root,
+            params,
+        ))
     }
 
     #[tool(
@@ -1009,6 +1032,7 @@ mod tests {
             "worktree_diff",
             "inspect_worktree_changes",
             "worktree_cleanup",
+            "integrate_worker_result",
             "generate_task_bundle",
             "prepare_worker_assignment",
             "prepare_worker_handoff",
@@ -1052,6 +1076,7 @@ mod tests {
             "claim_next_task",
             "worktree_create",
             "worktree_cleanup",
+            "integrate_worker_result",
             "prepare_worker_assignment",
             "prepare_worker_handoff",
             "start_worker_execution",

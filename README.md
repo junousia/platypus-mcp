@@ -15,9 +15,32 @@ Use `next_safe_action` as the host-facing guide for the next safe tool call.
 The preferred workflow is documented in [docs/workflow.md](docs/workflow.md),
 and the full tool surface is documented in [docs/tools.md](docs/tools.md).
 
-The major near-term gap is managed integration of completed worker worktrees
-back into the manager workspace. That roadmap is documented in
-[docs/roadmap.md](docs/roadmap.md).
+Near-term work now focuses on tightening integration evidence, reconciliation,
+full lifecycle smoke coverage, and MCP host guidance. That roadmap is
+documented in [docs/roadmap.md](docs/roadmap.md).
+
+## Product Boundary
+
+```mermaid
+flowchart LR
+    host["MCP host<br/>Codex, Claude, or another client"]
+    mcp["Platypus MCP server<br/>deterministic local tools"]
+    state[".platy/platypus.sqlite3<br/>runtime state"]
+    files["Repository files<br/>backlog, platy.yaml, worktrees"]
+    git["Git history<br/>closure and verification trailers"]
+    worker["Worker harness<br/>runs in isolated worktree"]
+
+    host -->|MCP tool calls| mcp
+    mcp --> state
+    mcp --> files
+    mcp --> git
+    host -->|assignment bundle| worker
+    worker -->|progress and result tools| mcp
+```
+
+The host manages chat, model context, and worker execution. Platypus manages
+the durable project state transitions that must be deterministic, inspectable,
+and recoverable.
 
 ## Structure
 

@@ -30,6 +30,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"worktree_diff"));
     assert!(tool_names.contains(&"inspect_worktree_changes"));
     assert!(tool_names.contains(&"worktree_cleanup"));
+    assert!(tool_names.contains(&"integrate_worker_result"));
     assert!(tool_names.contains(&"generate_task_bundle"));
     assert!(tool_names.contains(&"prepare_worker_assignment"));
     assert!(tool_names.contains(&"prepare_worker_handoff"));

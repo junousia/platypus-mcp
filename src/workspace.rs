@@ -1,6 +1,8 @@
 use crate::{
+    config, evidence,
     models::{
-        ActionResult, ActionStatus, WorktreeCleanupData, WorktreeCleanupParams,
+        ActionResult, ActionStatus, IntegrateWorkerResultParams, RecordEvidenceParams,
+        WorkerResultIntegrationData, WorktreeCleanupData, WorktreeCleanupParams,
         WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffFile, WorktreeDiffParams,
         WorktreeStatusParams,
     },
@@ -9,6 +11,7 @@ use crate::{
 };
 use rusqlite::{params, OptionalExtension};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -22,6 +25,9 @@ const OUTPUT_LIMIT: usize = 4_000;
 #[derive(Debug)]
 struct WorkspaceTask {
     id: String,
+    source_item_id: String,
+    title: String,
+    status: String,
     workspace_path: Option<String>,
     workspace_branch: Option<String>,
     workspace_base_ref: Option<String>,
@@ -30,6 +36,9 @@ struct WorkspaceTask {
 #[derive(Debug)]
 struct RecordedWorktree {
     task_id: String,
+    source_item_id: String,
+    title: String,
+    task_status: String,
     path: PathBuf,
     branch: String,
     base_ref: String,
@@ -388,6 +397,313 @@ pub fn worktree_cleanup(
     )
 }
 
+pub fn integrate_worker_result(
+    default_root: &Path,
+    params: IntegrateWorkerResultParams,
+) -> ActionResult<WorkerResultIntegrationData> {
+    let action = "integrate_worker_result";
+    let task_id = match clean_task_id(&params.task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not integrate worker result.", error)
+        }
+    };
+    let storage = match storage::connect(default_root, params.root.as_deref()) {
+        Ok(storage) => storage,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not open workspace storage.",
+                error.to_string(),
+            )
+        }
+    };
+    let root = storage.storage.root;
+    let root_string = root.display().to_string();
+    if let Err(error) = ensure_git_project_root(&root) {
+        return ActionResult::failed(action, "Could not integrate worker result.", error);
+    }
+    let config = match config::effective_workflow_config(&root) {
+        Ok(config) => config,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect workflow config.", error)
+        }
+    };
+    let worktree = match recorded_worktree(action, &storage.connection, &root, &task_id) {
+        Ok(worktree) => worktree,
+        Err(result) => return result,
+    };
+    if worktree.task_status != "completed" {
+        return ActionResult::skipped(
+            action,
+            format!("Task `{task_id}` is `{}`.", worktree.task_status),
+            "Complete the worker task before integrating its result.",
+        );
+    }
+    let verification = match latest_verification_summary(&storage.connection, &task_id) {
+        Ok(Some(summary)) => summary,
+        Ok(None) if config.require_verification_evidence => {
+            return ActionResult::skipped(
+                action,
+                format!("Task `{task_id}` has no verification evidence."),
+                "Record verification evidence before integrating worker results.",
+            )
+        }
+        Ok(None) => "verification not recorded".to_string(),
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not inspect verification evidence.",
+                error.to_string(),
+            )
+        }
+    };
+    if config.require_clean_manager_workspace {
+        match manager_status_without_platypus_state(&root) {
+            Ok(status) if status.trim().is_empty() => {}
+            Ok(status) => {
+                return ActionResult::skipped(
+                    action,
+                    "Manager workspace has local changes.",
+                    &format!("Commit or clean these changes before integration:\n{status}"),
+                )
+            }
+            Err(error) => {
+                return ActionResult::failed(action, "Could not inspect manager workspace.", error)
+            }
+        }
+    }
+
+    let worker_dirty = match run_git(
+        &worktree.path,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    ) {
+        Ok(status) => !status.trim().is_empty(),
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect worker worktree.", error)
+        }
+    };
+    if worker_dirty {
+        if let Err(error) = commit_worker_changes(&worktree, &config.merge_style, &verification) {
+            return ActionResult::failed(action, "Could not commit worker changes.", error);
+        }
+    }
+    let ahead = match branch_ahead_count(&root, &worktree.base_ref, &worktree.branch) {
+        Ok(ahead) => ahead,
+        Err(error) => return ActionResult::failed(action, "Could not inspect task branch.", error),
+    };
+    if ahead == 0 {
+        return ActionResult::skipped(
+            action,
+            format!("Task `{task_id}` branch has no changes to integrate."),
+            "Inspect the task worktree before integrating.",
+        );
+    }
+
+    let commit = match config.merge_style.as_str() {
+        "fast_forward" => match run_git(&root, &["merge", "--ff-only", worktree.branch.as_str()]) {
+            Ok(_) => head_commit(&root),
+            Err(error) => Err(error),
+        },
+        "squash" => integrate_squash(&root, &worktree, &verification),
+        "merge_commit" => integrate_merge_commit(&root, &worktree, &verification),
+        other => Err(format!("unsupported merge style `{other}`")),
+    };
+    let commit = match commit {
+        Ok(commit) => commit,
+        Err(error) => {
+            let _ = run_git(&root, &["merge", "--abort"]);
+            return ActionResult::failed(action, "Could not integrate worker result.", error);
+        }
+    };
+
+    if let Err(error) = tasks::record_task_event(
+        default_root,
+        Some(root_string.as_str()),
+        NewTaskEvent {
+            task_id: task_id.clone(),
+            sequence: None,
+            event_type: "worker_result_integrated".to_string(),
+            summary: format!("Integrated worker result for task `{task_id}`."),
+            payload: Some(serde_json::json!({
+                "branch": worktree.branch.clone(),
+                "commit": commit.clone(),
+                "merge_style": config.merge_style.clone(),
+                "source_item_id": worktree.source_item_id.clone()
+            })),
+        },
+    ) {
+        return ActionResult::failed(action, "Could not record integration event.", error);
+    }
+    let _ = evidence::record_evidence(
+        default_root,
+        RecordEvidenceParams {
+            root: Some(root_string.clone()),
+            id: None,
+            source_item_id: Some(worktree.source_item_id.clone()),
+            source_task_id: Some(task_id.clone()),
+            kind: "commit".to_string(),
+            summary: format!("Integrated task `{task_id}` with `{}`.", config.merge_style),
+            refs: vec![format!("commit:{commit}")],
+            metadata: BTreeMap::from([
+                (
+                    "merge_style".to_string(),
+                    serde_json::Value::String(config.merge_style.clone()),
+                ),
+                (
+                    "branch".to_string(),
+                    serde_json::Value::String(worktree.branch.clone()),
+                ),
+            ]),
+        },
+    );
+
+    ActionResult::completed(
+        action,
+        format!("Integrated worker result for task `{task_id}`."),
+        WorkerResultIntegrationData {
+            root: root_string,
+            task_id,
+            source_item_id: worktree.source_item_id,
+            merge_style: config.merge_style,
+            branch: worktree.branch,
+            commit,
+        },
+    )
+}
+
+fn latest_verification_summary(
+    connection: &rusqlite::Connection,
+    task_id: &str,
+) -> rusqlite::Result<Option<String>> {
+    connection
+        .query_row(
+            r#"
+            SELECT summary
+            FROM evidence
+            WHERE source_task_id = ?1 AND kind = 'verification'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            "#,
+            [task_id],
+            |row| row.get("summary"),
+        )
+        .optional()
+}
+
+fn manager_status_without_platypus_state(root: &Path) -> Result<String, String> {
+    let status = run_git(root, &["status", "--porcelain=v1", "--untracked-files=all"])?;
+    let lines = status
+        .lines()
+        .filter(|line| {
+            let path = line.get(3..).unwrap_or_default();
+            !path.starts_with(".platy/")
+        })
+        .collect::<Vec<_>>();
+    Ok(lines.join("\n"))
+}
+
+fn commit_worker_changes(
+    worktree: &RecordedWorktree,
+    merge_style: &str,
+    verification: &str,
+) -> Result<(), String> {
+    run_git(&worktree.path, &["add", "--all"])?;
+    let title = format!(
+        "Worker result for {}: {}",
+        worktree.source_item_id, worktree.title
+    );
+    if merge_style == "fast_forward" {
+        commit_with_message(
+            &worktree.path,
+            &title,
+            &[
+                format!("Platypus-Closes: {}", worktree.source_item_id),
+                format!("Platypus-Verification: {}", one_line(verification)),
+            ],
+        )
+    } else {
+        commit_with_message(
+            &worktree.path,
+            &title,
+            &[format!("Platypus-Task: {}", worktree.task_id)],
+        )
+    }
+}
+
+fn branch_ahead_count(root: &Path, base_ref: &str, branch: &str) -> Result<i64, String> {
+    let range = format!("{base_ref}..{branch}");
+    let output = run_git(root, &["rev-list", "--count", range.as_str()])?;
+    output
+        .trim()
+        .parse::<i64>()
+        .map_err(|error| format!("could not parse branch ahead count: {error}"))
+}
+
+fn integrate_merge_commit(
+    root: &Path,
+    worktree: &RecordedWorktree,
+    verification: &str,
+) -> Result<String, String> {
+    run_git(
+        root,
+        &["merge", "--no-ff", "--no-commit", worktree.branch.as_str()],
+    )?;
+    commit_with_message(
+        root,
+        &format!("Integrate {}: {}", worktree.source_item_id, worktree.title),
+        &[
+            format!("Platypus-Closes: {}", worktree.source_item_id),
+            format!("Platypus-Verification: {}", one_line(verification)),
+        ],
+    )?;
+    head_commit(root)
+}
+
+fn integrate_squash(
+    root: &Path,
+    worktree: &RecordedWorktree,
+    verification: &str,
+) -> Result<String, String> {
+    if let Err(error) = run_git(root, &["merge", "--squash", worktree.branch.as_str()]) {
+        let _ = run_git(root, &["reset", "--merge"]);
+        return Err(error);
+    }
+    commit_with_message(
+        root,
+        &format!("Integrate {}: {}", worktree.source_item_id, worktree.title),
+        &[
+            format!("Platypus-Closes: {}", worktree.source_item_id),
+            format!("Platypus-Verification: {}", one_line(verification)),
+        ],
+    )?;
+    head_commit(root)
+}
+
+fn commit_with_message(root: &Path, subject: &str, body_lines: &[String]) -> Result<(), String> {
+    let mut args = vec!["commit".to_string(), "-m".to_string(), one_line(subject)];
+    for line in body_lines {
+        args.push("-m".to_string());
+        args.push(one_line(line));
+    }
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git(root, &arg_refs).map(|_| ())
+}
+
+fn head_commit(root: &Path) -> Result<String, String> {
+    let output = run_git(root, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let commit = output.lines().next().unwrap_or_default().trim();
+    if commit.is_empty() {
+        Err("HEAD did not resolve to a commit".to_string())
+    } else {
+        Ok(commit.to_string())
+    }
+}
+
+fn one_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn existing_workspace_data(
     action: &str,
     root: &Path,
@@ -534,6 +850,9 @@ where
     }
     Ok(RecordedWorktree {
         task_id: task.id,
+        source_item_id: task.source_item_id,
+        title: task.title,
+        task_status: task.status,
         path: canonical,
         branch: branch.clone(),
         base_ref: base_ref.clone(),
@@ -547,7 +866,7 @@ fn load_task(
     connection
         .query_row(
             r#"
-            SELECT id, workspace_path, workspace_branch, workspace_base_ref
+            SELECT id, source_item_id, title, status, workspace_path, workspace_branch, workspace_base_ref
             FROM tasks
             WHERE id = ?1
             "#,
@@ -555,6 +874,9 @@ fn load_task(
             |row| {
                 Ok(WorkspaceTask {
                     id: row.get("id")?,
+                    source_item_id: row.get("source_item_id")?,
+                    title: row.get("title")?,
+                    status: row.get("status")?,
                     workspace_path: row.get("workspace_path")?,
                     workspace_branch: row.get("workspace_branch")?,
                     workspace_base_ref: row.get("workspace_base_ref")?,
@@ -774,7 +1096,11 @@ fn parse_status_files(status: &str) -> Vec<WorktreeDiffFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::{create_task_record, inspect_task_events, NewTask};
+    use crate::{
+        evidence::record_evidence,
+        models::{ClaimNextTaskParams, RecordEvidenceParams},
+        tasks::{create_task_record, inspect_task_events, NewTask},
+    };
     use std::fs;
     use tempfile::TempDir;
 
@@ -1033,6 +1359,154 @@ mod tests {
     }
 
     #[test]
+    fn integrates_completed_verified_worker_result_with_merge_commit() {
+        let project = git_project();
+        let (task_id, _worktree) = completed_task_with_change(&project, "# Integrated\n");
+
+        let result = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id: task_id.clone(),
+            },
+        );
+        let data = result.data.expect("integration data");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert_eq!(data.task_id, task_id);
+        assert_eq!(data.source_item_id, "PROJ-001");
+        assert_eq!(data.merge_style, "merge_commit");
+        assert_eq!(
+            fs::read_to_string(project.path().join("README.md")).expect("readme"),
+            "# Integrated\n"
+        );
+        let log = run_git(project.path(), &["log", "-1", "--pretty=%B"]).expect("log");
+        assert!(log.contains("Platypus-Closes: PROJ-001"));
+        assert!(log.contains("Platypus-Verification: make check passed"));
+    }
+
+    #[test]
+    fn integrates_completed_verified_worker_result_with_squash_config() {
+        let project = git_project();
+        fs::write(
+            project.path().join("platy.yaml"),
+            "workflow:\n  integration:\n    merge_style: squash\n",
+        )
+        .expect("config");
+        run_git(project.path(), &["add", "platy.yaml"]).expect("git add config");
+        run_git(
+            project.path(),
+            &["commit", "-m", "Configure squash integration"],
+        )
+        .expect("git commit config");
+        let (task_id, _worktree) = completed_task_with_change(&project, "# Squashed\n");
+
+        let result = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id,
+            },
+        );
+        let data = result.data.expect("integration data");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert_eq!(data.merge_style, "squash");
+        let log = run_git(project.path(), &["log", "-1", "--pretty=%B"]).expect("log");
+        assert!(log.contains("Platypus-Closes: PROJ-001"));
+    }
+
+    #[test]
+    fn integrates_completed_verified_worker_result_with_fast_forward_config() {
+        let project = git_project();
+        fs::write(
+            project.path().join("platy.yaml"),
+            "workflow:\n  integration:\n    merge_style: fast_forward\n",
+        )
+        .expect("config");
+        run_git(project.path(), &["add", "platy.yaml"]).expect("git add config");
+        run_git(
+            project.path(),
+            &["commit", "-m", "Configure fast-forward integration"],
+        )
+        .expect("git commit config");
+        let (task_id, _worktree) = completed_task_with_change(&project, "# Fast forward\n");
+
+        let result = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id,
+            },
+        );
+        let data = result.data.expect("integration data");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert_eq!(data.merge_style, "fast_forward");
+        let log = run_git(project.path(), &["log", "-1", "--pretty=%B"]).expect("log");
+        assert!(log.contains("Platypus-Closes: PROJ-001"));
+    }
+
+    #[test]
+    fn refuses_integration_without_verification_evidence() {
+        let project = git_project();
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Workspace task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        let created = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        )
+        .data
+        .expect("worktree data");
+        fs::write(Path::new(&created.path).join("README.md"), "# Changed\n").expect("change");
+        finish_task(project.path(), &task.id);
+
+        let result = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id: task.id,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Skipped));
+        assert!(result
+            .next_action
+            .expect("next action")
+            .contains("Record verification evidence"));
+    }
+
+    #[test]
+    fn refuses_integration_with_dirty_manager_workspace() {
+        let project = git_project();
+        let (task_id, _worktree) = completed_task_with_change(&project, "# Integrated\n");
+        fs::write(project.path().join("local.txt"), "local\n").expect("local change");
+
+        let result = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Skipped));
+        assert!(result.summary.contains("local changes"));
+    }
+
+    #[test]
     fn rejects_unborn_head() {
         let project = TempDir::new().expect("temp dir");
         run_git(project.path(), &["init"]).expect("git init");
@@ -1093,5 +1567,57 @@ mod tests {
         run_git(project.path(), &["add", "README.md"]).expect("git add");
         run_git(project.path(), &["commit", "-m", "Initial commit"]).expect("git commit");
         project
+    }
+
+    fn completed_task_with_change(project: &TempDir, readme: &str) -> (String, WorktreeData) {
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Workspace task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        let created = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        )
+        .data
+        .expect("worktree data");
+        fs::write(Path::new(&created.path).join("README.md"), readme).expect("change");
+        finish_task(project.path(), &task.id);
+        record_evidence(
+            project.path(),
+            RecordEvidenceParams {
+                root: None,
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: Some(task.id.clone()),
+                kind: "verification".to_string(),
+                summary: "make check passed".to_string(),
+                refs: vec!["local".to_string()],
+                metadata: BTreeMap::new(),
+            },
+        );
+        (task.id, created)
+    }
+
+    fn finish_task(root: &Path, task_id: &str) {
+        tasks::claim_next_task(
+            root,
+            ClaimNextTaskParams {
+                root: None,
+                worker: None,
+                claimant: Some("test".to_string()),
+            },
+        );
+        tasks::mark_task_running(root, None, task_id).expect("running");
+        tasks::finish_task(root, None, task_id, "completed").expect("completed");
     }
 }

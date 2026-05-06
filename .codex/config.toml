@@ -101,6 +101,9 @@ approval_mode = "approve"
 [mcp_servers."platypus".tools.worktree_cleanup]
 approval_mode = "approve"
 
+[mcp_servers."platypus".tools.integrate_worker_result]
+approval_mode = "approve"
+
 [mcp_servers."platypus".tools.approval_list]
 approval_mode = "approve"
 

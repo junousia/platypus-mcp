@@ -26,11 +26,21 @@ lower-level tools remain available for precise control and testing.
    `complete_worker_task`.
 6. Inspect and verify: `inspect_worktree_changes`,
    `record_verification_evidence`, `record_finding`, `validate_findings`.
-7. Reconcile and clean up: `reconcile_project`, `worktree_cleanup`.
+7. Integrate and clean up: `integrate_worker_result`, `reconcile_project`,
+   `worktree_cleanup`.
 
-Managed integration back into the manager workspace is planned next. Until
-`integrate_worker_result` exists, the host must review and apply worker
-worktree changes outside MCP, then record evidence and reconcile.
+```mermaid
+flowchart LR
+    bootstrap["Bootstrap<br/>init and doctor"]
+    backlog["Backlog<br/>draft, create, validate, list"]
+    dispatch["Dispatch<br/>next safe action and handoff"]
+    worker["Worker<br/>external harness"]
+    result["Result<br/>progress, complete, verify"]
+    integrate["Integrate<br/>merge policy and trailers"]
+    reconcile["Reconcile<br/>evidence, findings, closure"]
+
+    bootstrap --> backlog --> dispatch --> worker --> result --> integrate --> reconcile
+```
 
 ## Tool Groups
 
@@ -64,6 +74,8 @@ worktree changes outside MCP, then record evidence and reconcile.
 - `worktree_diff` / `inspect_worktree_changes`: inspect bounded worktree
   changes.
 - `worktree_cleanup`: remove a clean or explicitly forced task worktree.
+- `integrate_worker_result`: merge, fast-forward, or squash a completed
+  verified task branch into the manager workspace.
 - `generate_task_bundle`: generate a deterministic worker brief.
 - `runner_prepare_next`: claim queued tasks and prepare worktrees/bundles.
 
@@ -121,5 +133,5 @@ workflow:
 ```
 
 Current valid merge styles are `merge_commit`, `fast_forward`, and `squash`.
-The config is intentionally present before managed integration is implemented,
-so future integration tools can use the same stable project policy.
+`integrate_worker_result` uses this policy when bringing completed worker
+branches back into the manager workspace.

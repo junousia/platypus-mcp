@@ -118,6 +118,12 @@ pub struct WorktreeCleanupParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct IntegrateWorkerResultParams {
+    pub root: Option<String>,
+    pub task_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct GenerateTaskBundleParams {
     pub root: Option<String>,
     pub task_id: String,
@@ -649,6 +655,16 @@ pub struct WorktreeCleanupData {
     pub path: String,
     pub removed: bool,
     pub forced: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkerResultIntegrationData {
+    pub root: String,
+    pub task_id: String,
+    pub source_item_id: String,
+    pub merge_style: String,
+    pub branch: String,
+    pub commit: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
