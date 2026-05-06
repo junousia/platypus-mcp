@@ -18,23 +18,6 @@ perspectives.
 - Workers run in isolated worktrees with explicit handoff bundles.
 - Every important state transition is inspectable, auditable, and recoverable.
 
-```mermaid
-flowchart TB
-    vision["Local-first autonomous project orchestration"]
-    contract["Stable MCP contract"]
-    state["Durable local project state"]
-    workers["Harness-neutral worker lifecycle"]
-    audit["Evidence, findings, approvals, and reconciliation"]
-    clients["Codex, Claude, and future MCP clients"]
-
-    vision --> contract
-    contract --> clients
-    contract --> state
-    state --> workers
-    state --> audit
-    workers --> audit
-```
-
 ## Near-Term Direction
 
 1. Strengthen reconciliation so completed work is not considered handled until
