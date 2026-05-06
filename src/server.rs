@@ -17,8 +17,9 @@ use crate::{
         RunnerReportData, SendWorkerGuidanceParams, StartWorkerExecutionParams, TaskBundleData,
         TaskEventListData, TaskRecordData, UpdateFindingDispositionParams, ValidateBacklogParams,
         ValidateFindingsParams, WorkerAssignmentData, WorkerAssignmentEventData,
-        WorkerGuidanceData, WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams,
-        WorktreeData, WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams,
+        WorkerGuidanceData, WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData,
+        WorktreeCleanupParams, WorktreeCreateParams, WorktreeData, WorktreeDiffData,
+        WorktreeDiffParams, WorktreeStatusParams,
     },
     project, reconcile, runner, tasks, workspace,
 };
@@ -857,6 +858,25 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Inspect Workflow Config",
+        description = "Inspect effective workflow integration configuration for the project.",
+        annotations(
+            title = "Inspect Workflow Config",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn inspect_workflow_config(
+        &self,
+        Parameters(params): Parameters<WorkflowConfigParams>,
+    ) -> Json<ActionResult<WorkflowConfigData>> {
+        Json(config::inspect_workflow_config(&self.default_root, params))
+    }
+
+    #[tool(
         title = "Send Worker Guidance",
         description = "Send guidance to a running worker task.",
         annotations(
@@ -1010,6 +1030,7 @@ mod tests {
             "reconcile_project",
             "list_agent_profiles",
             "configure_agent_profile",
+            "inspect_workflow_config",
             "send_worker_guidance",
             "record_finding",
             "list_findings",

@@ -265,6 +265,24 @@ pub struct ConfigureAgentProfileParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct WorkflowConfigParams {
+    pub root: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkflowIntegrationConfig {
+    pub merge_style: String,
+    pub require_clean_manager_workspace: bool,
+    pub require_verification_evidence: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkflowConfigData {
+    pub root: String,
+    pub integration: WorkflowIntegrationConfig,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SendWorkerGuidanceParams {
     pub root: Option<String>,
     pub task_id: String,

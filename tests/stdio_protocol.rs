@@ -50,6 +50,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"reconcile_project"));
     assert!(tool_names.contains(&"list_agent_profiles"));
     assert!(tool_names.contains(&"configure_agent_profile"));
+    assert!(tool_names.contains(&"inspect_workflow_config"));
     assert!(tool_names.contains(&"send_worker_guidance"));
 
     client.cancel().await?;
@@ -96,6 +97,36 @@ async fn stdio_server_calls_project_doctor_with_configured_root() -> anyhow::Res
     assert_eq!(response["action"], "doctor_snapshot");
     assert_eq!(response["status"], "completed");
     assert_eq!(response["data"]["ok"], true);
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_inspects_workflow_config() -> anyhow::Result<()> {
+    let project = project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let result = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "inspect_workflow_config".into(),
+            arguments: Some(JsonObject::new()),
+            task: None,
+        })
+        .await?;
+    let response = result.structured_content.expect("workflow content");
+
+    assert_eq!(response["action"], "inspect_workflow_config");
+    assert_eq!(response["status"], "completed");
+    assert_eq!(
+        response["data"]["integration"]["merge_style"],
+        "merge_commit"
+    );
+    assert_eq!(
+        response["data"]["integration"]["require_clean_manager_workspace"],
+        true
+    );
 
     client.cancel().await?;
     Ok(())

@@ -1,7 +1,8 @@
 use crate::{
     models::{
         ActionResult, AgentProfile, AgentProfileData, AgentProfilesData, AgentProfilesParams,
-        ConfigureAgentProfileParams,
+        ConfigureAgentProfileParams, WorkflowConfigData, WorkflowConfigParams,
+        WorkflowIntegrationConfig,
     },
     storage,
 };
@@ -15,6 +16,8 @@ use std::{
 
 const VALID_ROLES: &[&str] = &["manager", "worker"];
 const VALID_HARNESSES: &[&str] = &["codex", "claude", "fake", "custom"];
+const VALID_MERGE_STYLES: &[&str] = &["merge_commit", "fast_forward", "squash"];
+const DEFAULT_MERGE_STYLE: &str = "merge_commit";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct ProjectConfig {
@@ -24,6 +27,8 @@ struct ProjectConfig {
     backlog: serde_yaml::Value,
     #[serde(default)]
     agents: AgentsConfig,
+    #[serde(default)]
+    workflow: WorkflowConfig,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_yaml::Value>,
 }
@@ -44,6 +49,29 @@ struct AgentProfileConfig {
     capabilities: Vec<String>,
     #[serde(default)]
     metadata: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct WorkflowConfig {
+    #[serde(default)]
+    integration: WorkflowIntegrationConfigFile,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WorkflowIntegrationConfigFile {
+    merge_style: Option<String>,
+    require_clean_manager_workspace: Option<bool>,
+    require_verification_evidence: Option<bool>,
+}
+
+impl Default for WorkflowIntegrationConfigFile {
+    fn default() -> Self {
+        Self {
+            merge_style: Some(DEFAULT_MERGE_STYLE.to_string()),
+            require_clean_manager_workspace: Some(true),
+            require_verification_evidence: Some(true),
+        }
+    }
 }
 
 pub fn list_agent_profiles(
@@ -82,6 +110,39 @@ pub fn list_agent_profiles(
         format!("Returned {returned} agent profile(s)."),
         data,
     )
+}
+
+pub fn inspect_workflow_config(
+    default_root: &Path,
+    params: WorkflowConfigParams,
+) -> ActionResult<WorkflowConfigData> {
+    let action = "inspect_workflow_config";
+    let storage = match storage::open(default_root, params.root.as_deref()) {
+        Ok(storage) => storage,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not open workflow config.",
+                error.to_string(),
+            )
+        }
+    };
+    match effective_workflow_config(&storage.root) {
+        Ok(integration) => ActionResult::completed(
+            action,
+            "Inspected workflow integration config.",
+            WorkflowConfigData {
+                root: storage.root.display().to_string(),
+                integration,
+            },
+        ),
+        Err(error) => ActionResult::failed(action, "Could not inspect workflow config.", error),
+    }
+}
+
+pub fn effective_workflow_config(root: &Path) -> Result<WorkflowIntegrationConfig, String> {
+    let config = read_config(root)?;
+    effective_integration_config(&config.workflow.integration)
 }
 
 pub fn configure_agent_profile(
@@ -149,6 +210,28 @@ pub fn configure_agent_profile(
         profile: profile_data(&name, &profile),
     };
     ActionResult::completed(action, format!("Configured agent profile `{name}`."), data)
+}
+
+fn effective_integration_config(
+    config: &WorkflowIntegrationConfigFile,
+) -> Result<WorkflowIntegrationConfig, String> {
+    let merge_style = config
+        .merge_style
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_MERGE_STYLE)
+        .to_ascii_lowercase();
+    if !VALID_MERGE_STYLES.contains(&merge_style.as_str()) {
+        return Err(format!(
+            "invalid workflow.integration.merge_style `{merge_style}`"
+        ));
+    }
+    Ok(WorkflowIntegrationConfig {
+        merge_style,
+        require_clean_manager_workspace: config.require_clean_manager_workspace.unwrap_or(true),
+        require_verification_evidence: config.require_verification_evidence.unwrap_or(true),
+    })
 }
 
 fn read_config(root: &Path) -> Result<ProjectConfig, String> {
@@ -339,6 +422,70 @@ mod tests {
         assert_eq!(data.returned, 2);
         assert!(data.profiles.iter().all(|profile| profile.ready));
         assert!(project.path().join("platy.yaml").is_file());
+    }
+
+    #[test]
+    fn inspects_default_workflow_integration_config() {
+        let project = TempDir::new().expect("temp dir");
+
+        let result = inspect_workflow_config(project.path(), WorkflowConfigParams { root: None });
+        let data = result.data.expect("workflow config");
+
+        assert!(matches!(
+            result.status,
+            crate::models::ActionStatus::Completed
+        ));
+        assert_eq!(data.integration.merge_style, "merge_commit");
+        assert!(data.integration.require_clean_manager_workspace);
+        assert!(data.integration.require_verification_evidence);
+    }
+
+    #[test]
+    fn rejects_invalid_workflow_merge_style() {
+        let project = TempDir::new().expect("temp dir");
+        fs::write(
+            project.path().join("platy.yaml"),
+            "workflow:\n  integration:\n    merge_style: surprise\n",
+        )
+        .expect("write config");
+
+        let result = inspect_workflow_config(project.path(), WorkflowConfigParams { root: None });
+
+        assert!(matches!(result.status, crate::models::ActionStatus::Failed));
+        assert!(result
+            .error
+            .expect("error")
+            .contains("workflow.integration.merge_style"));
+    }
+
+    #[test]
+    fn preserves_unknown_keys_when_writing_workflow_defaults() {
+        let project = TempDir::new().expect("temp dir");
+        fs::write(
+            project.path().join("platy.yaml"),
+            "project:\n  name: example\ncustom:\n  mode: keep\n",
+        )
+        .expect("write config");
+        let current_exe = std::env::current_exe().expect("current exe");
+
+        configure_agent_profile(
+            project.path(),
+            ConfigureAgentProfileParams {
+                root: None,
+                name: "manager".to_string(),
+                role: "manager".to_string(),
+                harness: "codex".to_string(),
+                executable: current_exe.display().to_string(),
+                capabilities: Vec::new(),
+                metadata: BTreeMap::new(),
+            },
+        );
+
+        let config = fs::read_to_string(project.path().join("platy.yaml")).expect("config");
+        assert!(config.contains("custom:"));
+        assert!(config.contains("mode: keep"));
+        assert!(config.contains("workflow:"));
+        assert!(config.contains("merge_style: merge_commit"));
     }
 
     #[test]

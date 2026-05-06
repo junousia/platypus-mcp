@@ -141,7 +141,7 @@ fn scaffold_files(project_name: &str) -> Vec<(&'static str, String)> {
 
 fn project_config(project_name: &str) -> String {
     format!(
-        "project:\n  name: {}\nbacklog:\n  id_prefix: PROJ\n  items: backlog/items\n  epics: backlog/epics\n",
+        "project:\n  name: {}\nbacklog:\n  id_prefix: PROJ\n  items: backlog/items\n  epics: backlog/epics\nworkflow:\n  integration:\n    merge_style: merge_commit\n    require_clean_manager_workspace: true\n    require_verification_evidence: true\n",
         yaml_string(project_name)
     )
 }
@@ -202,6 +202,9 @@ mod tests {
         let data = result.data.expect("data");
         assert_eq!(data.skipped, 0);
         assert!(temp.path().join("platy.yaml").is_file());
+        let config = fs::read_to_string(temp.path().join("platy.yaml")).expect("config");
+        assert!(config.contains("workflow:"));
+        assert!(config.contains("merge_style: merge_commit"));
         assert!(temp.path().join("backlog/items").is_dir());
         assert!(temp.path().join("backlog/epics/general.md").is_file());
     }
