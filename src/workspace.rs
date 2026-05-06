@@ -265,7 +265,10 @@ pub fn worktree_diff(
         Ok(worktree) => worktree,
         Err(result) => return result,
     };
-    let status = match run_git(&worktree.path, &["status", "--porcelain=v1"]) {
+    let status = match run_git(
+        &worktree.path,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    ) {
         Ok(status) => status,
         Err(error) => return ActionResult::failed(action, "Could not inspect worktree.", error),
     };
@@ -319,7 +322,10 @@ pub fn worktree_cleanup(
         Ok(worktree) => worktree,
         Err(result) => return result,
     };
-    let status = match run_git(&worktree.path, &["status", "--porcelain=v1"]) {
+    let status = match run_git(
+        &worktree.path,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    ) {
         Ok(status) => status,
         Err(error) => return ActionResult::failed(action, "Could not inspect worktree.", error),
     };
@@ -927,6 +933,66 @@ mod tests {
             .events
             .iter()
             .any(|event| event.event_type == "worktree_cleaned_up"));
+    }
+
+    #[test]
+    fn detects_untracked_files_when_git_config_hides_them() {
+        let project = git_project();
+        run_git(
+            project.path(),
+            &["config", "status.showUntrackedFiles", "no"],
+        )
+        .expect("hide untracked files");
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Workspace task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        let created = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        )
+        .data
+        .expect("worktree data");
+        fs::write(Path::new(&created.path).join("untracked.txt"), "new\n").expect("new file");
+
+        let diff = worktree_diff(
+            project.path(),
+            WorktreeDiffParams {
+                root: None,
+                task_id: task.id.clone(),
+            },
+        );
+        let diff_data = diff.data.expect("diff data");
+        assert!(matches!(diff.status, ActionStatus::Completed));
+        assert!(diff_data.dirty);
+        assert!(
+            diff_data
+                .files
+                .iter()
+                .any(|file| file.path == "untracked.txt"),
+            "files: {:?}",
+            diff_data.files
+        );
+
+        let refused = worktree_cleanup(
+            project.path(),
+            WorktreeCleanupParams {
+                root: None,
+                task_id: task.id,
+                force: None,
+            },
+        );
+        assert!(matches!(refused.status, ActionStatus::Skipped));
     }
 
     #[test]
