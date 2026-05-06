@@ -6,6 +6,7 @@ use crate::{
     },
     storage,
     tasks::{self, NewTaskEvent},
+    workers::{WorkerAdapter, WorkerEvent, WorkerRequest},
     workspace,
 };
 use anyhow::Result;
@@ -143,6 +144,112 @@ pub fn prepare_next(
     finish_report(action, report)
 }
 
+pub fn run_with_adapter(
+    default_root: &Path,
+    params: RunnerPrepareParams,
+    adapter: &dyn WorkerAdapter,
+) -> ActionResult<RunnerReportData> {
+    let action = "runner_run_with_adapter";
+    let verification_command = params.verification_command.clone();
+    let prepared = prepare_next(default_root, params);
+    let Some(mut report) = prepared.data else {
+        return ActionResult::skipped(
+            action,
+            "No task was prepared for worker execution.",
+            "Dispatch work before running a worker adapter.",
+        );
+    };
+    if report.prepared == 0 {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Skipped,
+            summary: "No prepared tasks to execute.".to_string(),
+            next_action: Some("Dispatch work before running a worker adapter.".to_string()),
+            data: Some(report),
+            error: None,
+        };
+    }
+
+    for task_summary in &mut report.tasks {
+        let task_id = task_summary.task_id.clone();
+        let bundle = bundle::generate_task_bundle(
+            default_root,
+            GenerateTaskBundleParams {
+                root: Some(report.root.clone()),
+                task_id: task_id.clone(),
+                verification_command: verification_command.clone(),
+            },
+        );
+        let Some(bundle_data) = bundle.data else {
+            report.stopped_reason = "adapter_bundle_failed".to_string();
+            return finish_report(action, report);
+        };
+        if let Err(error) = tasks::mark_task_running(default_root, Some(&report.root), &task_id) {
+            return ActionResult::failed(action, "Could not mark task running.", error);
+        }
+        if let Err(error) = record_event_payload(
+            default_root,
+            &report.root,
+            &task_id,
+            "worker_started",
+            &format!("Worker `{}` started.", adapter.name()),
+            Some(serde_json::json!({ "worker": adapter.name() })),
+        ) {
+            return error;
+        }
+
+        let mut emitted_events = Vec::new();
+        let worker_result = adapter.run(
+            WorkerRequest {
+                task_id: task_id.clone(),
+                item_id: task_summary.item_id.clone(),
+                title: bundle_data.bundle.title.clone(),
+                workspace_path: bundle_data.bundle.workspace_path.clone(),
+                brief: bundle_data.bundle.brief,
+            },
+            &mut |event| emitted_events.push(event),
+        );
+        for event in emitted_events {
+            if let Err(error) = record_worker_event(default_root, &report.root, &task_id, event) {
+                return error;
+            }
+        }
+        if let Err(error) = record_event_payload(
+            default_root,
+            &report.root,
+            &task_id,
+            "worker_result",
+            &worker_result.summary,
+            Some(serde_json::json!({
+                "worker": adapter.name(),
+                "status": worker_result.status.as_task_status(),
+                "changed_files": &worker_result.changed_files,
+                "verification_status": worker_result.verification_status.as_deref(),
+                "findings": worker_result.findings.iter().map(|finding| serde_json::json!({
+                    "title": finding.title.as_str(),
+                    "summary": finding.summary.as_str(),
+                    "severity": finding.severity.as_deref(),
+                    "required": finding.required
+                })).collect::<Vec<_>>()
+            })),
+        ) {
+            return error;
+        }
+        match tasks::finish_task(
+            default_root,
+            Some(&report.root),
+            &task_id,
+            worker_result.status.as_task_status(),
+        ) {
+            Ok(task) => task_summary.status = task.status,
+            Err(error) => return ActionResult::failed(action, "Could not finish task.", error),
+        }
+    }
+
+    report.stopped_reason = "adapter_completed".to_string();
+    finish_report(action, report)
+}
+
 pub fn run_cli(args: &[String]) -> Result<()> {
     let params = parse_args(args)?;
     let root = params.root.clone().unwrap_or_else(|| ".".to_string());
@@ -206,6 +313,33 @@ fn record_event(
     event_type: &str,
     summary: &str,
 ) -> Result<(), ActionResult<RunnerReportData>> {
+    record_event_payload(default_root, root, task_id, event_type, summary, None)
+}
+
+fn record_worker_event(
+    default_root: &Path,
+    root: &str,
+    task_id: &str,
+    event: WorkerEvent,
+) -> Result<(), ActionResult<RunnerReportData>> {
+    record_event_payload(
+        default_root,
+        root,
+        task_id,
+        &event.event_type,
+        &event.summary,
+        event.payload,
+    )
+}
+
+fn record_event_payload(
+    default_root: &Path,
+    root: &str,
+    task_id: &str,
+    event_type: &str,
+    summary: &str,
+    payload: Option<serde_json::Value>,
+) -> Result<(), ActionResult<RunnerReportData>> {
     tasks::record_task_event(
         default_root,
         Some(root),
@@ -214,7 +348,7 @@ fn record_event(
             sequence: None,
             event_type: event_type.to_string(),
             summary: summary.to_string(),
-            payload: None,
+            payload,
         },
     )
     .map(|_| ())
@@ -249,6 +383,7 @@ fn finish_report(action: &str, report: RunnerReportData) -> ActionResult<RunnerR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workers::FakeWorkerAdapter;
     use crate::{dispatch, models::RootParams, project};
     use std::{fs, process::Command};
     use tempfile::TempDir;
@@ -300,6 +435,39 @@ mod tests {
         assert!(matches!(result.status, ActionStatus::Skipped));
         assert_eq!(data.stopped_reason, "no_queued_tasks");
         assert_eq!(data.prepared, 0);
+    }
+
+    #[test]
+    fn fake_worker_completes_prepared_task_through_runner() {
+        let project = project_with_backlog();
+        let dispatched = dispatch::dispatch_next_work(project.path(), RootParams { root: None });
+        let task_id = dispatched
+            .data
+            .as_ref()
+            .expect("dispatch data")
+            .task
+            .id
+            .clone();
+
+        let result = run_with_adapter(
+            project.path(),
+            RunnerPrepareParams {
+                root: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("runner-test".to_string()),
+                max_tasks: Some(1),
+                dry_run: None,
+                verification_command: Vec::new(),
+            },
+            &FakeWorkerAdapter::completed("fake"),
+        );
+        let data = result.data.expect("runner data");
+        let task = tasks::get_task_by_id(project.path(), None, &task_id).expect("task");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert_eq!(data.tasks[0].status, "completed");
+        assert_eq!(task.status, "completed");
+        assert!(task.finished_at.is_some());
     }
 
     fn project_with_backlog() -> TempDir {

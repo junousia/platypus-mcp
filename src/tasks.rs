@@ -97,6 +97,64 @@ pub fn get_task_by_id(
     get_task(&storage.connection, task_id).map_err(|error| error.to_string())
 }
 
+pub fn mark_task_running(
+    default_root: &Path,
+    root: Option<&str>,
+    task_id: &str,
+) -> Result<TaskRecord, String> {
+    let storage = storage::connect(default_root, root).map_err(|error| error.to_string())?;
+    let task_id = clean_required("task_id", task_id)?;
+    let updated = storage
+        .connection
+        .execute(
+            r#"
+            UPDATE tasks
+            SET status = 'running',
+                started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?1 AND status IN ('claimed', 'running')
+            "#,
+            [&task_id],
+        )
+        .map_err(|error| error.to_string())?;
+    if updated == 0 {
+        return Err(format!(
+            "task `{task_id}` must be claimed before it can run"
+        ));
+    }
+    get_task(&storage.connection, &task_id).map_err(|error| error.to_string())
+}
+
+pub fn finish_task(
+    default_root: &Path,
+    root: Option<&str>,
+    task_id: &str,
+    status: &str,
+) -> Result<TaskRecord, String> {
+    let storage = storage::connect(default_root, root).map_err(|error| error.to_string())?;
+    let task_id = clean_required("task_id", task_id)?;
+    let status = clean_terminal_status(status)?;
+    let updated = storage
+        .connection
+        .execute(
+            r#"
+            UPDATE tasks
+            SET status = ?2,
+                finished_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?1 AND status IN ('claimed', 'running')
+            "#,
+            params![task_id, status],
+        )
+        .map_err(|error| error.to_string())?;
+    if updated == 0 {
+        return Err(format!(
+            "task `{task_id}` must be claimed or running before it can finish"
+        ));
+    }
+    get_task(&storage.connection, &task_id).map_err(|error| error.to_string())
+}
+
 pub fn inspect_task(
     default_root: &Path,
     params: InspectTaskParams,
@@ -473,6 +531,13 @@ fn clean_optional(value: Option<String>) -> Option<String> {
     })
 }
 
+fn clean_terminal_status(value: &str) -> Result<String, String> {
+    match value.trim() {
+        "completed" | "failed" | "cancelled" => Ok(value.trim().to_string()),
+        _ => Err("terminal task status must be completed, failed, or cancelled".to_string()),
+    }
+}
+
 fn safe_id_prefix(value: &str) -> String {
     let prefix: String = value
         .chars()
@@ -666,5 +731,36 @@ mod tests {
         let events = events.data.expect("event data");
         assert_eq!(events.returned, 1);
         assert_eq!(events.events[0].event_type, "task_claimed");
+    }
+
+    #[test]
+    fn marks_claimed_task_running_and_finished() {
+        let project = TempDir::new().expect("temp dir");
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Runnable task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        claim_next_task(
+            project.path(),
+            ClaimNextTaskParams {
+                root: None,
+                worker: Some("coder".to_string()),
+                claimant: None,
+            },
+        );
+
+        let running = mark_task_running(project.path(), None, &task.id).expect("running");
+        assert_eq!(running.status, "running");
+        assert!(running.started_at.is_some());
+
+        let finished = finish_task(project.path(), None, &task.id, "completed").expect("finished");
+        assert_eq!(finished.status, "completed");
+        assert!(finished.finished_at.is_some());
     }
 }

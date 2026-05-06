@@ -2,7 +2,6 @@
 
 ## Active Queue
 
-- P0: MCP-009 Add worker adapter boundary
 - P1: MCP-010 Add Codex worker adapter skeleton
 - P1: MCP-011 Add Claude worker adapter skeleton
 - P1: MCP-012 Add approval and event replay tools
