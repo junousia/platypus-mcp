@@ -171,6 +171,24 @@ pub struct ReconcileParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct AgentProfilesParams {
+    pub root: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ConfigureAgentProfileParams {
+    pub root: Option<String>,
+    pub name: String,
+    pub role: String,
+    pub harness: String,
+    pub executable: String,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SendWorkerGuidanceParams {
     pub root: Option<String>,
     pub task_id: String,
@@ -622,6 +640,31 @@ pub struct ReconciliationGap {
     pub kind: String,
     pub summary: String,
     pub next_action: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct AgentProfile {
+    pub name: String,
+    pub role: String,
+    pub harness: String,
+    pub executable: String,
+    pub capabilities: Vec<String>,
+    pub metadata: BTreeMap<String, Value>,
+    pub ready: bool,
+    pub issues: Vec<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct AgentProfilesData {
+    pub root: String,
+    pub profiles: Vec<AgentProfile>,
+    pub returned: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct AgentProfileData {
+    pub root: String,
+    pub profile: AgentProfile,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

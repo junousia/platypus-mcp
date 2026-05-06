@@ -79,3 +79,9 @@ approval_mode = "approve"
 
 [mcp_servers."platypus-rs".tools.reconcile_project]
 approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.list_agent_profiles]
+approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.configure_agent_profile]
+approval_mode = "approve"

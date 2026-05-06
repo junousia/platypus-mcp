@@ -36,6 +36,8 @@ chat session, while this server exposes deterministic project-management tools.
   tasks, findings, and backlog items
 - `reconcile_project`: compare Git trailer closure, task state, findings, and
   evidence for required gaps
+- `list_agent_profiles` / `configure_agent_profile`: inspect and update
+  manager and worker profile configuration in `platy.yaml`
 - worker adapter boundary with a fake adapter test path for runner integration
 - Codex adapter skeleton for typed configuration validation and safe app-server
   event mapping

@@ -34,6 +34,8 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"record_evidence"));
     assert!(tool_names.contains(&"list_evidence"));
     assert!(tool_names.contains(&"reconcile_project"));
+    assert!(tool_names.contains(&"list_agent_profiles"));
+    assert!(tool_names.contains(&"configure_agent_profile"));
 
     client.cancel().await?;
     Ok(())

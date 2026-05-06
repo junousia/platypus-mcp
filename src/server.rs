@@ -1,8 +1,9 @@
 use crate::{
-    approvals, backlog, bundle, dispatch, events, evidence, findings,
+    approvals, backlog, bundle, config, dispatch, events, evidence, findings,
     models::{
-        ActionResult, ApprovalListData, ApprovalListParams, ApprovalRespondParams,
-        ApprovalResponseData, ClaimNextTaskParams, CreateBacklogItemParams, CreatedBacklogItemData,
+        ActionResult, AgentProfileData, AgentProfilesData, AgentProfilesParams, ApprovalListData,
+        ApprovalListParams, ApprovalRespondParams, ApprovalResponseData, ClaimNextTaskParams,
+        ConfigureAgentProfileParams, CreateBacklogItemParams, CreatedBacklogItemData,
         DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
         EventsReplayData, EventsReplayParams, EvidenceListData, EvidenceRecordData,
         FindingDispositionData, FindingListData, FindingRecordData, FindingValidationData,
@@ -522,6 +523,44 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "List Agent Profiles",
+        description = "List configured manager and worker agent profiles.",
+        annotations(
+            title = "List Agent Profiles",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn list_agent_profiles(
+        &self,
+        Parameters(params): Parameters<AgentProfilesParams>,
+    ) -> Json<ActionResult<AgentProfilesData>> {
+        Json(config::list_agent_profiles(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Configure Agent Profile",
+        description = "Create or update one manager or worker agent profile.",
+        annotations(
+            title = "Configure Agent Profile",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn configure_agent_profile(
+        &self,
+        Parameters(params): Parameters<ConfigureAgentProfileParams>,
+    ) -> Json<ActionResult<AgentProfileData>> {
+        Json(config::configure_agent_profile(&self.default_root, params))
+    }
+
+    #[tool(
         title = "Send Worker Guidance",
         description = "Send guidance to a running worker task.",
         annotations(
@@ -684,6 +723,8 @@ mod tests {
             "record_evidence",
             "list_evidence",
             "reconcile_project",
+            "list_agent_profiles",
+            "configure_agent_profile",
             "send_worker_guidance",
             "record_finding",
             "list_findings",
@@ -707,6 +748,7 @@ mod tests {
             "runner_prepare_next",
             "approval_respond",
             "record_evidence",
+            "configure_agent_profile",
             "send_worker_guidance",
             "record_finding",
             "update_finding_disposition",
