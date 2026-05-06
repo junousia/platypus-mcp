@@ -100,6 +100,14 @@ pub struct WorktreeStatusParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct GenerateTaskBundleParams {
+    pub root: Option<String>,
+    pub task_id: String,
+    #[serde(default)]
+    pub verification_command: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SendWorkerGuidanceParams {
     pub root: Option<String>,
     pub task_id: String,
@@ -422,6 +430,28 @@ pub struct WorktreeData {
     pub branch: String,
     pub base_ref: String,
     pub created: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TaskBundleData {
+    pub root: String,
+    pub bundle: TaskBundle,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TaskBundle {
+    pub task_id: String,
+    pub item_id: String,
+    pub title: String,
+    pub worker: Option<String>,
+    pub workspace_path: String,
+    pub goal: String,
+    pub implementation_contract: String,
+    pub acceptance: Vec<String>,
+    pub dependencies: Vec<String>,
+    pub owned_surfaces: Vec<String>,
+    pub verification_command: Vec<String>,
+    pub brief: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

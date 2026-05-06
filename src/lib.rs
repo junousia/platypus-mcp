@@ -1,4 +1,5 @@
 pub mod backlog;
+pub mod bundle;
 pub mod dispatch;
 pub mod findings;
 pub mod models;

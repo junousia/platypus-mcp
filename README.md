@@ -26,6 +26,7 @@ chat session, while this server exposes deterministic project-management tools.
   runner
 - `worktree_create`: create an isolated Git worktree for a task
 - `worktree_status`: inspect a task worktree recorded in storage
+- `generate_task_bundle`: generate a deterministic worker brief for a task
 - local SQLite storage foundation under `.platy/platypus.sqlite3` for task
   events, findings, and schema metadata
 - worker execution remains external; the Rust MCP server does not run arbitrary

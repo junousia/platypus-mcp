@@ -1,14 +1,15 @@
 use crate::{
-    backlog, dispatch, findings,
+    backlog, bundle, dispatch, findings,
     models::{
         ActionResult, ClaimNextTaskParams, CreateBacklogItemParams, CreatedBacklogItemData,
         DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
         FindingDispositionData, FindingListData, FindingRecordData, FindingValidationData,
-        InitProjectParams, InspectTaskEventsParams, InspectTaskParams, LimitParams,
-        ListFindingsParams, PingData, PingParams, ProjectScaffoldData, ProjectStatusData,
-        RecordFindingParams, RootParams, SendWorkerGuidanceParams, TaskEventListData,
-        TaskRecordData, UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams, WorktreeCreateParams, WorktreeData, WorktreeStatusParams,
+        GenerateTaskBundleParams, InitProjectParams, InspectTaskEventsParams, InspectTaskParams,
+        LimitParams, ListFindingsParams, PingData, PingParams, ProjectScaffoldData,
+        ProjectStatusData, RecordFindingParams, RootParams, SendWorkerGuidanceParams,
+        TaskBundleData, TaskEventListData, TaskRecordData, UnsupportedData,
+        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
+        WorktreeCreateParams, WorktreeData, WorktreeStatusParams,
     },
     project, tasks, workspace,
 };
@@ -347,6 +348,25 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Generate Task Bundle",
+        description = "Generate a deterministic worker brief for a task.",
+        annotations(
+            title = "Generate Task Bundle",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn generate_task_bundle(
+        &self,
+        Parameters(params): Parameters<GenerateTaskBundleParams>,
+    ) -> Json<ActionResult<TaskBundleData>> {
+        Json(bundle::generate_task_bundle(&self.default_root, params))
+    }
+
+    #[tool(
         title = "Inspect Task Events",
         description = "Inspect recent task supervision events.",
         annotations(
@@ -519,6 +539,7 @@ mod tests {
             "claim_next_task",
             "worktree_create",
             "worktree_status",
+            "generate_task_bundle",
             "inspect_task_events",
             "send_worker_guidance",
             "record_finding",

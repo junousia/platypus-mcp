@@ -55,3 +55,6 @@ approval_mode = "approve"
 
 [mcp_servers."platypus-rs".tools.worktree_status]
 approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.generate_task_bundle]
+approval_mode = "approve"
