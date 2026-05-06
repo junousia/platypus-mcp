@@ -32,6 +32,8 @@ chat session, while this server exposes deterministic project-management tools.
 - worker adapter boundary with a fake adapter test path for runner integration
 - Codex adapter skeleton for typed configuration validation and safe app-server
   event mapping
+- Claude adapter skeleton for typed configuration validation and safe stream JSON
+  event mapping
 - local SQLite storage foundation under `.platy/platypus.sqlite3` for task
   events, findings, and schema metadata
 - worker execution remains external; the Rust MCP server does not run arbitrary
