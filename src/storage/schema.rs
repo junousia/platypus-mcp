@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 5;
+pub const SCHEMA_VERSION: i32 = 6;
 
 pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -82,6 +82,40 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_findings_status
             ON findings(status);
+
+        CREATE TABLE IF NOT EXISTS approvals (
+            id TEXT PRIMARY KEY,
+            scope TEXT NOT NULL,
+            status TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            requested_by TEXT,
+            response TEXT,
+            responder TEXT,
+            reason TEXT,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            responded_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_approvals_status
+            ON approvals(status);
+
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            task_id TEXT,
+            summary TEXT NOT NULL,
+            payload_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_events_scope
+            ON events(scope);
+
+        CREATE INDEX IF NOT EXISTS idx_events_task_id
+            ON events(task_id);
         "#,
     )?;
     add_column_if_missing(

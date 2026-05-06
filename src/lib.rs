@@ -1,6 +1,8 @@
+pub mod approvals;
 pub mod backlog;
 pub mod bundle;
 pub mod dispatch;
+pub mod events;
 pub mod findings;
 pub mod models;
 pub mod project;

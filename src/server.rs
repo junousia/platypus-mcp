@@ -1,15 +1,17 @@
 use crate::{
-    backlog, bundle, dispatch, findings,
+    approvals, backlog, bundle, dispatch, events, findings,
     models::{
-        ActionResult, ClaimNextTaskParams, CreateBacklogItemParams, CreatedBacklogItemData,
+        ActionResult, ApprovalListData, ApprovalListParams, ApprovalRespondParams,
+        ApprovalResponseData, ClaimNextTaskParams, CreateBacklogItemParams, CreatedBacklogItemData,
         DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
-        FindingDispositionData, FindingListData, FindingRecordData, FindingValidationData,
-        GenerateTaskBundleParams, InitProjectParams, InspectTaskEventsParams, InspectTaskParams,
-        LimitParams, ListFindingsParams, PingData, PingParams, ProjectScaffoldData,
-        ProjectStatusData, RecordFindingParams, RootParams, RunnerPrepareParams, RunnerReportData,
-        SendWorkerGuidanceParams, TaskBundleData, TaskEventListData, TaskRecordData,
-        UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams, WorktreeCreateParams, WorktreeData, WorktreeStatusParams,
+        EventsReplayData, EventsReplayParams, FindingDispositionData, FindingListData,
+        FindingRecordData, FindingValidationData, GenerateTaskBundleParams, InitProjectParams,
+        InspectTaskEventsParams, InspectTaskParams, LimitParams, ListFindingsParams, PingData,
+        PingParams, ProjectScaffoldData, ProjectStatusData, RecordFindingParams, RootParams,
+        RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams, TaskBundleData,
+        TaskEventListData, TaskRecordData, UnsupportedData, UpdateFindingDispositionParams,
+        ValidateBacklogParams, ValidateFindingsParams, WorktreeCreateParams, WorktreeData,
+        WorktreeStatusParams,
     },
     project, runner, tasks, workspace,
 };
@@ -405,6 +407,63 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Approval List",
+        description = "List pending or completed approval requests.",
+        annotations(
+            title = "Approval List",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn approval_list(
+        &self,
+        Parameters(params): Parameters<ApprovalListParams>,
+    ) -> Json<ActionResult<ApprovalListData>> {
+        Json(approvals::approval_list(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Approval Respond",
+        description = "Approve or deny one pending approval request.",
+        annotations(
+            title = "Approval Respond",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn approval_respond(
+        &self,
+        Parameters(params): Parameters<ApprovalRespondParams>,
+    ) -> Json<ActionResult<ApprovalResponseData>> {
+        Json(approvals::approval_respond(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Events Replay",
+        description = "Replay bounded project, task, worker, and approval events.",
+        annotations(
+            title = "Events Replay",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn events_replay(
+        &self,
+        Parameters(params): Parameters<EventsReplayParams>,
+    ) -> Json<ActionResult<EventsReplayData>> {
+        Json(events::events_replay(&self.default_root, params))
+    }
+
+    #[tool(
         title = "Send Worker Guidance",
         description = "Send guidance to a running worker task.",
         annotations(
@@ -561,6 +620,9 @@ mod tests {
             "generate_task_bundle",
             "runner_prepare_next",
             "inspect_task_events",
+            "approval_list",
+            "approval_respond",
+            "events_replay",
             "send_worker_guidance",
             "record_finding",
             "list_findings",
@@ -582,6 +644,7 @@ mod tests {
             "claim_next_task",
             "worktree_create",
             "runner_prepare_next",
+            "approval_respond",
             "send_worker_guidance",
             "record_finding",
             "update_finding_disposition",

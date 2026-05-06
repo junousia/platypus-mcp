@@ -29,6 +29,9 @@ chat session, while this server exposes deterministic project-management tools.
 - `generate_task_bundle`: generate a deterministic worker brief for a task
 - `runner_prepare_next`: claim queued tasks and prepare worktrees and bundles
   without executing workers
+- `approval_list` / `approval_respond`: inspect and resolve durable approval
+  requests
+- `events_replay`: replay bounded project, task, approval, and worker events
 - worker adapter boundary with a fake adapter test path for runner integration
 - Codex adapter skeleton for typed configuration validation and safe app-server
   event mapping

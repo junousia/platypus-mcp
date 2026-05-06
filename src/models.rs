@@ -119,6 +119,30 @@ pub struct RunnerPrepareParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ApprovalListParams {
+    pub root: Option<String>,
+    pub status: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ApprovalRespondParams {
+    pub root: Option<String>,
+    pub approval_id: String,
+    pub decision: String,
+    pub responder: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EventsReplayParams {
+    pub root: Option<String>,
+    pub task_id: Option<String>,
+    pub scope: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SendWorkerGuidanceParams {
     pub root: Option<String>,
     pub task_id: String,
@@ -482,6 +506,53 @@ pub struct RunnerTaskSummary {
     pub status: String,
     pub workspace_path: Option<String>,
     pub bundle_generated: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct ApprovalRecord {
+    pub id: String,
+    pub scope: String,
+    pub status: String,
+    pub title: String,
+    pub summary: String,
+    pub requested_by: Option<String>,
+    pub response: Option<String>,
+    pub responder: Option<String>,
+    pub reason: Option<String>,
+    pub metadata: BTreeMap<String, Value>,
+    pub created_at: String,
+    pub responded_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ApprovalListData {
+    pub root: String,
+    pub approvals: Vec<ApprovalRecord>,
+    pub returned: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ApprovalResponseData {
+    pub approval: ApprovalRecord,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct EventRecord {
+    pub cursor: String,
+    pub event_type: String,
+    pub scope: String,
+    pub task_id: Option<String>,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Value>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct EventsReplayData {
+    pub root: String,
+    pub events: Vec<EventRecord>,
+    pub returned: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
