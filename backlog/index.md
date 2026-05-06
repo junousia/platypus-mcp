@@ -2,4 +2,4 @@
 
 ## Active Queue
 
-- No active items.
+- P1: MCP-015 Add storage repository abstraction
