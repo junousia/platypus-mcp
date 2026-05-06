@@ -1,111 +1,111 @@
-[mcp_servers."platypus-rs"]
+[mcp_servers."platypus"]
 command = "cargo"
 args = ["run", "--quiet"]
 
-[mcp_servers."platypus-rs".tools.ping]
+[mcp_servers."platypus".tools.ping]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.inspect_status]
+[mcp_servers."platypus".tools.inspect_status]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.doctor_snapshot]
+[mcp_servers."platypus".tools.doctor_snapshot]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.init_project]
+[mcp_servers."platypus".tools.init_project]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.validate_backlog]
+[mcp_servers."platypus".tools.validate_backlog]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.list_backlog]
+[mcp_servers."platypus".tools.list_backlog]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.draft_backlog_items]
+[mcp_servers."platypus".tools.draft_backlog_items]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.create_backlog_item]
+[mcp_servers."platypus".tools.create_backlog_item]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.record_finding]
+[mcp_servers."platypus".tools.record_finding]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.list_findings]
+[mcp_servers."platypus".tools.list_findings]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.validate_findings]
+[mcp_servers."platypus".tools.validate_findings]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.update_finding_disposition]
+[mcp_servers."platypus".tools.update_finding_disposition]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.inspect_task_events]
+[mcp_servers."platypus".tools.inspect_task_events]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.dispatch_next_work]
+[mcp_servers."platypus".tools.dispatch_next_work]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.inspect_task]
+[mcp_servers."platypus".tools.inspect_task]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.claim_next_task]
+[mcp_servers."platypus".tools.claim_next_task]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.worktree_create]
+[mcp_servers."platypus".tools.worktree_create]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.worktree_status]
+[mcp_servers."platypus".tools.worktree_status]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.generate_task_bundle]
+[mcp_servers."platypus".tools.generate_task_bundle]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.prepare_worker_assignment]
+[mcp_servers."platypus".tools.prepare_worker_assignment]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.inspect_worker_assignment]
+[mcp_servers."platypus".tools.inspect_worker_assignment]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.start_worker_execution]
+[mcp_servers."platypus".tools.start_worker_execution]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.record_worker_event]
+[mcp_servers."platypus".tools.record_worker_event]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.complete_worker_execution]
+[mcp_servers."platypus".tools.complete_worker_execution]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.runner_prepare_next]
+[mcp_servers."platypus".tools.runner_prepare_next]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.worktree_diff]
+[mcp_servers."platypus".tools.worktree_diff]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.worktree_cleanup]
+[mcp_servers."platypus".tools.worktree_cleanup]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.approval_list]
+[mcp_servers."platypus".tools.approval_list]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.approval_respond]
+[mcp_servers."platypus".tools.approval_respond]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.events_replay]
+[mcp_servers."platypus".tools.events_replay]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.record_evidence]
+[mcp_servers."platypus".tools.record_evidence]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.list_evidence]
+[mcp_servers."platypus".tools.list_evidence]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.reconcile_project]
+[mcp_servers."platypus".tools.reconcile_project]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.list_agent_profiles]
+[mcp_servers."platypus".tools.list_agent_profiles]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.configure_agent_profile]
+[mcp_servers."platypus".tools.configure_agent_profile]
 approval_mode = "approve"
 
-[mcp_servers."platypus-rs".tools.send_worker_guidance]
+[mcp_servers."platypus".tools.send_worker_guidance]
 approval_mode = "approve"
