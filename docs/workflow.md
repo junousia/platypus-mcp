@@ -5,6 +5,9 @@ current Platypus MCP tools. The MCP server owns deterministic project state
 transitions; the host owns conversation, model turns, and any external worker
 execution.
 
+See [diagrams.md](diagrams.md) for state, data, responsibility, and roadmap
+diagrams from additional perspectives.
+
 ## Principles
 
 - Start with `doctor_snapshot` or `inspect_status` when the project state is

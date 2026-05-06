@@ -50,6 +50,8 @@ and recoverable.
 - `src/backlog/`: backlog parsing, validation, listing, drafting, and creation
 - `src/storage/`: SQLite setup plus typed repository APIs; see
   [docs/storage.md](docs/storage.md)
+- `docs/diagrams.md`: repository-level Mermaid diagrams from multiple
+  perspectives
 - `docs/workflow.md`: current MCP host workflow
 - `docs/roadmap.md`: product direction and near-term roadmap
 
