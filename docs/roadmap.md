@@ -5,6 +5,10 @@ project work. Codex, Claude, and other hosts should be able to use the same
 deterministic tools without depending on a custom Python gateway or UI-specific
 state machine.
 
+See [diagrams.md](diagrams.md) for repository-level diagrams that show the same
+vision from boundary, state, data, tool responsibility, and reconciliation
+perspectives.
+
 ## Product Vision
 
 - MCP is the stable interface for project management tools.
