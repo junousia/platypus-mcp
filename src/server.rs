@@ -6,12 +6,12 @@ use crate::{
         FindingDispositionData, FindingListData, FindingRecordData, FindingValidationData,
         GenerateTaskBundleParams, InitProjectParams, InspectTaskEventsParams, InspectTaskParams,
         LimitParams, ListFindingsParams, PingData, PingParams, ProjectScaffoldData,
-        ProjectStatusData, RecordFindingParams, RootParams, SendWorkerGuidanceParams,
-        TaskBundleData, TaskEventListData, TaskRecordData, UnsupportedData,
-        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
-        WorktreeCreateParams, WorktreeData, WorktreeStatusParams,
+        ProjectStatusData, RecordFindingParams, RootParams, RunnerPrepareParams, RunnerReportData,
+        SendWorkerGuidanceParams, TaskBundleData, TaskEventListData, TaskRecordData,
+        UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
+        ValidateFindingsParams, WorktreeCreateParams, WorktreeData, WorktreeStatusParams,
     },
-    project, tasks, workspace,
+    project, runner, tasks, workspace,
 };
 use anyhow::Result;
 use rmcp::{
@@ -367,6 +367,25 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Runner Prepare Next",
+        description = "Claim queued tasks and prepare worktrees and bundles without executing workers.",
+        annotations(
+            title = "Runner Prepare Next",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn runner_prepare_next(
+        &self,
+        Parameters(params): Parameters<RunnerPrepareParams>,
+    ) -> Json<ActionResult<RunnerReportData>> {
+        Json(runner::prepare_next(&self.default_root, params))
+    }
+
+    #[tool(
         title = "Inspect Task Events",
         description = "Inspect recent task supervision events.",
         annotations(
@@ -540,6 +559,7 @@ mod tests {
             "worktree_create",
             "worktree_status",
             "generate_task_bundle",
+            "runner_prepare_next",
             "inspect_task_events",
             "send_worker_guidance",
             "record_finding",
@@ -561,6 +581,7 @@ mod tests {
             "dispatch_next_work",
             "claim_next_task",
             "worktree_create",
+            "runner_prepare_next",
             "send_worker_guidance",
             "record_finding",
             "update_finding_disposition",

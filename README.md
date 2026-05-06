@@ -27,6 +27,8 @@ chat session, while this server exposes deterministic project-management tools.
 - `worktree_create`: create an isolated Git worktree for a task
 - `worktree_status`: inspect a task worktree recorded in storage
 - `generate_task_bundle`: generate a deterministic worker brief for a task
+- `runner_prepare_next`: claim queued tasks and prepare worktrees and bundles
+  without executing workers
 - local SQLite storage foundation under `.platy/platypus.sqlite3` for task
   events, findings, and schema metadata
 - worker execution remains external; the Rust MCP server does not run arbitrary
@@ -68,6 +70,12 @@ make check
 
 ```bash
 make run
+```
+
+Run the local preparation runner:
+
+```bash
+cargo run -- runner --max-tasks 1
 ```
 
 By default the server uses the current directory as the Platypus project root.

@@ -108,6 +108,17 @@ pub struct GenerateTaskBundleParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct RunnerPrepareParams {
+    pub root: Option<String>,
+    pub worker: Option<String>,
+    pub claimant: Option<String>,
+    pub max_tasks: Option<usize>,
+    pub dry_run: Option<bool>,
+    #[serde(default)]
+    pub verification_command: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SendWorkerGuidanceParams {
     pub root: Option<String>,
     pub task_id: String,
@@ -452,6 +463,25 @@ pub struct TaskBundle {
     pub owned_surfaces: Vec<String>,
     pub verification_command: Vec<String>,
     pub brief: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RunnerReportData {
+    pub root: String,
+    pub requested: usize,
+    pub claimed: usize,
+    pub prepared: usize,
+    pub stopped_reason: String,
+    pub tasks: Vec<RunnerTaskSummary>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RunnerTaskSummary {
+    pub task_id: String,
+    pub item_id: String,
+    pub status: String,
+    pub workspace_path: Option<String>,
+    pub bundle_generated: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

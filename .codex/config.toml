@@ -58,3 +58,6 @@ approval_mode = "approve"
 
 [mcp_servers."platypus-rs".tools.generate_task_bundle]
 approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.runner_prepare_next]
+approval_mode = "approve"

@@ -2,7 +2,6 @@
 
 ## Active Queue
 
-- P0: MCP-008 Add runner claim loop skeleton
 - P0: MCP-009 Add worker adapter boundary
 - P1: MCP-010 Add Codex worker adapter skeleton
 - P1: MCP-011 Add Claude worker adapter skeleton
