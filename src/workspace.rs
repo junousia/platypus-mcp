@@ -103,17 +103,31 @@ pub fn worktree_create(
         Err(error) => return ActionResult::failed(action, "Could not create worktree.", error),
     };
     let branch = format!("platy/task/{safe_task_id}");
-    if let Err(error) = run_git(
-        &root,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            branch.as_str(),
-            path_arg(&worktree_path).as_str(),
-            commit.as_str(),
-        ],
-    ) {
+    let worktree_path_arg = path_arg(&worktree_path);
+    let add_result = if branch_exists(&root, &branch) {
+        run_git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                worktree_path_arg.as_str(),
+                branch.as_str(),
+            ],
+        )
+    } else {
+        run_git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                branch.as_str(),
+                worktree_path_arg.as_str(),
+                commit.as_str(),
+            ],
+        )
+    };
+    if let Err(error) = add_result {
         return ActionResult::failed(action, "Could not create worktree.", error);
     }
     let canonical_worktree = match fs::canonicalize(&worktree_path) {
@@ -604,6 +618,15 @@ fn resolve_base_commit(root: &Path, base_ref: &str) -> Result<String, String> {
     }
 }
 
+fn branch_exists(root: &Path, branch: &str) -> bool {
+    let reference = format!("refs/heads/{branch}");
+    run_git(
+        root,
+        &["show-ref", "--verify", "--quiet", reference.as_str()],
+    )
+    .is_ok()
+}
+
 fn prepare_worktrees_dir(root: &Path) -> Result<PathBuf, String> {
     let state_dir = root.join(".platy");
     fs::create_dir_all(&state_dir).map_err(|error| error.to_string())?;
@@ -877,6 +900,18 @@ mod tests {
         assert!(!Path::new(&created.path).exists());
         let task = tasks::get_task_by_id(project.path(), None, &task.id).expect("task");
         assert!(task.workspace_path.is_none());
+
+        let recreated = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        );
+        let recreated_data = recreated.data.expect("recreated data");
+        assert!(matches!(recreated.status, ActionStatus::Completed));
+        assert!(Path::new(&recreated_data.path).exists());
 
         let events = inspect_task_events(
             project.path(),

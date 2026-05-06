@@ -266,13 +266,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn live_run_maps_fixture_output() {
-        let fixture = executable_fixture(
+        let fixture = ExecutableFixture::new(
             r#"#!/bin/sh
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Implemented."}]}}'
 "#,
         );
         let adapter = ClaudeWorkerAdapter::new(ClaudeAdapterConfig {
-            executable: fixture.display().to_string(),
+            executable: fixture.path.display().to_string(),
             args: Vec::new(),
         })
         .expect("adapter");
@@ -282,7 +282,7 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"
                 task_id: "task-1".to_string(),
                 item_id: "PROJ-001".to_string(),
                 title: "Test".to_string(),
-                workspace_path: fixture.parent().unwrap().display().to_string(),
+                workspace_path: fixture.dir.path().display().to_string(),
                 brief: "brief".to_string(),
             },
             &mut |event| events.push(event),
@@ -297,14 +297,21 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"
     }
 
     #[cfg(unix)]
-    fn executable_fixture(script: &str) -> std::path::PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().expect("temp dir").keep();
-        let path = dir.join("fixture.sh");
-        std::fs::write(&path, script).expect("script");
-        let mut permissions = std::fs::metadata(&path).expect("metadata").permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&path, permissions).expect("chmod");
-        path
+    struct ExecutableFixture {
+        dir: tempfile::TempDir,
+        path: std::path::PathBuf,
+    }
+
+    impl ExecutableFixture {
+        fn new(script: &str) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::TempDir::new().expect("temp dir");
+            let path = dir.path().join("fixture.sh");
+            std::fs::write(&path, script).expect("script");
+            let mut permissions = std::fs::metadata(&path).expect("metadata").permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&path, permissions).expect("chmod");
+            Self { dir, path }
+        }
     }
 }
