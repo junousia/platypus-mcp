@@ -31,6 +31,8 @@ chat session, while this server exposes deterministic project-management tools.
 - `generate_task_bundle`: generate a deterministic worker brief for a task
 - `runner_prepare_next`: claim queued tasks and prepare worktrees and bundles
   without executing workers
+- `send_worker_guidance`: persist task-scoped worker steering messages for
+  queued, claimed, or running tasks
 - `approval_list` / `approval_respond`: inspect and resolve durable approval
   requests
 - `events_replay`: replay bounded project, task, approval, and worker events

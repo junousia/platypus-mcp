@@ -474,6 +474,15 @@ pub struct TaskEventListData {
     pub returned: usize,
 }
 
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkerGuidanceData {
+    pub root: String,
+    pub task_id: String,
+    pub author: String,
+    pub message: String,
+    pub event: TaskEventRecord,
+}
+
 #[derive(Debug, Serialize, JsonSchema, Clone)]
 pub struct TaskEventRecord {
     pub task_id: String,
@@ -704,10 +713,4 @@ pub struct AgentProfilesData {
 pub struct AgentProfileData {
     pub root: String,
     pub profile: AgentProfile,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct UnsupportedData {
-    pub supported: bool,
-    pub reason: String,
 }

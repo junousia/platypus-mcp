@@ -2,6 +2,7 @@ use crate::{
     models::{
         ActionResult, ActionStatus, ClaimNextTaskParams, InspectTaskEventsParams,
         InspectTaskParams, TaskEventListData, TaskEventRecord, TaskRecord, TaskRecordData,
+        WorkerGuidanceData,
     },
     storage::{self, TaskEventInsert, TaskInsert},
 };
@@ -129,6 +130,84 @@ pub fn finish_task(
         ));
     }
     tasks.get(&task_id).map_err(|error| error.to_string())
+}
+
+pub fn send_worker_guidance(
+    default_root: &Path,
+    params: crate::models::SendWorkerGuidanceParams,
+) -> ActionResult<WorkerGuidanceData> {
+    let action = "send_worker_guidance";
+    let task_id = match clean_required("task_id", &params.task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not send worker guidance.", error)
+        }
+    };
+    let message = match clean_required("message", &params.message) {
+        Ok(message) => message,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not send worker guidance.", error)
+        }
+    };
+    let author = clean_optional(params.author).unwrap_or_else(|| "user".to_string());
+    let storage = match storage::connect(default_root, params.root.as_deref()) {
+        Ok(storage) => storage,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not open task storage.", error.to_string())
+        }
+    };
+    let tasks = storage.repository().tasks();
+    let task = match tasks.get(&task_id) {
+        Ok(task) => task,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return ActionResult::skipped(
+                action,
+                format!("Task `{task_id}` was not found."),
+                "Dispatch work before sending worker guidance.",
+            )
+        }
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect task.", error.to_string())
+        }
+    };
+    if !active_status(&task.status) {
+        return ActionResult::skipped(
+            action,
+            format!("Task `{task_id}` is {}.", task.status),
+            "Send worker guidance only to queued, claimed, or running tasks.",
+        );
+    }
+    let event = match tasks.record_event(TaskEventInsert {
+        task_id: task.id.clone(),
+        sequence: None,
+        event_type: "worker_guidance".to_string(),
+        summary: format!("Guidance sent by `{author}`."),
+        payload: Some(serde_json::json!({
+            "author": author,
+            "message": message,
+            "task_status": task.status
+        })),
+    }) {
+        Ok(event) => event,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not persist worker guidance.",
+                error.to_string(),
+            )
+        }
+    };
+    ActionResult::completed(
+        action,
+        format!("Guidance recorded for task `{task_id}`."),
+        WorkerGuidanceData {
+            root: storage.storage.root.display().to_string(),
+            task_id,
+            author,
+            message,
+            event,
+        },
+    )
 }
 
 pub fn inspect_task(
@@ -452,6 +531,10 @@ fn clean_terminal_status(value: &str) -> Result<String, String> {
     }
 }
 
+fn active_status(value: &str) -> bool {
+    matches!(value, "queued" | "claimed" | "running")
+}
+
 fn bounded_limit(limit: Option<usize>) -> usize {
     limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
 }
@@ -655,5 +738,94 @@ mod tests {
         let finished = finish_task(project.path(), None, &task.id, "completed").expect("finished");
         assert_eq!(finished.status, "completed");
         assert!(finished.finished_at.is_some());
+    }
+
+    #[test]
+    fn sends_worker_guidance_to_active_task() {
+        let project = TempDir::new().expect("temp dir");
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Guided task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+
+        let guidance = send_worker_guidance(
+            project.path(),
+            crate::models::SendWorkerGuidanceParams {
+                root: None,
+                task_id: task.id.clone(),
+                message: "Focus on tests first.".to_string(),
+                author: Some("manager".to_string()),
+            },
+        );
+        let data = guidance.data.expect("guidance data");
+
+        assert!(matches!(guidance.status, ActionStatus::Completed));
+        assert_eq!(data.author, "manager");
+        assert_eq!(data.event.event_type, "worker_guidance");
+
+        let events = inspect_task_events(
+            project.path(),
+            InspectTaskEventsParams {
+                root: None,
+                task_id: task.id,
+                limit: None,
+            },
+        )
+        .data
+        .expect("events");
+        assert_eq!(events.returned, 1);
+        assert_eq!(events.events[0].event_type, "worker_guidance");
+    }
+
+    #[test]
+    fn rejects_guidance_for_unknown_or_terminal_task() {
+        let project = TempDir::new().expect("temp dir");
+        let missing = send_worker_guidance(
+            project.path(),
+            crate::models::SendWorkerGuidanceParams {
+                root: None,
+                task_id: "missing".to_string(),
+                message: "Continue.".to_string(),
+                author: None,
+            },
+        );
+        assert!(matches!(missing.status, ActionStatus::Skipped));
+
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Finished task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        claim_next_task(
+            project.path(),
+            ClaimNextTaskParams {
+                root: None,
+                worker: Some("coder".to_string()),
+                claimant: None,
+            },
+        );
+        finish_task(project.path(), None, &task.id, "completed").expect("finish");
+
+        let terminal = send_worker_guidance(
+            project.path(),
+            crate::models::SendWorkerGuidanceParams {
+                root: None,
+                task_id: task.id,
+                message: "Continue.".to_string(),
+                author: None,
+            },
+        );
+        assert!(matches!(terminal.status, ActionStatus::Skipped));
     }
 }

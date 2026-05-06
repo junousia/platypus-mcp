@@ -12,9 +12,10 @@ use crate::{
         ProjectScaffoldData, ProjectStatusData, ReconcileParams, ReconciliationData,
         RecordEvidenceParams, RecordFindingParams, RootParams, RunnerPrepareParams,
         RunnerReportData, SendWorkerGuidanceParams, TaskBundleData, TaskEventListData,
-        TaskRecordData, UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams, WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams,
-        WorktreeData, WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams,
+        TaskRecordData, UpdateFindingDispositionParams, ValidateBacklogParams,
+        ValidateFindingsParams, WorkerGuidanceData, WorktreeCleanupData, WorktreeCleanupParams,
+        WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffParams,
+        WorktreeStatusParams,
     },
     project, reconcile, runner, tasks, workspace,
 };
@@ -614,15 +615,8 @@ impl PlatypusMcp {
     pub async fn send_worker_guidance(
         &self,
         Parameters(params): Parameters<SendWorkerGuidanceParams>,
-    ) -> Json<ActionResult<UnsupportedData>> {
-        Json(not_implemented(
-            "send_worker_guidance",
-            params.root.as_deref(),
-            &format!(
-                "Worker mailbox delivery is not wired yet for task `{}`.",
-                params.task_id
-            ),
-        ))
+    ) -> Json<ActionResult<WorkerGuidanceData>> {
+        Json(tasks::send_worker_guidance(&self.default_root, params))
     }
 
     #[tool(
@@ -709,24 +703,6 @@ pub async fn serve_stdio() -> Result<()> {
     let server = PlatypusMcp::new().serve(rmcp::transport::stdio()).await?;
     server.waiting().await?;
     Ok(())
-}
-
-fn not_implemented(
-    action: &str,
-    _root: Option<&str>,
-    reason: &str,
-) -> ActionResult<UnsupportedData> {
-    ActionResult {
-        action: action.to_string(),
-        status: crate::models::ActionStatus::Skipped,
-        summary: format!("{} is not implemented in the Rust MCP server yet.", action),
-        next_action: Some("Use backlog inspection tools or wait for runtime wiring.".to_string()),
-        data: Some(UnsupportedData {
-            supported: false,
-            reason: reason.to_string(),
-        }),
-        error: None,
-    }
 }
 
 #[cfg(test)]

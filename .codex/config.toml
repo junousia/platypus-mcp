@@ -91,3 +91,6 @@ approval_mode = "approve"
 
 [mcp_servers."platypus-rs".tools.configure_agent_profile]
 approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.send_worker_guidance]
+approval_mode = "approve"
