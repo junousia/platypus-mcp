@@ -100,6 +100,19 @@ pub struct WorktreeStatusParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct WorktreeDiffParams {
+    pub root: Option<String>,
+    pub task_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WorktreeCleanupParams {
+    pub root: Option<String>,
+    pub task_id: String,
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct GenerateTaskBundleParams {
     pub root: Option<String>,
     pub task_id: String,
@@ -511,6 +524,32 @@ pub struct WorktreeData {
     pub branch: String,
     pub base_ref: String,
     pub created: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorktreeDiffData {
+    pub root: String,
+    pub task_id: String,
+    pub path: String,
+    pub dirty: bool,
+    pub files: Vec<WorktreeDiffFile>,
+    pub diff: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorktreeDiffFile {
+    pub status: String,
+    pub path: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorktreeCleanupData {
+    pub root: String,
+    pub task_id: String,
+    pub path: String,
+    pub removed: bool,
+    pub forced: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

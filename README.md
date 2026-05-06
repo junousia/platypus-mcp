@@ -26,6 +26,8 @@ chat session, while this server exposes deterministic project-management tools.
   runner
 - `worktree_create`: create an isolated Git worktree for a task
 - `worktree_status`: inspect a task worktree recorded in storage
+- `worktree_diff` / `worktree_cleanup`: inspect bounded worktree changes and
+  safely remove clean or explicitly forced task worktrees
 - `generate_task_bundle`: generate a deterministic worker brief for a task
 - `runner_prepare_next`: claim queued tasks and prepare worktrees and bundles
   without executing workers

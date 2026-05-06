@@ -13,7 +13,8 @@ use crate::{
         RecordEvidenceParams, RecordFindingParams, RootParams, RunnerPrepareParams,
         RunnerReportData, SendWorkerGuidanceParams, TaskBundleData, TaskEventListData,
         TaskRecordData, UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams, WorktreeCreateParams, WorktreeData, WorktreeStatusParams,
+        ValidateFindingsParams, WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams,
+        WorktreeData, WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams,
     },
     project, reconcile, runner, tasks, workspace,
 };
@@ -349,6 +350,44 @@ impl PlatypusMcp {
         Parameters(params): Parameters<WorktreeStatusParams>,
     ) -> Json<ActionResult<WorktreeData>> {
         Json(workspace::worktree_status(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Worktree Diff",
+        description = "Inspect bounded changes in a persisted task worktree.",
+        annotations(
+            title = "Worktree Diff",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn worktree_diff(
+        &self,
+        Parameters(params): Parameters<WorktreeDiffParams>,
+    ) -> Json<ActionResult<WorktreeDiffData>> {
+        Json(workspace::worktree_diff(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Worktree Cleanup",
+        description = "Remove a persisted task worktree when it is clean or explicitly forced.",
+        annotations(
+            title = "Worktree Cleanup",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn worktree_cleanup(
+        &self,
+        Parameters(params): Parameters<WorktreeCleanupParams>,
+    ) -> Json<ActionResult<WorktreeCleanupData>> {
+        Json(workspace::worktree_cleanup(&self.default_root, params))
     }
 
     #[tool(
@@ -714,6 +753,8 @@ mod tests {
             "claim_next_task",
             "worktree_create",
             "worktree_status",
+            "worktree_diff",
+            "worktree_cleanup",
             "generate_task_bundle",
             "runner_prepare_next",
             "inspect_task_events",
@@ -745,6 +786,7 @@ mod tests {
             "dispatch_next_work",
             "claim_next_task",
             "worktree_create",
+            "worktree_cleanup",
             "runner_prepare_next",
             "approval_respond",
             "record_evidence",
@@ -780,7 +822,7 @@ mod tests {
             );
             assert_eq!(
                 annotations.destructive_hint,
-                Some(name == "init_project"),
+                Some(matches!(name, "init_project" | "worktree_cleanup")),
                 "{name} has wrong destructive hint"
             );
 

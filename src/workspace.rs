@@ -1,6 +1,8 @@
 use crate::{
     models::{
-        ActionResult, ActionStatus, WorktreeCreateParams, WorktreeData, WorktreeStatusParams,
+        ActionResult, ActionStatus, WorktreeCleanupData, WorktreeCleanupParams,
+        WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffFile, WorktreeDiffParams,
+        WorktreeStatusParams,
     },
     storage,
     tasks::{self, NewTaskEvent},
@@ -23,6 +25,14 @@ struct WorkspaceTask {
     workspace_path: Option<String>,
     workspace_branch: Option<String>,
     workspace_base_ref: Option<String>,
+}
+
+#[derive(Debug)]
+struct RecordedWorktree {
+    task_id: String,
+    path: PathBuf,
+    branch: String,
+    base_ref: String,
 }
 
 pub fn worktree_create(
@@ -215,6 +225,149 @@ pub fn worktree_status(
     })
 }
 
+pub fn worktree_diff(
+    default_root: &Path,
+    params: WorktreeDiffParams,
+) -> ActionResult<WorktreeDiffData> {
+    let action = "worktree_diff";
+    let task_id = match clean_task_id(&params.task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect worktree diff.", error)
+        }
+    };
+    let storage = match storage::connect(default_root, params.root.as_deref()) {
+        Ok(storage) => storage,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not open workspace storage.",
+                error.to_string(),
+            )
+        }
+    };
+    let root = storage.storage.root;
+    let worktree = match recorded_worktree(action, &storage.connection, &root, &task_id) {
+        Ok(worktree) => worktree,
+        Err(result) => return result,
+    };
+    let status = match run_git(&worktree.path, &["status", "--porcelain=v1"]) {
+        Ok(status) => status,
+        Err(error) => return ActionResult::failed(action, "Could not inspect worktree.", error),
+    };
+    let files = parse_status_files(&status);
+    let diff = match run_git(&worktree.path, &["diff", "--stat", "--patch"]) {
+        Ok(diff) => diff,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect worktree diff.", error)
+        }
+    };
+    let truncated = diff.ends_with("...");
+    let data = WorktreeDiffData {
+        root: root.display().to_string(),
+        task_id: worktree.task_id,
+        path: worktree.path.display().to_string(),
+        dirty: !files.is_empty(),
+        files,
+        diff,
+        truncated,
+    };
+    ActionResult::completed(
+        action,
+        format!("Inspected worktree diff for task `{task_id}`."),
+        data,
+    )
+}
+
+pub fn worktree_cleanup(
+    default_root: &Path,
+    params: WorktreeCleanupParams,
+) -> ActionResult<WorktreeCleanupData> {
+    let action = "worktree_cleanup";
+    let task_id = match clean_task_id(&params.task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => return ActionResult::failed(action, "Could not clean up worktree.", error),
+    };
+    let force = params.force.unwrap_or(false);
+    let storage = match storage::connect(default_root, params.root.as_deref()) {
+        Ok(storage) => storage,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not open workspace storage.",
+                error.to_string(),
+            )
+        }
+    };
+    let root = storage.storage.root;
+    let root_string = root.display().to_string();
+    let worktree = match recorded_worktree(action, &storage.connection, &root, &task_id) {
+        Ok(worktree) => worktree,
+        Err(result) => return result,
+    };
+    let status = match run_git(&worktree.path, &["status", "--porcelain=v1"]) {
+        Ok(status) => status,
+        Err(error) => return ActionResult::failed(action, "Could not inspect worktree.", error),
+    };
+    if !status.trim().is_empty() && !force {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Skipped,
+            summary: format!("Task `{task_id}` worktree has local changes."),
+            next_action: Some("Inspect worktree_diff, then retry with force=true only if the changes can be discarded.".to_string()),
+            data: None,
+            error: None,
+        };
+    }
+
+    let path = path_arg(&worktree.path);
+    let remove = if force {
+        run_git(&root, &["worktree", "remove", "--force", path.as_str()])
+    } else {
+        run_git(&root, &["worktree", "remove", path.as_str()])
+    };
+    if let Err(error) = remove {
+        return ActionResult::failed(action, "Could not remove worktree.", error);
+    }
+    if let Err(error) = clear_workspace(&storage.connection, &task_id) {
+        return ActionResult::failed(
+            action,
+            "Could not clear worktree metadata.",
+            error.to_string(),
+        );
+    }
+    if let Err(error) = tasks::record_task_event(
+        default_root,
+        Some(root_string.as_str()),
+        NewTaskEvent {
+            task_id: task_id.clone(),
+            sequence: None,
+            event_type: "worktree_cleaned_up".to_string(),
+            summary: format!("Cleaned up worktree for task `{task_id}`."),
+            payload: Some(serde_json::json!({
+                "path": worktree.path.display().to_string(),
+                "branch": worktree.branch,
+                "base_ref": worktree.base_ref,
+                "forced": force
+            })),
+        },
+    ) {
+        return ActionResult::failed(action, "Could not record cleanup event.", error);
+    }
+
+    ActionResult::completed(
+        action,
+        format!("Cleaned up worktree for task `{task_id}`."),
+        WorktreeCleanupData {
+            root: root_string,
+            task_id,
+            path: worktree.path.display().to_string(),
+            removed: true,
+            forced: force,
+        },
+    )
+}
+
 fn existing_workspace_data(
     action: &str,
     root: &Path,
@@ -281,6 +434,92 @@ fn existing_workspace_data(
     })
 }
 
+fn recorded_worktree<T>(
+    action: &str,
+    connection: &rusqlite::Connection,
+    root: &Path,
+    task_id: &str,
+) -> Result<RecordedWorktree, ActionResult<T>>
+where
+    T: serde::Serialize + schemars::JsonSchema,
+{
+    let task = match load_task(connection, task_id) {
+        Ok(Some(task)) => task,
+        Ok(None) => {
+            return Err(ActionResult::skipped(
+                action,
+                format!("Task `{task_id}` was not found."),
+                "Dispatch work before inspecting a task worktree.",
+            ))
+        }
+        Err(error) => {
+            return Err(ActionResult::failed(
+                action,
+                "Could not inspect task.",
+                error.to_string(),
+            ))
+        }
+    };
+    let Some(path) = task.workspace_path.as_ref() else {
+        return Err(ActionResult::skipped(
+            action,
+            format!("Task `{task_id}` does not have a worktree yet."),
+            "Run worktree_create for the task.",
+        ));
+    };
+    let Some(branch) = task.workspace_branch.as_ref() else {
+        return Err(ActionResult::failed(
+            action,
+            "Persisted worktree metadata is incomplete.",
+            "workspace_branch is missing",
+        ));
+    };
+    let Some(base_ref) = task.workspace_base_ref.as_ref() else {
+        return Err(ActionResult::failed(
+            action,
+            "Persisted worktree metadata is incomplete.",
+            "workspace_base_ref is missing",
+        ));
+    };
+    let worktrees_dir = match canonical_worktrees_dir(root) {
+        Ok(path) => path,
+        Err(error) => {
+            return Err(ActionResult::failed(
+                action,
+                "Could not inspect worktree.",
+                error,
+            ))
+        }
+    };
+    let canonical = match fs::canonicalize(path) {
+        Ok(path) => path,
+        Err(error) => {
+            return Err(ActionResult::failed(
+                action,
+                "Persisted worktree path is not available.",
+                error.to_string(),
+            ))
+        }
+    };
+    if !canonical.starts_with(&worktrees_dir) {
+        return Err(ActionResult::failed(
+            action,
+            "Persisted worktree path escaped project state.",
+            format!(
+                "{} is outside {}",
+                canonical.display(),
+                worktrees_dir.display()
+            ),
+        ));
+    }
+    Ok(RecordedWorktree {
+        task_id: task.id,
+        path: canonical,
+        branch: branch.clone(),
+        base_ref: base_ref.clone(),
+    })
+}
+
 fn load_task(
     connection: &rusqlite::Connection,
     task_id: &str,
@@ -322,6 +561,21 @@ fn persist_workspace(
         WHERE id = ?1
         "#,
         params![task_id, path.display().to_string(), branch, base_ref],
+    )?;
+    Ok(())
+}
+
+fn clear_workspace(connection: &rusqlite::Connection, task_id: &str) -> rusqlite::Result<()> {
+    connection.execute(
+        r#"
+        UPDATE tasks
+        SET workspace_path = NULL,
+            workspace_branch = NULL,
+            workspace_base_ref = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?1
+        "#,
+        [task_id],
     )?;
     Ok(())
 }
@@ -470,6 +724,24 @@ fn limit_output(value: &str) -> String {
     output
 }
 
+fn parse_status_files(status: &str) -> Vec<WorktreeDiffFile> {
+    status
+        .lines()
+        .filter_map(|line| {
+            if line.len() < 4 {
+                return None;
+            }
+            let code = line[..2].trim().to_string();
+            let path = line[2..].trim().to_string();
+            if path.is_empty() {
+                None
+            } else {
+                Some(WorktreeDiffFile { status: code, path })
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,6 +808,127 @@ mod tests {
         let events = events.data.expect("event data");
         assert_eq!(events.returned, 1);
         assert_eq!(events.events[0].event_type, "worktree_created");
+    }
+
+    #[test]
+    fn inspects_and_cleans_worktree_changes_safely() {
+        let project = git_project();
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Workspace task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        let created = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        )
+        .data
+        .expect("worktree data");
+        fs::write(Path::new(&created.path).join("README.md"), "# Changed\n").expect("change file");
+
+        let diff = worktree_diff(
+            project.path(),
+            WorktreeDiffParams {
+                root: None,
+                task_id: task.id.clone(),
+            },
+        );
+        let diff_data = diff.data.expect("diff data");
+        assert!(matches!(diff.status, ActionStatus::Completed));
+        assert!(diff_data.dirty);
+        assert!(
+            diff_data
+                .files
+                .iter()
+                .any(|file| file.path.ends_with("README.md")),
+            "files: {:?}",
+            diff_data.files
+        );
+
+        let refused = worktree_cleanup(
+            project.path(),
+            WorktreeCleanupParams {
+                root: None,
+                task_id: task.id.clone(),
+                force: None,
+            },
+        );
+        assert!(matches!(refused.status, ActionStatus::Skipped));
+        assert!(Path::new(&created.path).exists());
+
+        let cleaned = worktree_cleanup(
+            project.path(),
+            WorktreeCleanupParams {
+                root: None,
+                task_id: task.id.clone(),
+                force: Some(true),
+            },
+        );
+        assert!(matches!(cleaned.status, ActionStatus::Completed));
+        assert!(!Path::new(&created.path).exists());
+        let task = tasks::get_task_by_id(project.path(), None, &task.id).expect("task");
+        assert!(task.workspace_path.is_none());
+
+        let events = inspect_task_events(
+            project.path(),
+            crate::models::InspectTaskEventsParams {
+                root: None,
+                task_id: task.id,
+                limit: None,
+            },
+        )
+        .data
+        .expect("event data");
+        assert!(events
+            .events
+            .iter()
+            .any(|event| event.event_type == "worktree_cleaned_up"));
+    }
+
+    #[test]
+    fn cleans_clean_worktree_without_force() {
+        let project = git_project();
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Workspace task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        let created = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        )
+        .data
+        .expect("worktree data");
+
+        let cleaned = worktree_cleanup(
+            project.path(),
+            WorktreeCleanupParams {
+                root: None,
+                task_id: task.id,
+                force: None,
+            },
+        );
+
+        assert!(matches!(cleaned.status, ActionStatus::Completed));
+        assert!(!Path::new(&created.path).exists());
     }
 
     #[test]
