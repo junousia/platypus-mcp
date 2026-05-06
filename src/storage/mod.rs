@@ -1,4 +1,5 @@
 mod paths;
+mod repository;
 mod schema;
 
 use rusqlite::Connection;
@@ -10,6 +11,11 @@ use std::{
 
 pub use schema::SCHEMA_VERSION;
 
+pub use repository::{
+    ApprovalInsert, ApprovalRepository, EventInsert, EventRepository, Repository, TaskEventInsert,
+    TaskInsert, TaskRepository,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Storage {
     pub root: PathBuf,
@@ -20,6 +26,12 @@ pub struct Storage {
 pub struct StorageConnection {
     pub storage: Storage,
     pub connection: Connection,
+}
+
+impl StorageConnection {
+    pub fn repository(&self) -> Repository<'_> {
+        Repository::new(&self.connection)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

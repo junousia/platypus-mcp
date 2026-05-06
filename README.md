@@ -54,6 +54,8 @@ chat session, while this server exposes deterministic project-management tools.
 - `src/server.rs`: RMCP server and tool router
 - `src/models.rs`: public tool request and response schemas
 - `src/backlog/`: backlog parsing, validation, listing, drafting, and creation
+- `src/storage/`: SQLite setup plus typed repository APIs; see
+  [docs/storage.md](docs/storage.md)
 
 Keep new behavior in focused modules. Avoid adding large all-purpose files.
 

@@ -3,7 +3,7 @@ use crate::{
         ActionResult, ActionStatus, ClaimNextTaskParams, InspectTaskEventsParams,
         InspectTaskParams, TaskEventListData, TaskEventRecord, TaskRecord, TaskRecordData,
     },
-    storage,
+    storage::{self, TaskEventInsert, TaskInsert},
 };
 use rusqlite::{params, OptionalExtension, Row};
 use serde_json::Value;
@@ -36,24 +36,21 @@ pub fn create_task_record(
     let storage = storage::connect(default_root, root).map_err(|error| error.to_string())?;
     let source_item_id = clean_required("source_item_id", &task.source_item_id)?;
     let title = clean_required("title", &task.title)?;
-    let id =
-        next_task_id(&storage.connection, &source_item_id).map_err(|error| error.to_string())?;
-    let inserted = storage.connection.execute(
-        r#"
-        INSERT INTO tasks(id, source_item_id, title, status, worker)
-        VALUES (?1, ?2, ?3, 'queued', ?4)
-        "#,
-        params![id, source_item_id, title, clean_optional(task.worker)],
-    );
-    if let Err(error) = inserted {
-        if is_unique_constraint_error(&error) {
-            return Err(format!(
-                "active task already exists for backlog item `{source_item_id}`"
-            ));
+    match storage.repository().tasks().create(TaskInsert {
+        source_item_id: source_item_id.clone(),
+        title,
+        worker: clean_optional(task.worker),
+    }) {
+        Ok(task) => Ok(task),
+        Err(error) => {
+            if is_unique_constraint_error(&error) {
+                return Err(format!(
+                    "active task already exists for backlog item `{source_item_id}`"
+                ));
+            }
+            Err(error.to_string())
         }
-        return Err(error.to_string());
     }
-    get_task(&storage.connection, &id).map_err(|error| error.to_string())
 }
 
 pub fn record_task_event(
@@ -65,27 +62,20 @@ pub fn record_task_event(
     let task_id = clean_required("task_id", &event.task_id)?;
     let event_type = clean_required("event_type", &event.event_type)?;
     let summary = clean_required("summary", &event.summary)?;
-    let sequence = match event.sequence {
-        Some(sequence) if sequence > 0 => sequence,
-        Some(_) => return Err("sequence must be greater than zero".to_string()),
-        None => next_sequence(&storage.connection, &task_id).map_err(|error| error.to_string())?,
-    };
-    let payload_json = event
-        .payload
-        .map(|payload| serde_json::to_string(&payload).unwrap_or_else(|_| "null".to_string()));
-
+    if matches!(event.sequence, Some(sequence) if sequence <= 0) {
+        return Err("sequence must be greater than zero".to_string());
+    }
     storage
-        .connection
-        .execute(
-            r#"
-            INSERT INTO task_events(task_id, sequence, event_type, summary, payload_json)
-            VALUES (?1, ?2, ?3, ?4, ?5)
-            "#,
-            params![task_id, sequence, event_type, summary, payload_json],
-        )
-        .map_err(|error| error.to_string())?;
-
-    get_task_event(&storage.connection, &task_id, sequence).map_err(|error| error.to_string())
+        .repository()
+        .tasks()
+        .record_event(TaskEventInsert {
+            task_id,
+            sequence: event.sequence,
+            event_type,
+            summary,
+            payload: event.payload,
+        })
+        .map_err(|error| error.to_string())
 }
 
 pub fn get_task_by_id(
@@ -94,7 +84,11 @@ pub fn get_task_by_id(
     task_id: &str,
 ) -> Result<TaskRecord, String> {
     let storage = storage::connect(default_root, root).map_err(|error| error.to_string())?;
-    get_task(&storage.connection, task_id).map_err(|error| error.to_string())
+    storage
+        .repository()
+        .tasks()
+        .get(task_id)
+        .map_err(|error| error.to_string())
 }
 
 pub fn mark_task_running(
@@ -104,25 +98,16 @@ pub fn mark_task_running(
 ) -> Result<TaskRecord, String> {
     let storage = storage::connect(default_root, root).map_err(|error| error.to_string())?;
     let task_id = clean_required("task_id", task_id)?;
-    let updated = storage
-        .connection
-        .execute(
-            r#"
-            UPDATE tasks
-            SET status = 'running',
-                started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?1 AND status IN ('claimed', 'running')
-            "#,
-            [&task_id],
-        )
+    let tasks = storage.repository().tasks();
+    let updated = tasks
+        .mark_running(&task_id)
         .map_err(|error| error.to_string())?;
     if updated == 0 {
         return Err(format!(
             "task `{task_id}` must be claimed before it can run"
         ));
     }
-    get_task(&storage.connection, &task_id).map_err(|error| error.to_string())
+    tasks.get(&task_id).map_err(|error| error.to_string())
 }
 
 pub fn finish_task(
@@ -134,25 +119,16 @@ pub fn finish_task(
     let storage = storage::connect(default_root, root).map_err(|error| error.to_string())?;
     let task_id = clean_required("task_id", task_id)?;
     let status = clean_terminal_status(status)?;
-    let updated = storage
-        .connection
-        .execute(
-            r#"
-            UPDATE tasks
-            SET status = ?2,
-                finished_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?1 AND status IN ('claimed', 'running')
-            "#,
-            params![task_id, status],
-        )
+    let tasks = storage.repository().tasks();
+    let updated = tasks
+        .finish(&task_id, &status)
         .map_err(|error| error.to_string())?;
     if updated == 0 {
         return Err(format!(
             "task `{task_id}` must be claimed or running before it can finish"
         ));
     }
-    get_task(&storage.connection, &task_id).map_err(|error| error.to_string())
+    tasks.get(&task_id).map_err(|error| error.to_string())
 }
 
 pub fn inspect_task(
@@ -170,7 +146,7 @@ pub fn inspect_task(
             return ActionResult::failed(action, "Could not open task storage.", error.to_string())
         }
     };
-    match get_task(&storage.connection, task_id) {
+    match storage.repository().tasks().get(task_id) {
         Ok(task) => ActionResult::completed(
             action,
             format!("Task `{}` inspected.", task.id),
@@ -340,7 +316,7 @@ pub fn inspect_task_events(
     };
     let limit = bounded_limit(params.limit);
 
-    let events = match query_task_events(&storage.connection, task_id, limit) {
+    let events = match storage.repository().tasks().list_events(task_id, limit) {
         Ok(events) => events,
         Err(error) => {
             return ActionResult::failed(
@@ -372,40 +348,6 @@ pub fn inspect_task_events(
     } else {
         ActionResult::completed(action, format!("Returned {returned} task event(s)."), data)
     }
-}
-
-fn query_task_events(
-    connection: &rusqlite::Connection,
-    task_id: &str,
-    limit: usize,
-) -> rusqlite::Result<Vec<TaskEventRecord>> {
-    let mut statement = connection.prepare(
-        r#"
-        SELECT task_id, sequence, event_type, summary, payload_json, created_at
-        FROM task_events
-        WHERE task_id = ?1
-        ORDER BY sequence ASC, id ASC
-        LIMIT ?2
-        "#,
-    )?;
-    let rows = statement.query_map(params![task_id, limit], row_to_task_event)?;
-    rows.collect()
-}
-
-fn get_task_event(
-    connection: &rusqlite::Connection,
-    task_id: &str,
-    sequence: i64,
-) -> rusqlite::Result<TaskEventRecord> {
-    connection.query_row(
-        r#"
-        SELECT task_id, sequence, event_type, summary, payload_json, created_at
-        FROM task_events
-        WHERE task_id = ?1 AND sequence = ?2
-        "#,
-        params![task_id, sequence],
-        row_to_task_event,
-    )
 }
 
 fn get_task(connection: &rusqlite::Connection, id: &str) -> rusqlite::Result<TaskRecord> {
@@ -444,22 +386,6 @@ fn select_next_queued_task(
         .optional()
 }
 
-fn next_task_id(
-    connection: &rusqlite::Connection,
-    source_item_id: &str,
-) -> rusqlite::Result<String> {
-    let existing: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE source_item_id = ?1",
-        [source_item_id],
-        |row| row.get(0),
-    )?;
-    Ok(format!(
-        "{}-T{:03}",
-        safe_id_prefix(source_item_id),
-        existing + 1
-    ))
-}
-
 fn next_sequence(connection: &rusqlite::Connection, task_id: &str) -> rusqlite::Result<i64> {
     let current: Option<i64> = connection
         .query_row(
@@ -470,18 +396,6 @@ fn next_sequence(connection: &rusqlite::Connection, task_id: &str) -> rusqlite::
         .optional()?
         .flatten();
     Ok(current.unwrap_or(0) + 1)
-}
-
-fn row_to_task_event(row: &Row<'_>) -> rusqlite::Result<TaskEventRecord> {
-    let payload_json: Option<String> = row.get("payload_json")?;
-    Ok(TaskEventRecord {
-        task_id: row.get("task_id")?,
-        sequence: row.get("sequence")?,
-        event_type: row.get("event_type")?,
-        summary: row.get("summary")?,
-        payload: payload_json.and_then(|raw| serde_json::from_str(&raw).ok()),
-        created_at: row.get("created_at")?,
-    })
 }
 
 fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
@@ -535,27 +449,6 @@ fn clean_terminal_status(value: &str) -> Result<String, String> {
     match value.trim() {
         "completed" | "failed" | "cancelled" => Ok(value.trim().to_string()),
         _ => Err("terminal task status must be completed, failed, or cancelled".to_string()),
-    }
-}
-
-fn safe_id_prefix(value: &str) -> String {
-    let prefix: String = value
-        .chars()
-        .filter_map(|character| {
-            if character.is_ascii_alphanumeric() {
-                Some(character.to_ascii_uppercase())
-            } else if character == '-' || character == '_' {
-                Some('-')
-            } else {
-                None
-            }
-        })
-        .collect();
-    let prefix = prefix.trim_matches('-');
-    if prefix.is_empty() {
-        "TASK".to_string()
-    } else {
-        prefix.to_string()
     }
 }
 
