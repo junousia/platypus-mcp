@@ -49,8 +49,8 @@ chat session, while this server exposes deterministic project-management tools.
   event mapping
 - local SQLite storage foundation under `.platy/platypus.sqlite3` for task
   events, findings, and schema metadata
-- worker execution remains external; the Rust MCP server does not run arbitrary
-  shell commands or harnesses
+- worker execution is opt-in through explicit Codex or Claude harness adapter
+  configuration; the Rust MCP server does not run arbitrary shell commands
 
 ## Structure
 

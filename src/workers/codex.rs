@@ -1,4 +1,7 @@
-use super::{WorkerAdapter, WorkerEvent, WorkerExitStatus, WorkerRequest, WorkerResult};
+use super::{
+    run_harness_process, WorkerAdapter, WorkerEvent, WorkerExitStatus, WorkerRequest, WorkerResult,
+    HARNESS_TIMEOUT,
+};
 use serde_json::Value;
 use std::{
     env, fmt, fs,
@@ -61,15 +64,74 @@ impl WorkerAdapter for CodexWorkerAdapter {
                 "task_id": request.task_id
             })),
         });
-        WorkerResult {
-            status: WorkerExitStatus::Failed,
-            summary: "Codex live execution is not implemented in the Rust MCP adapter yet."
-                .to_string(),
-            changed_files: Vec::new(),
-            verification_status: Some("not_run".to_string()),
-            findings: Vec::new(),
+        match run_harness_process(
+            &self.executable_path,
+            &self.config.args,
+            &request.workspace_path,
+            &request.brief,
+            HARNESS_TIMEOUT,
+        ) {
+            Ok(output) => {
+                let mut last_summary = None;
+                for event in map_output_events(&output.stdout) {
+                    last_summary = Some(event.summary.clone());
+                    emit_event(event);
+                }
+                if !output.stderr.trim().is_empty() {
+                    emit_event(WorkerEvent {
+                        event_type: "worker_stderr".to_string(),
+                        summary: output.stderr.trim().to_string(),
+                        payload: None,
+                    });
+                }
+                let status = if output.success {
+                    WorkerExitStatus::Completed
+                } else {
+                    WorkerExitStatus::Failed
+                };
+                WorkerResult {
+                    status,
+                    summary: last_summary.unwrap_or_else(|| {
+                        if output.success {
+                            "Codex harness completed.".to_string()
+                        } else {
+                            "Codex harness failed.".to_string()
+                        }
+                    }),
+                    changed_files: Vec::new(),
+                    verification_status: Some("not_run".to_string()),
+                    findings: Vec::new(),
+                }
+            }
+            Err(error) => WorkerResult {
+                status: WorkerExitStatus::Failed,
+                summary: error,
+                changed_files: Vec::new(),
+                verification_status: Some("not_run".to_string()),
+                findings: Vec::new(),
+            },
         }
     }
+}
+
+fn map_output_events(output: &str) -> Vec<WorkerEvent> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            match serde_json::from_str::<Value>(line) {
+                Ok(value) => map_app_server_event(&value),
+                Err(_) => Some(WorkerEvent {
+                    event_type: "worker_message".to_string(),
+                    summary: line.to_string(),
+                    payload: None,
+                }),
+            }
+        })
+        .collect()
 }
 
 pub fn map_app_server_event(value: &Value) -> Option<WorkerEvent> {
@@ -199,11 +261,16 @@ mod tests {
         assert_eq!(message.event_type, "worker_message");
     }
 
+    #[cfg(unix)]
     #[test]
-    fn live_run_fails_closed_until_implemented() {
-        let current_exe = std::env::current_exe().expect("current exe");
+    fn live_run_maps_fixture_output() {
+        let fixture = executable_fixture(
+            r#"#!/bin/sh
+printf '%s\n' '{"type":"agent_message","message":"Implemented."}'
+"#,
+        );
         let adapter = CodexWorkerAdapter::new(CodexAdapterConfig {
-            executable: current_exe.display().to_string(),
+            executable: fixture.display().to_string(),
             args: Vec::new(),
         })
         .expect("adapter");
@@ -213,13 +280,29 @@ mod tests {
                 task_id: "task-1".to_string(),
                 item_id: "PROJ-001".to_string(),
                 title: "Test".to_string(),
-                workspace_path: "/tmp/work".to_string(),
+                workspace_path: fixture.parent().unwrap().display().to_string(),
                 brief: "brief".to_string(),
             },
             &mut |event| events.push(event),
         );
 
-        assert_eq!(result.status, WorkerExitStatus::Failed);
+        assert_eq!(result.status, WorkerExitStatus::Completed);
+        assert_eq!(result.summary, "Implemented.");
         assert_eq!(events[0].event_type, "worker_configured");
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == "worker_message"));
+    }
+
+    #[cfg(unix)]
+    fn executable_fixture(script: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().expect("temp dir").keep();
+        let path = dir.join("fixture.sh");
+        std::fs::write(&path, script).expect("script");
+        let mut permissions = std::fs::metadata(&path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions).expect("chmod");
+        path
     }
 }

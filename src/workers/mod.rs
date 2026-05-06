@@ -2,6 +2,15 @@ pub mod claude;
 pub mod codex;
 
 use serde_json::Value;
+use std::{
+    io::Write,
+    path::Path,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+pub(crate) const HARNESS_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone)]
 pub struct WorkerRequest {
@@ -55,6 +64,60 @@ pub trait WorkerAdapter {
     fn name(&self) -> &str;
 
     fn run(&self, request: WorkerRequest, emit_event: &mut dyn FnMut(WorkerEvent)) -> WorkerResult;
+}
+
+pub(crate) struct HarnessOutput {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+pub(crate) fn run_harness_process(
+    executable: &Path,
+    args: &[String],
+    cwd: &str,
+    stdin: &str,
+    timeout: Duration,
+) -> Result<HarnessOutput, String> {
+    let mut child = Command::new(executable)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to start worker harness: {error}"))?;
+
+    if let Some(mut child_stdin) = child.stdin.take() {
+        child_stdin
+            .write_all(stdin.as_bytes())
+            .map_err(|error| format!("failed to write worker brief: {error}"))?;
+    }
+
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| format!("failed to collect worker output: {error}"))?;
+                return Ok(HarnessOutput {
+                    success: output.status.success(),
+                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                });
+            }
+            Ok(None) => {
+                if started.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("worker harness timed out".to_string());
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(format!("failed to poll worker harness: {error}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
