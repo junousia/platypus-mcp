@@ -1,19 +1,20 @@
 use crate::{
-    approvals, backlog, bundle, dispatch, events, findings,
+    approvals, backlog, bundle, dispatch, events, evidence, findings,
     models::{
         ActionResult, ApprovalListData, ApprovalListParams, ApprovalRespondParams,
         ApprovalResponseData, ClaimNextTaskParams, CreateBacklogItemParams, CreatedBacklogItemData,
         DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
-        EventsReplayData, EventsReplayParams, FindingDispositionData, FindingListData,
-        FindingRecordData, FindingValidationData, GenerateTaskBundleParams, InitProjectParams,
-        InspectTaskEventsParams, InspectTaskParams, LimitParams, ListFindingsParams, PingData,
-        PingParams, ProjectScaffoldData, ProjectStatusData, RecordFindingParams, RootParams,
-        RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams, TaskBundleData,
-        TaskEventListData, TaskRecordData, UnsupportedData, UpdateFindingDispositionParams,
-        ValidateBacklogParams, ValidateFindingsParams, WorktreeCreateParams, WorktreeData,
-        WorktreeStatusParams,
+        EventsReplayData, EventsReplayParams, EvidenceListData, EvidenceRecordData,
+        FindingDispositionData, FindingListData, FindingRecordData, FindingValidationData,
+        GenerateTaskBundleParams, InitProjectParams, InspectTaskEventsParams, InspectTaskParams,
+        LimitParams, ListEvidenceParams, ListFindingsParams, PingData, PingParams,
+        ProjectScaffoldData, ProjectStatusData, ReconcileParams, ReconciliationData,
+        RecordEvidenceParams, RecordFindingParams, RootParams, RunnerPrepareParams,
+        RunnerReportData, SendWorkerGuidanceParams, TaskBundleData, TaskEventListData,
+        TaskRecordData, UnsupportedData, UpdateFindingDispositionParams, ValidateBacklogParams,
+        ValidateFindingsParams, WorktreeCreateParams, WorktreeData, WorktreeStatusParams,
     },
-    project, runner, tasks, workspace,
+    project, reconcile, runner, tasks, workspace,
 };
 use anyhow::Result;
 use rmcp::{
@@ -464,6 +465,63 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Record Evidence",
+        description = "Record one durable evidence item for a task, finding, or backlog item.",
+        annotations(
+            title = "Record Evidence",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn record_evidence(
+        &self,
+        Parameters(params): Parameters<RecordEvidenceParams>,
+    ) -> Json<ActionResult<EvidenceRecordData>> {
+        Json(evidence::record_evidence(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "List Evidence",
+        description = "List durable evidence records with optional filters.",
+        annotations(
+            title = "List Evidence",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn list_evidence(
+        &self,
+        Parameters(params): Parameters<ListEvidenceParams>,
+    ) -> Json<ActionResult<EvidenceListData>> {
+        Json(evidence::list_evidence(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Reconcile Project",
+        description = "Compare backlog closure, task state, findings, and evidence for gaps.",
+        annotations(
+            title = "Reconcile Project",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn reconcile_project(
+        &self,
+        Parameters(params): Parameters<ReconcileParams>,
+    ) -> Json<ActionResult<ReconciliationData>> {
+        Json(reconcile::reconcile_project(&self.default_root, params))
+    }
+
+    #[tool(
         title = "Send Worker Guidance",
         description = "Send guidance to a running worker task.",
         annotations(
@@ -623,6 +681,9 @@ mod tests {
             "approval_list",
             "approval_respond",
             "events_replay",
+            "record_evidence",
+            "list_evidence",
+            "reconcile_project",
             "send_worker_guidance",
             "record_finding",
             "list_findings",
@@ -645,6 +706,7 @@ mod tests {
             "worktree_create",
             "runner_prepare_next",
             "approval_respond",
+            "record_evidence",
             "send_worker_guidance",
             "record_finding",
             "update_finding_disposition",

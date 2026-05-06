@@ -12,6 +12,8 @@ pub use draft::draft_backlog_items;
 pub use status::{inspect_status, list_backlog};
 pub use validate::validate_backlog;
 
+pub(crate) use closure::closed_item_ids;
+
 #[cfg(test)]
 mod tests {
     use super::*;

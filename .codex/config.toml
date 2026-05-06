@@ -70,3 +70,12 @@ approval_mode = "approve"
 
 [mcp_servers."platypus-rs".tools.events_replay]
 approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.record_evidence]
+approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.list_evidence]
+approval_mode = "approve"
+
+[mcp_servers."platypus-rs".tools.reconcile_project]
+approval_mode = "approve"

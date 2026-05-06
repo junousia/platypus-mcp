@@ -6,7 +6,7 @@ use std::{
 
 const CLOSE_TRAILER: &str = "Platypus-Closes";
 
-pub(super) fn closed_item_ids(root: &Path) -> BTreeSet<String> {
+pub(crate) fn closed_item_ids(root: &Path) -> BTreeSet<String> {
     let trailer_format = format!("--format=%(trailers:key={CLOSE_TRAILER},valueonly)");
     let output = Command::new("git")
         .args(["log", trailer_format.as_str(), "--all"])

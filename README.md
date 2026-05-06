@@ -32,6 +32,10 @@ chat session, while this server exposes deterministic project-management tools.
 - `approval_list` / `approval_respond`: inspect and resolve durable approval
   requests
 - `events_replay`: replay bounded project, task, approval, and worker events
+- `record_evidence` / `list_evidence`: store and inspect audit evidence for
+  tasks, findings, and backlog items
+- `reconcile_project`: compare Git trailer closure, task state, findings, and
+  evidence for required gaps
 - worker adapter boundary with a fake adapter test path for runner integration
 - Codex adapter skeleton for typed configuration validation and safe app-server
   event mapping

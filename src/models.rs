@@ -143,6 +143,34 @@ pub struct EventsReplayParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecordEvidenceParams {
+    pub root: Option<String>,
+    pub id: Option<String>,
+    pub source_item_id: Option<String>,
+    pub source_task_id: Option<String>,
+    pub kind: String,
+    pub summary: String,
+    #[serde(default)]
+    pub refs: Vec<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListEvidenceParams {
+    pub root: Option<String>,
+    pub source_item_id: Option<String>,
+    pub source_task_id: Option<String>,
+    pub kind: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReconcileParams {
+    pub root: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SendWorkerGuidanceParams {
     pub root: Option<String>,
     pub task_id: String,
@@ -553,6 +581,47 @@ pub struct EventsReplayData {
     pub root: String,
     pub events: Vec<EventRecord>,
     pub returned: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct EvidenceRecord {
+    pub id: String,
+    pub source_item_id: Option<String>,
+    pub source_task_id: Option<String>,
+    pub kind: String,
+    pub summary: String,
+    pub refs: Vec<String>,
+    pub metadata: BTreeMap<String, Value>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct EvidenceRecordData {
+    pub evidence: EvidenceRecord,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct EvidenceListData {
+    pub root: String,
+    pub evidence: Vec<EvidenceRecord>,
+    pub returned: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ReconciliationData {
+    pub root: String,
+    pub ok: bool,
+    pub closed_item_ids: Vec<String>,
+    pub completed_tasks: usize,
+    pub unresolved_required_findings: usize,
+    pub gaps: Vec<ReconciliationGap>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ReconciliationGap {
+    pub kind: String,
+    pub summary: String,
+    pub next_action: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
