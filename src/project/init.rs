@@ -132,7 +132,6 @@ fn scaffold_files(project_name: &str) -> Vec<(&'static str, String)> {
         ("platy.yaml", project_config(project_name)),
         ("WORKFLOW.md", workflow_doc()),
         ("backlog/README.md", backlog_readme()),
-        ("backlog/index.md", backlog_index()),
         ("backlog/epics/general.md", general_epic()),
         ("backlog/templates/item.md", item_template()),
         ("backlog/templates/epic.md", epic_template()),
@@ -152,11 +151,7 @@ fn workflow_doc() -> String {
 }
 
 fn backlog_readme() -> String {
-    "# Backlog\n\nStructured Platypus backlog items live in `backlog/items/`.\n".to_string()
-}
-
-fn backlog_index() -> String {
-    "# Backlog Index\n\n## Active Queue\n\nNo backlog items yet.\n".to_string()
+    "# Backlog\n\nStructured Platypus backlog items live in `backlog/items/`.\nUse `list_backlog` and `next_safe_action` to compute the current queue from item metadata and Git closure trailers.\n".to_string()
 }
 
 fn general_epic() -> String {
@@ -206,6 +201,7 @@ mod tests {
         assert!(config.contains("workflow:"));
         assert!(config.contains("merge_style: merge_commit"));
         assert!(temp.path().join("backlog/items").is_dir());
+        assert!(!temp.path().join("backlog/index.md").exists());
         assert!(temp.path().join("backlog/epics/general.md").is_file());
     }
 
