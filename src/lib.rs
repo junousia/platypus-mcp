@@ -19,4 +19,6 @@ pub mod tasks;
 pub mod workers;
 pub mod workspace;
 
+mod git_trailers;
+
 pub use server::{serve_stdio, PlatypusMcp};

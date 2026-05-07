@@ -18,7 +18,7 @@ pub(crate) use closure::closed_item_ids;
 mod tests {
     use super::*;
     use crate::models::{ActionStatus, CreateBacklogItemParams, DraftBacklogItemsParams};
-    use std::{fs, path::Path};
+    use std::{fs, path::Path, process::Command};
     use tempfile::TempDir;
 
     #[test]
@@ -36,6 +36,39 @@ mod tests {
         let data = listed.data.unwrap();
         assert_eq!(data.candidates.len(), 1);
         assert_eq!(data.candidates[0].item_id, "PROJ-001");
+    }
+
+    #[test]
+    fn list_backlog_excludes_items_closed_by_split_trailer_paragraphs() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "First task", "P1", &[]);
+        write_item(temp.path(), "PROJ-002", "Second task", "P0", &["PROJ-001"]);
+        git(temp.path(), &["init"]);
+        git(temp.path(), &["config", "user.name", "Platypus Test"]);
+        git(
+            temp.path(),
+            &["config", "user.email", "platypus@example.invalid"],
+        );
+        git(temp.path(), &["add", "--all"]);
+        git(
+            temp.path(),
+            &[
+                "commit",
+                "-m",
+                "Complete first task",
+                "-m",
+                "Platypus-Closes: PROJ-001",
+                "-m",
+                "Platypus-Verification: make check",
+            ],
+        );
+
+        let root = root_arg(temp.path());
+        let listed = list_backlog(temp.path(), Some(root.as_str()), Some(10));
+        let data = listed.data.unwrap();
+
+        assert_eq!(data.candidates.len(), 1);
+        assert_eq!(data.candidates[0].item_id, "PROJ-002");
     }
 
     #[test]
@@ -122,5 +155,20 @@ mod tests {
 
     fn root_arg(root: &Path) -> String {
         root.to_string_lossy().into_owned()
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("git command");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
