@@ -12,6 +12,23 @@ Platypus tools return typed JSON with a shared envelope:
 Hosts should prefer `next_safe_action` when deciding what to do next. The
 lower-level tools remain available for precise control and testing.
 
+## Host Guidance Resources And Prompts
+
+Before using lifecycle tools, MCP hosts should list resources/prompts and read
+the Platypus guidance that matches the current activity. The guidance is
+deterministic and references the current public tool names.
+
+- Resource `platypus://guidance/workflow` / prompt `platypus-workflow`
+- Resource `platypus://guidance/project-status` / prompt
+  `platypus-project-status`
+- Resource `platypus://guidance/backlog-authoring` / prompt
+  `platypus-backlog-authoring`
+- Resource `platypus://guidance/worker-handoff` / prompt
+  `platypus-worker-handoff`
+- Resource `platypus://guidance/integration-review` / prompt
+  `platypus-integration-review`
+- Resource `platypus://guidance/recovery` / prompt `platypus-recovery`
+
 ## Recommended Host Flow
 
 1. Bootstrap and inspect: `init_project`, `doctor_snapshot`,

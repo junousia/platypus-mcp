@@ -1,5 +1,8 @@
 use rmcp::{
-    model::{CallToolRequestParams, JsonObject},
+    model::{
+        CallToolRequestParams, GetPromptRequestParams, JsonObject, PromptMessageContent,
+        ReadResourceRequestParams, ResourceContents,
+    },
     transport::TokioChildProcess,
     ServiceExt,
 };
@@ -78,6 +81,73 @@ async fn stdio_server_calls_structured_ping_tool() -> anyhow::Result<()> {
     assert_eq!(response["action"], "ping");
     assert_eq!(response["status"], "completed");
     assert_eq!(response["data"]["echo"], "hello");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Result<()> {
+    let client = start_client(None).await?;
+
+    let resources = client.list_all_resources().await?;
+    let resource_uris: Vec<&str> = resources
+        .iter()
+        .map(|resource| resource.uri.as_str())
+        .collect();
+
+    assert!(resource_uris.contains(&"platypus://guidance/workflow"));
+    assert!(resource_uris.contains(&"platypus://guidance/project-status"));
+    assert!(resource_uris.contains(&"platypus://guidance/backlog-authoring"));
+    assert!(resource_uris.contains(&"platypus://guidance/worker-handoff"));
+    assert!(resource_uris.contains(&"platypus://guidance/integration-review"));
+    assert!(resource_uris.contains(&"platypus://guidance/recovery"));
+
+    let workflow = client
+        .read_resource(ReadResourceRequestParams {
+            meta: None,
+            uri: "platypus://guidance/workflow".to_string(),
+        })
+        .await?;
+    let text = resource_text(&workflow.contents[0]);
+
+    assert!(text.contains("next_safe_action"));
+    assert!(text.contains("prepare_worker_handoff"));
+    assert!(text.contains("integrate_worker_result"));
+    assert!(text.contains("reconcile_project"));
+    assert!(text.contains("verification evidence"));
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_lists_and_returns_host_guidance_prompts() -> anyhow::Result<()> {
+    let client = start_client(None).await?;
+
+    let prompts = client.list_all_prompts().await?;
+    let prompt_names: Vec<&str> = prompts.iter().map(|prompt| prompt.name.as_str()).collect();
+
+    assert!(prompt_names.contains(&"platypus-workflow"));
+    assert!(prompt_names.contains(&"platypus-project-status"));
+    assert!(prompt_names.contains(&"platypus-backlog-authoring"));
+    assert!(prompt_names.contains(&"platypus-worker-handoff"));
+    assert!(prompt_names.contains(&"platypus-integration-review"));
+    assert!(prompt_names.contains(&"platypus-recovery"));
+
+    let prompt = client
+        .get_prompt(GetPromptRequestParams {
+            meta: None,
+            name: "platypus-integration-review".to_string(),
+            arguments: None,
+        })
+        .await?;
+    let text = prompt_text(&prompt.messages[0]);
+
+    assert!(text.contains("inspect_worktree_changes"));
+    assert!(text.contains("record_verification_evidence"));
+    assert!(text.contains("integrate_worker_result"));
+    assert!(text.contains("Platypus-Closes"));
 
     client.cancel().await?;
     Ok(())
@@ -1126,6 +1196,20 @@ fn string_at(value: &Value, path: &[&str], label: &str) -> String {
         .as_str()
         .unwrap_or_else(|| panic!("{label} missing at {path:?}: {value:#}"))
         .to_string()
+}
+
+fn resource_text(contents: &ResourceContents) -> &str {
+    match contents {
+        ResourceContents::TextResourceContents { text, .. } => text,
+        ResourceContents::BlobResourceContents { .. } => panic!("expected text resource"),
+    }
+}
+
+fn prompt_text(message: &rmcp::model::PromptMessage) -> &str {
+    match &message.content {
+        PromptMessageContent::Text { text } => text,
+        _ => panic!("expected text prompt"),
+    }
 }
 
 fn project_fixture() -> TempDir {
