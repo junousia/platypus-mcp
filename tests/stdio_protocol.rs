@@ -4,7 +4,10 @@ use rmcp::{
     ServiceExt,
 };
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use tempfile::TempDir;
 use tokio::process::Command;
 
@@ -830,6 +833,217 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
 }
 
 #[tokio::test]
+async fn stdio_server_runs_full_lifecycle_smoke_with_fake_worker() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let initialized = call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "Lifecycle Smoke" }),
+    )
+    .await?;
+    assert_stage_status("init_project", &initialized, "completed");
+    assert!(project.path().join("backlog/items").is_dir());
+
+    git(project.path(), &["init"]);
+    git(project.path(), &["config", "user.name", "Platypus Test"]);
+    git(
+        project.path(),
+        &["config", "user.email", "platypus@example.invalid"],
+    );
+
+    let created = call_tool_json(
+        &client,
+        "create_backlog_item",
+        json!({
+            "id": "PROJ-001",
+            "title": "Create smoke output",
+            "priority": "P1",
+            "type": "feature",
+            "area": "verification",
+            "epic": "general",
+            "suggested_worker": "coder",
+            "owned_surfaces": ["README.md"],
+            "goal": "Create a visible smoke-test output file.",
+            "implementation_contract": "Only write README.md in the assigned worktree.",
+            "acceptance": ["README.md exists with smoke-test content."]
+        }),
+    )
+    .await?;
+    assert_stage_status("create_backlog_item", &created, "completed");
+
+    git(project.path(), &["add", "--all"]);
+    git(
+        project.path(),
+        &["commit", "-m", "Initialize smoke project"],
+    );
+
+    let initial = call_tool_json(&client, "next_safe_action", json!({})).await?;
+    assert_eq!(
+        initial["data"]["recommended_tool"], "dispatch_next_work",
+        "stage next_safe_action before dispatch: {initial:#}"
+    );
+
+    let dispatched = call_tool_json(&client, "dispatch_next_work", json!({})).await?;
+    assert_stage_status("dispatch_next_work", &dispatched, "completed");
+    let task_id = string_at(&dispatched, &["data", "task", "id"], "task id");
+
+    let prepared = call_tool_json(
+        &client,
+        "prepare_worker_handoff",
+        json!({
+            "task_id": task_id,
+            "worker": "coder",
+            "claimant": "stdio-smoke",
+            "verification_command": ["cargo", "test"]
+        }),
+    )
+    .await?;
+    assert_stage_status("prepare_worker_handoff", &prepared, "completed");
+    let assignment_id = string_at(&prepared, &["data", "assignment", "id"], "assignment id");
+    let worktree_path = PathBuf::from(string_at(
+        &prepared,
+        &["data", "assignment", "worktree_path"],
+        "worktree path",
+    ));
+
+    let started = call_tool_json(
+        &client,
+        "start_worker_task",
+        json!({
+            "assignment_id": assignment_id,
+            "worker_session": "fake-worker-stdio"
+        }),
+    )
+    .await?;
+    assert_stage_status("start_worker_task", &started, "completed");
+
+    fs::write(
+        worktree_path.join("README.md"),
+        "# Lifecycle Smoke\n\nFake worker completed the MCP lifecycle.\n",
+    )?;
+
+    let changed = call_tool_json(
+        &client,
+        "inspect_worktree_changes",
+        json!({ "task_id": task_id }),
+    )
+    .await?;
+    assert_stage_status("inspect_worktree_changes", &changed, "completed");
+    assert_eq!(changed["data"]["dirty"], true);
+
+    let progress = call_tool_json(
+        &client,
+        "record_worker_progress",
+        json!({
+            "assignment_id": assignment_id,
+            "event_type": "worker_progress",
+            "summary": "Fake worker wrote README.md."
+        }),
+    )
+    .await?;
+    assert_stage_status("record_worker_progress", &progress, "completed");
+
+    let completed = call_tool_json(
+        &client,
+        "complete_worker_task",
+        json!({
+            "assignment_id": assignment_id,
+            "status": "completed",
+            "summary": "README.md contains lifecycle smoke output.",
+            "changed_files": ["README.md"],
+            "verification_status": "passed"
+        }),
+    )
+    .await?;
+    assert_stage_status("complete_worker_task", &completed, "completed");
+
+    let verification = call_tool_json(
+        &client,
+        "record_verification_evidence",
+        json!({
+            "source_item_id": "PROJ-001",
+            "source_task_id": task_id,
+            "summary": "Fake worker lifecycle smoke verification passed.",
+            "refs": ["local:fake-worker"]
+        }),
+    )
+    .await?;
+    assert_stage_status("record_verification_evidence", &verification, "completed");
+
+    let integration_guidance = call_tool_json(&client, "next_safe_action", json!({})).await?;
+    assert_eq!(
+        integration_guidance["data"]["recommended_tool"], "integrate_worker_result",
+        "stage next_safe_action before integration: {integration_guidance:#}"
+    );
+
+    let integrated = call_tool_json(
+        &client,
+        "integrate_worker_result",
+        json!({ "task_id": task_id }),
+    )
+    .await?;
+    assert_stage_status("integrate_worker_result", &integrated, "completed");
+    let integration_commit = string_at(&integrated, &["data", "commit"], "integration commit");
+
+    assert_eq!(
+        fs::read_to_string(project.path().join("README.md"))?,
+        "# Lifecycle Smoke\n\nFake worker completed the MCP lifecycle.\n"
+    );
+    let commit_message = git_stdout(project.path(), &["show", "-s", "--format=%B", "HEAD"]);
+    assert!(commit_message.contains("Platypus-Closes: PROJ-001"));
+    assert!(commit_message
+        .contains("Platypus-Verification: Fake worker lifecycle smoke verification passed."));
+
+    let evidence = call_tool_json(
+        &client,
+        "list_evidence",
+        json!({
+            "source_item_id": "PROJ-001",
+            "source_task_id": task_id,
+            "kind": "commit"
+        }),
+    )
+    .await?;
+    assert_stage_status("list_evidence commit", &evidence, "completed");
+    assert_eq!(evidence["data"]["returned"], 1);
+    assert_eq!(
+        evidence["data"]["evidence"][0]["refs"][0],
+        format!("commit:{integration_commit}")
+    );
+
+    let reconciled = call_tool_json(&client, "reconcile_project", json!({})).await?;
+    assert_stage_status("reconcile_project", &reconciled, "completed");
+    assert_eq!(reconciled["data"]["ok"], true);
+    assert!(reconciled["data"]["gaps"]
+        .as_array()
+        .expect("gaps")
+        .is_empty());
+
+    let events = call_tool_json(
+        &client,
+        "inspect_task_events",
+        json!({ "task_id": task_id, "limit": 50 }),
+    )
+    .await?;
+    assert_stage_status("inspect_task_events", &events, "completed");
+    assert!(events["data"]["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .any(|event| event["event_type"] == "worker_result_integrated"));
+
+    let cleaned =
+        call_tool_json(&client, "worktree_cleanup", json!({ "task_id": task_id })).await?;
+    assert_stage_status("worktree_cleanup", &cleaned, "completed");
+    assert!(!worktree_path.exists());
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_skips_dispatch_when_backlog_has_no_runnable_items() -> anyhow::Result<()> {
     let project = TempDir::new()?;
     fs::write(project.path().join("platy.yaml"), "project: test\n")?;
@@ -876,6 +1090,42 @@ fn server_binary() -> PathBuf {
 
 fn json_args(value: Value) -> JsonObject {
     value.as_object().expect("JSON object").clone()
+}
+
+async fn call_tool_json(
+    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
+    name: &str,
+    arguments: Value,
+) -> anyhow::Result<Value> {
+    let result = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: name.to_string().into(),
+            arguments: Some(json_args(arguments)),
+            task: None,
+        })
+        .await?;
+    Ok(result
+        .structured_content
+        .unwrap_or_else(|| panic!("stage {name}: missing structured content")))
+}
+
+fn assert_stage_status(stage: &str, value: &Value, expected: &str) {
+    assert_eq!(
+        value["status"], expected,
+        "stage {stage}: expected status {expected}, got:\n{value:#}"
+    );
+}
+
+fn string_at(value: &Value, path: &[&str], label: &str) -> String {
+    let mut current = value;
+    for segment in path {
+        current = &current[*segment];
+    }
+    current
+        .as_str()
+        .unwrap_or_else(|| panic!("{label} missing at {path:?}: {value:#}"))
+        .to_string()
 }
 
 fn project_fixture() -> TempDir {
@@ -1016,4 +1266,20 @@ fn git(root: &std::path::Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn git_stdout(root: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .expect("git command");
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
