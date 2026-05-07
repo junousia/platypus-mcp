@@ -80,6 +80,12 @@ future worker attempts belongs in `.platy/platypus.sqlite3`.
 make check
 ```
 
+List available developer workflows:
+
+```bash
+make help
+```
+
 ## Run
 
 ```bash
@@ -89,7 +95,7 @@ make run
 Run the local preparation runner:
 
 ```bash
-cargo run -- runner --max-tasks 1
+make runner
 ```
 
 Inspect the current workflow integration policy:
