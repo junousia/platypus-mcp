@@ -90,6 +90,16 @@ pub fn next_safe_action(
             ],
         );
     }
+    if let Ok(Some(task)) = completed_task_without_integration(&storage.connection) {
+        return completed(
+            action,
+            &root,
+            "integrate_worker_result",
+            format!("Completed task `{}` has not been integrated.", task.id),
+            "Integrate the completed verified worker result before reconciliation.",
+            [("root", root.as_str()), ("task_id", task.id.as_str())],
+        );
+    }
 
     let backlog = backlog::list_backlog(default_root, Some(root.as_str()), Some(1));
     if let ActionResult {
@@ -194,6 +204,42 @@ fn completed_task_without_verification(
             "#,
             [],
             row_to_task_hint,
+        )
+        .optional()
+}
+
+fn completed_task_without_integration(
+    connection: &rusqlite::Connection,
+) -> rusqlite::Result<Option<TaskHint>> {
+    connection
+        .query_row(
+            r#"
+            SELECT t.id, t.source_item_id, t.worker
+            FROM tasks t
+            WHERE t.status = 'completed'
+              AND EXISTS (
+                SELECT 1
+                FROM evidence verification
+                WHERE verification.source_task_id = t.id
+                  AND verification.kind = 'verification'
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM evidence integration
+                WHERE integration.source_task_id = t.id
+                  AND integration.kind = 'commit'
+              )
+            ORDER BY t.updated_at ASC, t.id ASC
+            LIMIT 1
+            "#,
+            [],
+            |row| {
+                Ok(TaskHint {
+                    id: row.get("id")?,
+                    source_item_id: row.get("source_item_id")?,
+                    worker: row.get("worker")?,
+                })
+            },
         )
         .optional()
 }

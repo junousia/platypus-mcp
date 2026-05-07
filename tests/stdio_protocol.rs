@@ -779,7 +779,7 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
             name: "record_verification_evidence".into(),
             arguments: Some(json_args(json!({
                 "source_item_id": "PROJ-001",
-                "source_task_id": task_id,
+                "source_task_id": task_id.clone(),
                 "summary": "make check was not configured for this smoke fixture.",
                 "refs": ["task-events"]
             }))),
@@ -791,6 +791,23 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
     assert_eq!(evidence["action"], "record_verification_evidence");
     assert_eq!(evidence["data"]["evidence"]["kind"], "verification");
 
+    let integration_guidance = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "next_safe_action".into(),
+            arguments: Some(JsonObject::new()),
+            task: None,
+        })
+        .await?;
+    let integration_guidance = integration_guidance
+        .structured_content
+        .expect("integration guidance");
+    assert_eq!(
+        integration_guidance["data"]["recommended_tool"],
+        "integrate_worker_result"
+    );
+    assert_eq!(integration_guidance["data"]["params"]["task_id"], task_id);
+
     let reconciled = client
         .call_tool(CallToolRequestParams {
             meta: None,
@@ -800,8 +817,13 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
         })
         .await?;
     let reconciled = reconciled.structured_content.expect("reconcile content");
-    assert_eq!(reconciled["status"], "completed");
-    assert_eq!(reconciled["data"]["ok"], true);
+    assert_eq!(reconciled["status"], "failed");
+    assert_eq!(reconciled["data"]["ok"], false);
+    assert!(reconciled["data"]["gaps"]
+        .as_array()
+        .expect("gaps")
+        .iter()
+        .any(|gap| gap["kind"] == "missing_integration_evidence"));
 
     client.cancel().await?;
     Ok(())

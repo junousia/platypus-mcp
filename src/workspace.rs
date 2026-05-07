@@ -1,5 +1,5 @@
 use crate::{
-    config, evidence,
+    config, events, evidence,
     models::{
         ActionResult, ActionStatus, IntegrateWorkerResultParams, RecordEvidenceParams,
         WorkerResultIntegrationData, WorktreeCleanupData, WorktreeCleanupParams,
@@ -535,7 +535,7 @@ pub fn integrate_worker_result(
     ) {
         return ActionResult::failed(action, "Could not record integration event.", error);
     }
-    let _ = evidence::record_evidence(
+    let evidence_result = evidence::record_evidence(
         default_root,
         RecordEvidenceParams {
             root: Some(root_string.clone()),
@@ -557,6 +557,37 @@ pub fn integrate_worker_result(
             ]),
         },
     );
+    if !matches!(evidence_result.status, ActionStatus::Completed) {
+        return ActionResult::failed(
+            action,
+            "Worker result was integrated but commit evidence could not be recorded.",
+            evidence_result
+                .error
+                .unwrap_or_else(|| evidence_result.summary),
+        );
+    }
+    if let Err(error) = events::record_event(
+        default_root,
+        Some(root_string.as_str()),
+        events::NewEvent {
+            event_type: "worker_result_integrated".to_string(),
+            scope: "project".to_string(),
+            task_id: Some(task_id.clone()),
+            summary: format!("Integrated worker result for task `{task_id}`."),
+            payload: Some(serde_json::json!({
+                "branch": worktree.branch.clone(),
+                "commit": commit.clone(),
+                "merge_style": config.merge_style.clone(),
+                "source_item_id": worktree.source_item_id.clone()
+            })),
+        },
+    ) {
+        return ActionResult::failed(
+            action,
+            "Worker result was integrated but project event could not be recorded.",
+            error,
+        );
+    }
 
     ActionResult::completed(
         action,
@@ -682,9 +713,15 @@ fn integrate_squash(
 
 fn commit_with_message(root: &Path, subject: &str, body_lines: &[String]) -> Result<(), String> {
     let mut args = vec!["commit".to_string(), "-m".to_string(), one_line(subject)];
-    for line in body_lines {
+    if !body_lines.is_empty() {
         args.push("-m".to_string());
-        args.push(one_line(line));
+        args.push(
+            body_lines
+                .iter()
+                .map(|line| one_line(line))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
     }
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
     run_git(root, &arg_refs).map(|_| ())
@@ -1097,8 +1134,11 @@ fn parse_status_files(status: &str) -> Vec<WorktreeDiffFile> {
 mod tests {
     use super::*;
     use crate::{
-        evidence::record_evidence,
-        models::{ClaimNextTaskParams, RecordEvidenceParams},
+        events::events_replay,
+        evidence::{list_evidence, record_evidence},
+        models::{
+            ClaimNextTaskParams, EventsReplayParams, ListEvidenceParams, RecordEvidenceParams,
+        },
         tasks::{create_task_record, inspect_task_events, NewTask},
     };
     use std::fs;
@@ -1383,6 +1423,38 @@ mod tests {
         let log = run_git(project.path(), &["log", "-1", "--pretty=%B"]).expect("log");
         assert!(log.contains("Platypus-Closes: PROJ-001"));
         assert!(log.contains("Platypus-Verification: make check passed"));
+        let evidence = list_evidence(
+            project.path(),
+            ListEvidenceParams {
+                root: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: Some(task_id.clone()),
+                kind: Some("commit".to_string()),
+                limit: None,
+            },
+        )
+        .data
+        .expect("evidence data");
+        assert_eq!(evidence.returned, 1);
+        assert!(evidence.evidence[0]
+            .refs
+            .iter()
+            .any(|reference| reference.starts_with("commit:")));
+        let events = events_replay(
+            project.path(),
+            EventsReplayParams {
+                root: None,
+                task_id: Some(task_id),
+                scope: Some("project".to_string()),
+                limit: None,
+            },
+        )
+        .data
+        .expect("events data");
+        assert!(events
+            .events
+            .iter()
+            .any(|event| event.event_type == "worker_result_integrated"));
     }
 
     #[test]
