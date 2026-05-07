@@ -1,5 +1,5 @@
 use crate::{
-    backlog,
+    backlog, git_trailers,
     models::{ActionResult, ReconcileParams, ReconciliationData, ReconciliationGap},
     storage,
 };
@@ -287,35 +287,11 @@ struct CommitTrailers {
 }
 
 fn commit_trailers(root: &Path, commit: &str) -> Result<CommitTrailers, String> {
-    let close_output = run_git(
-        root,
-        &[
-            "show",
-            "-s",
-            "--format=%(trailers:key=Platypus-Closes,valueonly)",
-            commit,
-        ],
-    )?;
-    let verification_output = run_git(
-        root,
-        &[
-            "show",
-            "-s",
-            "--format=%(trailers:key=Platypus-Verification,valueonly)",
-            commit,
-        ],
-    )?;
+    let message = run_git(root, &["show", "-s", "--format=%B", commit])?;
+    let trailers = git_trailers::parse_platypus_trailers(&message);
     Ok(CommitTrailers {
-        closes: close_output
-            .lines()
-            .flat_map(|line| line.split([',', ' ']))
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.to_ascii_uppercase())
-            .collect(),
-        verification_present: verification_output
-            .lines()
-            .any(|line| !line.trim().is_empty()),
+        closes: trailers.closes,
+        verification_present: trailers.verification_present,
     })
 }
 
