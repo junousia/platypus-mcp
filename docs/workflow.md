@@ -8,6 +8,28 @@ execution.
 See [diagrams.md](diagrams.md) for state, data, responsibility, and roadmap
 diagrams from additional perspectives.
 
+## Host Guidance Resources
+
+MCP hosts should list resources and prompts during setup and cache the guidance
+for the active session. The server exposes the same deterministic guidance as
+both readable resources and prompts so clients can choose the integration style
+that fits their UI.
+
+Resources:
+
+- `platypus://guidance/workflow`: end-to-end host workflow and safety gates.
+- `platypus://guidance/project-status`: project inspection and setup blockers.
+- `platypus://guidance/backlog-authoring`: declarative backlog authoring rules.
+- `platypus://guidance/worker-handoff`: worker dispatch, handoff, progress, and
+  completion flow.
+- `platypus://guidance/integration-review`: review and integration gates.
+- `platypus://guidance/recovery`: inspection and recovery commands.
+
+Equivalent prompts are available as `platypus-workflow`,
+`platypus-project-status`, `platypus-backlog-authoring`,
+`platypus-worker-handoff`, `platypus-integration-review`, and
+`platypus-recovery`.
+
 ## Principles
 
 - Start with `doctor_snapshot` or `inspect_status` when the project state is

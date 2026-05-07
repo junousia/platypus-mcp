@@ -1,6 +1,6 @@
 use crate::{
     approvals, assignments, backlog, bundle, config, dispatch, events, evidence, findings,
-    guidance,
+    guidance, host_guidance,
     models::{
         ActionResult, AgentProfileData, AgentProfilesData, AgentProfilesParams, ApprovalListData,
         ApprovalListParams, ApprovalRespondParams, ApprovalResponseData, ClaimNextTaskParams,
@@ -24,10 +24,17 @@ use crate::{
     },
     project, reconcile, runner, tasks, workspace,
 };
-use anyhow::Result;
+use anyhow::Result as AnyhowResult;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    tool, tool_handler, tool_router, Json, ServerHandler, ServiceExt,
+    model::{
+        GetPromptRequestParams, GetPromptResult, ListPromptsResult, ListResourcesResult,
+        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
+        ServerCapabilities, ServerInfo,
+    },
+    service::RequestContext,
+    tool, tool_handler, tool_router, ErrorData as McpError, Json, RoleServer, ServerHandler,
+    ServiceExt,
 };
 use std::{collections::BTreeSet, path::PathBuf};
 
@@ -63,7 +70,81 @@ impl Default for PlatypusMcp {
 }
 
 #[tool_handler]
-impl ServerHandler for PlatypusMcp {}
+impl ServerHandler for PlatypusMcp {
+    fn get_info(&self) -> ServerInfo {
+        let mut info = ServerInfo::default();
+        info.capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .enable_prompts()
+            .build();
+        info.instructions = Some(
+            "Use `next_safe_action` before lifecycle mutations. Read `platypus://guidance/workflow` or get the `platypus-workflow` prompt for the recommended host workflow."
+                .to_string(),
+        );
+        info
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> std::result::Result<ListResourcesResult, McpError> {
+        Ok(ListResourcesResult::with_all_items(
+            host_guidance::resource_list(),
+        ))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> std::result::Result<ReadResourceResult, McpError> {
+        let Some(entry) = host_guidance::by_uri(&request.uri) else {
+            return Err(McpError::resource_not_found(
+                format!("unknown Platypus guidance resource `{}`", request.uri),
+                None,
+            ));
+        };
+
+        Ok(ReadResourceResult {
+            contents: vec![ResourceContents::TextResourceContents {
+                uri: entry.uri.to_string(),
+                mime_type: Some("text/markdown".to_string()),
+                text: entry.text.to_string(),
+                meta: None,
+            }],
+        })
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> std::result::Result<ListPromptsResult, McpError> {
+        Ok(ListPromptsResult::with_all_items(
+            host_guidance::prompt_list(),
+        ))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> std::result::Result<GetPromptResult, McpError> {
+        let Some(entry) = host_guidance::by_prompt_name(&request.name) else {
+            return Err(McpError::invalid_params(
+                format!("unknown Platypus guidance prompt `{}`", request.name),
+                None,
+            ));
+        };
+
+        Ok(GetPromptResult {
+            description: Some(entry.description.to_string()),
+            messages: host_guidance::prompt_messages(entry),
+        })
+    }
+}
 
 #[tool_router(router = tool_router)]
 impl PlatypusMcp {
@@ -998,7 +1079,7 @@ impl PlatypusMcp {
     }
 }
 
-pub async fn serve_stdio() -> Result<()> {
+pub async fn serve_stdio() -> AnyhowResult<()> {
     let server = PlatypusMcp::new().serve(rmcp::transport::stdio()).await?;
     server.waiting().await?;
     Ok(())
