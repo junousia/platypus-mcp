@@ -34,7 +34,8 @@ Equivalent prompts are available as `platypus-workflow`,
 
 - Start with `doctor_snapshot` or `inspect_status` when the project state is
   unclear.
-- Prefer `next_safe_action` over guessing the next lifecycle command.
+- Prefer `inspect_work_queue` for executable backlog selection and
+  `next_safe_action` over guessing the next lifecycle command.
 - Keep backlog markdown declarative; runtime state belongs in
   `.platy/platypus.sqlite3`.
 - Treat worker worktrees as isolated execution spaces until reviewed and
@@ -56,6 +57,8 @@ Equivalent prompts are available as `platypus-workflow`,
 2. Persist selected work with `create_backlog_item`.
 3. Run `validate_backlog`.
 4. Use `list_backlog` to see runnable candidates.
+5. Use `inspect_work_queue` to combine runnable candidates, task-plan state,
+   and the recommended next tool.
 
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime
@@ -76,12 +79,14 @@ and `list_task_plans` to review committed plans.
 
 ## Dispatch And Worker Handoff
 
-1. Call `next_safe_action`.
-2. If it recommends `dispatch_next_work`, dispatch the next runnable item.
-3. Call `next_safe_action` again.
-4. If it recommends `prepare_worker_handoff`, prepare the persisted assignment.
-5. Give the assignment bundle and worktree path to the worker harness.
-6. Mark the worker active with `start_worker_task`.
+1. Call `inspect_work_queue`.
+2. If it requires a task plan, use the recommended task-plan tool first.
+3. Call `next_safe_action`.
+4. If it recommends `dispatch_next_work`, dispatch the next runnable item.
+5. Call `next_safe_action` again.
+6. If it recommends `prepare_worker_handoff`, prepare the persisted assignment.
+7. Give the assignment bundle and worktree path to the worker harness.
+8. Mark the worker active with `start_worker_task`.
 
 The worker should operate in the assigned worktree, not in the manager
 workspace.

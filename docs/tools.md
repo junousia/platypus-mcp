@@ -9,8 +9,9 @@ Platypus tools return typed JSON with a shared envelope:
 - `data`: typed result payload
 - `error`: optional failure detail
 
-Hosts should prefer `next_safe_action` when deciding what to do next. The
-lower-level tools remain available for precise control and testing.
+Hosts should prefer `inspect_work_queue` when choosing runnable backlog work and
+`next_safe_action` when deciding the next lifecycle command. The lower-level
+tools remain available for precise control and testing.
 
 ## Host Guidance Resources And Prompts
 
@@ -37,15 +38,16 @@ deterministic and references the current public tool names.
    `validate_backlog`, `list_backlog`.
 3. Plan non-trivial work: `draft_task_plan`, `write_task_plan`,
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
-4. Dispatch work: `next_safe_action`, `dispatch_next_work`,
+4. Inspect the executable queue: `inspect_work_queue`.
+5. Dispatch work: `next_safe_action`, `dispatch_next_work`,
    `prepare_worker_handoff`.
-5. Run worker externally: pass the generated bundle/worktree to Codex, Claude,
+6. Run worker externally: pass the generated bundle/worktree to Codex, Claude,
    or another harness.
-6. Record worker activity: `start_worker_task`, `record_worker_progress`,
+7. Record worker activity: `start_worker_task`, `record_worker_progress`,
    `complete_worker_task`.
-7. Inspect and verify: `inspect_worktree_changes`,
+8. Inspect and verify: `inspect_worktree_changes`,
    `record_verification_evidence`, `record_finding`, `validate_findings`.
-8. Integrate and clean up: `integrate_worker_result`, `reconcile_project`,
+9. Integrate and clean up: `integrate_worker_result`, `reconcile_project`,
    `worktree_cleanup`.
 
 ```mermaid
@@ -99,6 +101,8 @@ trailers.
 ### Task And Workspace Lifecycle
 
 - `next_safe_action`: recommend the next safe tool call and parameters.
+- `inspect_work_queue`: inspect runnable backlog candidates with task-plan
+  state and a recommended next tool.
 - `dispatch_next_work`: create a queued task from the next runnable backlog
   item.
 - `inspect_task`: inspect one task lifecycle record.

@@ -19,6 +19,13 @@ pub struct NextSafeActionParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct InspectWorkQueueParams {
+    pub root: Option<String>,
+    pub limit: Option<usize>,
+    pub require_task_plan: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct InitProjectParams {
     pub root: Option<String>,
     pub project_name: Option<String>,
@@ -369,7 +376,7 @@ pub struct UpdateFindingDispositionParams {
     pub metadata: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Serialize, JsonSchema)]
+#[derive(Debug, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionStatus {
     Completed,
@@ -449,6 +456,37 @@ pub struct NextSafeActionData {
     pub summary: String,
     pub reason: String,
     pub params: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkQueueData {
+    pub root: String,
+    pub require_task_plan: bool,
+    pub recommended_tool: String,
+    pub summary: String,
+    pub reason: String,
+    pub params: BTreeMap<String, Value>,
+    pub items: Vec<WorkQueueItem>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkQueueItem {
+    pub position: usize,
+    pub candidate: BacklogCandidate,
+    pub plan: WorkQueuePlanState,
+    pub ready_to_dispatch: bool,
+    pub recommended_tool: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkQueuePlanState {
+    pub status: String,
+    pub path: Option<String>,
+    pub mode: Option<String>,
+    pub task_count: usize,
+    pub requirement_count: usize,
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -552,7 +590,7 @@ pub struct TaskPlanListData {
     pub returned: usize,
 }
 
-#[derive(Debug, Serialize, JsonSchema)]
+#[derive(Debug, Serialize, Clone, JsonSchema)]
 pub struct TaskPlanSummary {
     pub item_id: String,
     pub path: String,
