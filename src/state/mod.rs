@@ -7,6 +7,7 @@
 
 mod commands;
 mod error;
+pub mod sqlite;
 mod types;
 
 pub use commands::*;

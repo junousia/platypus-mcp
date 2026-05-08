@@ -137,7 +137,11 @@ table-shaped public stores.
 The migration path is:
 
 1. Define `ProjectState` domain commands, snapshots, and errors.
-2. Implement `SqliteProjectState` while preserving current behavior.
+2. Implement `SqliteProjectState` while preserving current behavior. The
+   current shell lives under `src/state/sqlite/`, opens the project through the
+   existing storage initializer, exposes backend capabilities, supports task
+   inspection and safe-action reads, and returns explicit unsupported errors
+   for behavior that is not migrated yet.
 3. Move task and assignment lifecycle tools behind `ProjectState`.
 4. Move guidance, inspection, evidence, findings, reconciliation, and workspace
    metadata behind `ProjectState`.
