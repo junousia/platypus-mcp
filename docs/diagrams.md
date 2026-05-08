@@ -166,6 +166,61 @@ erDiagram
     }
 ```
 
+## Runtime Backend Modes
+
+Local SQLite mode is the reference implementation. It is optimized for one
+repository on one workstation while preserving the same repository trait
+boundary that a shared backend must satisfy.
+
+```mermaid
+flowchart LR
+    host["MCP host"]
+    server["Platypus MCP server"]
+    sqlite[".platy/platypus.sqlite3<br/>local runtime state"]
+    repo["project repository"]
+    git["Git history"]
+    worker["worker harness"]
+
+    host -->|stdio MCP| server
+    server -->|transactions| sqlite
+    server -->|backlog, plans, worktrees| repo
+    server -->|trailers and branches| git
+    host -->|bundle| worker
+    worker -->|result tools| server
+```
+
+A future shared backend keeps the MCP tool contract stable while moving
+runtime coordination behind the repository traits. Repository files and Git
+history remain the source of executable intent and integration proof.
+
+```mermaid
+flowchart LR
+    hostA["Host A"]
+    hostB["Host B"]
+    serverA["Platypus MCP server A"]
+    serverB["Platypus MCP server B"]
+    shared["shared runtime backend<br/>events, tasks, approvals, leases"]
+    repo["project repository"]
+    git["Git history"]
+    workerA["worker A"]
+    workerB["worker B"]
+
+    hostA --> serverA
+    hostB --> serverB
+    serverA --> shared
+    serverB --> shared
+    shared -->|ordered replay and leases| serverA
+    shared -->|ordered replay and leases| serverB
+    serverA --> repo
+    serverB --> repo
+    serverA --> git
+    serverB --> git
+    hostA --> workerA
+    hostB --> workerB
+    workerA --> serverA
+    workerB --> serverB
+```
+
 ## Tool Responsibility Map
 
 Each tool group should own a narrow part of the lifecycle. New tools should fit

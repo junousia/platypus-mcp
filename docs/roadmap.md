@@ -26,6 +26,9 @@ perspectives.
    worker fixtures.
 3. Expose MCP resources or prompts so hosts can discover the recommended
    workflow without relying on external chat instructions.
+4. Add a storage backend capability probe that runs the documented transaction,
+   replay, lease, idempotency, migration, and recovery checks through the
+   repository traits.
 
 ```mermaid
 flowchart LR
@@ -34,12 +37,15 @@ flowchart LR
     rec["MCP-021<br/>reconciliation coverage"]
     smoke["MCP-022<br/>lifecycle smoke test"]
     prompts["MCP-024<br/>resources and prompts"]
+    storage["MCP-032<br/>backend contract"]
+    probe["future<br/>backend capability probe"]
 
     done --> rec
     docs --> rec
     rec --> smoke
     docs --> prompts
     smoke --> prompts
+    docs --> storage --> probe
 ```
 
 ## Backlog Tranche
@@ -72,3 +78,5 @@ tooling and intended product direction.
   plugin-backed sources, all mapping into local executable backlog snapshots.
 - Optional richer storage abstraction if SQL scattering becomes a maintenance
   risk.
+- A second runtime backend only after the storage capability probe demonstrates
+  equivalent semantics to local SQLite.

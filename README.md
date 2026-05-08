@@ -82,6 +82,12 @@ Platypus-Verification: make check
 Runtime state such as queued/running tasks, task events, findings, claims, and
 future worker attempts belongs in `.platy/platypus.sqlite3`.
 
+SQLite is the local-first reference backend, not a permanent product boundary.
+Future shared runtime backends must preserve the same MCP schemas, event
+ordering, lease semantics, conflict behavior, recovery paths, and reconciliation
+rules documented in [docs/storage.md](docs/storage.md). Local SQLite support
+remains a first-class mode even if shared coordination is added later.
+
 ## Verify
 
 ```bash

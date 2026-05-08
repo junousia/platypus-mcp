@@ -1,0 +1,72 @@
+item_id: MCP-032
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: Documentation distinguishes Git-owned declarative files from runtime-owned mutable state.
+- id: R2
+  text: The storage backend contract defines required transaction, ordering, idempotency, lease, migration, identity, conflict, and recovery guarantees.
+- id: R3
+  text: Diagrams show both local SQLite mode and future shared-backend mode without making shared storage mandatory.
+- id: R4
+  text: The roadmap identifies the first implementation step toward a second backend.
+design:
+  summary: Extend the storage architecture documentation so SQLite remains the reference implementation while future shared runtime backends have explicit evaluation criteria and compatibility guarantees.
+  owned_surfaces:
+  - docs/storage.md
+  - docs/roadmap.md
+  - docs/diagrams.md
+  - README.md
+  notes: This is documentation-only. Do not select or implement a second backend in this item.
+tasks:
+- id: MCP-032-T01
+  title: Define runtime backend contract
+  goal: Document the durable guarantees every Platypus runtime backend must provide.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - docs/storage.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - The docs name the repository-owned and runtime-owned state boundaries.
+  - Transactions, event ordering, idempotency, leases, migrations, project identity, conflicts, and recovery are covered.
+  - SQLite is described as the reference backend, not the only product boundary.
+  notes: null
+- id: MCP-032-T02
+  title: Add backend mode diagrams
+  goal: Show how local SQLite mode differs from a future shared-backend deployment.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-032-T01
+  owned_surfaces:
+  - docs/diagrams.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Diagrams include a local single-host SQLite mode.
+  - Diagrams include a future shared runtime backend mode with multiple hosts/workers.
+  - The diagrams preserve the same MCP tool contract in both modes.
+  notes: null
+- id: MCP-032-T03
+  title: Update roadmap and README
+  goal: Align repository-level guidance with the documented backend contract and next implementation step.
+  requirement_refs:
+  - R4
+  depends_on:
+  - MCP-032-T02
+  owned_surfaces:
+  - docs/roadmap.md
+  - README.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - The roadmap names a backend capability probe or second-backend spike as the next step.
+  - README explains that local-first remains supported even if shared runtime backends are added.
+  notes: null
