@@ -45,6 +45,14 @@ platypus-mcp bootstrap codex --global
 platypus-mcp bootstrap codex --root /path/to/project
 ```
 
+`bootstrap <host>` only wires the MCP server into the selected host. Run
+`init_project` in each project to install the transparent steering layer that
+coding harnesses can discover in the repository: `AGENTS.md` for generic agent
+guidance and Codex-style clients, `CLAUDE.md` for Claude Code, plus
+`WORKFLOW.md` and backlog templates. Hosts without a verified local
+instruction-file convention are steered through MCP server instructions,
+resources, prompts, and tool descriptions.
+
 Smoke-test the stdio tool contract against the current directory:
 
 ```bash

@@ -56,6 +56,11 @@ Equivalent prompts are available as `platypus-workflow`,
 `init_project` also installs project-local agent and workflow guidance. That is
 intentional: once an MCP host enters an initialized directory, normal goal
 requests should naturally flow through Platypus instead of ad hoc edits.
+The transparent steering layer is deliberately layered: MCP server
+instructions/resources/prompts are the stable contract, `AGENTS.md` provides
+generic agent guidance, and `CLAUDE.md` provides Claude Code guidance. Other
+host-specific files should be added only after their local instruction
+mechanism is verified.
 
 ## Backlog Shaping
 
