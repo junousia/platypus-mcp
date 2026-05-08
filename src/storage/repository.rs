@@ -1,6 +1,11 @@
-use super::traits::{ApprovalStore, EventStore, RepositoryError, RepositoryResult, TaskStore};
-use crate::models::{ApprovalRecord, EventRecord, TaskEventRecord, TaskRecord};
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use super::traits::{
+    ApprovalStore, EventStore, RepositoryError, RepositoryResult, TaskStore, TransitionInsert,
+    TransitionStore,
+};
+use crate::models::{
+    ApprovalRecord, EventRecord, RuntimeTransitionRecord, TaskEventRecord, TaskRecord,
+};
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -30,6 +35,12 @@ impl<'connection> Repository<'connection> {
             connection: self.connection,
         }
     }
+
+    pub fn transitions(&self) -> TransitionRepository<'connection> {
+        TransitionRepository {
+            connection: self.connection,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -49,7 +60,8 @@ impl ApprovalStore for ApprovalRepository<'_> {
     fn create(&self, approval: ApprovalInsert) -> RepositoryResult<ApprovalRecord> {
         let id = self.next_id()?;
         let metadata_json = serde_json::to_string(&approval.metadata)?;
-        self.connection.execute(
+        let transaction = self.connection.unchecked_transaction()?;
+        transaction.execute(
             r#"
             INSERT INTO approvals(id, scope, status, title, summary, requested_by, metadata_json)
             VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6)
@@ -63,7 +75,19 @@ impl ApprovalStore for ApprovalRepository<'_> {
                 metadata_json
             ],
         )?;
-        self.get(&id)
+        insert_transition_in_transaction(
+            &transaction,
+            TransitionInsert {
+                domain: "approval".to_string(),
+                entity_id: id.clone(),
+                transition_type: "approval_requested".to_string(),
+                summary: format!("Approval `{id}` requested."),
+                payload: None,
+            },
+        )?;
+        let record = get_approval_in_transaction(&transaction, &id)?;
+        transaction.commit()?;
+        Ok(record)
     }
 
     fn list(&self, status: Option<&str>, limit: usize) -> RepositoryResult<Vec<ApprovalRecord>> {
@@ -105,9 +129,9 @@ impl ApprovalStore for ApprovalRepository<'_> {
         responder: &str,
         reason: Option<&str>,
     ) -> RepositoryResult<usize> {
-        self.connection
-            .execute(
-                r#"
+        let transaction = self.connection.unchecked_transaction()?;
+        let updated = transaction.execute(
+            r#"
             UPDATE approvals
             SET status = ?2,
                 response = ?3,
@@ -116,9 +140,26 @@ impl ApprovalStore for ApprovalRepository<'_> {
                 responded_at = CURRENT_TIMESTAMP
             WHERE id = ?1 AND status = 'pending'
             "#,
-                params![approval_id, status, response, responder, reason],
-            )
-            .map_err(RepositoryError::from)
+            params![approval_id, status, response, responder, reason],
+        )?;
+        if updated > 0 {
+            insert_transition_in_transaction(
+                &transaction,
+                TransitionInsert {
+                    domain: "approval".to_string(),
+                    entity_id: approval_id.to_string(),
+                    transition_type: format!("approval_{status}"),
+                    summary: format!("Approval `{approval_id}` {status}."),
+                    payload: Some(serde_json::json!({
+                        "response": response,
+                        "responder": responder,
+                        "reason": reason
+                    })),
+                },
+            )?;
+        }
+        transaction.commit()?;
+        Ok(updated)
     }
 }
 
@@ -141,6 +182,10 @@ pub struct EventInsert {
 }
 
 pub struct EventRepository<'connection> {
+    connection: &'connection Connection,
+}
+
+pub struct TransitionRepository<'connection> {
     connection: &'connection Connection,
 }
 
@@ -167,14 +212,27 @@ pub struct TaskRepository<'connection> {
 impl TaskStore for TaskRepository<'_> {
     fn create(&self, task: TaskInsert) -> RepositoryResult<TaskRecord> {
         let id = self.next_task_id(&task.source_item_id)?;
-        self.connection.execute(
+        let transaction = self.connection.unchecked_transaction()?;
+        transaction.execute(
             r#"
             INSERT INTO tasks(id, source_item_id, title, status, worker)
             VALUES (?1, ?2, ?3, 'queued', ?4)
             "#,
             params![&id, task.source_item_id, task.title, task.worker],
         )?;
-        self.get(&id)
+        insert_transition_in_transaction(
+            &transaction,
+            TransitionInsert {
+                domain: "task".to_string(),
+                entity_id: id.clone(),
+                transition_type: "task_created".to_string(),
+                summary: format!("Task `{id}` created."),
+                payload: None,
+            },
+        )?;
+        let record = get_task_in_transaction(&transaction, &id)?;
+        transaction.commit()?;
+        Ok(record)
     }
 
     fn record_event(&self, event: TaskEventInsert) -> RepositoryResult<TaskEventRecord> {
@@ -234,33 +292,59 @@ impl TaskStore for TaskRepository<'_> {
     }
 
     fn mark_running(&self, task_id: &str) -> RepositoryResult<usize> {
-        self.connection
-            .execute(
-                r#"
+        let transaction = self.connection.unchecked_transaction()?;
+        let updated = transaction.execute(
+            r#"
             UPDATE tasks
             SET status = 'running',
                 started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?1 AND status IN ('claimed', 'running')
             "#,
-                [task_id],
-            )
-            .map_err(RepositoryError::from)
+            [task_id],
+        )?;
+        if updated > 0 {
+            insert_transition_in_transaction(
+                &transaction,
+                TransitionInsert {
+                    domain: "task".to_string(),
+                    entity_id: task_id.to_string(),
+                    transition_type: "task_running".to_string(),
+                    summary: format!("Task `{task_id}` marked running."),
+                    payload: None,
+                },
+            )?;
+        }
+        transaction.commit()?;
+        Ok(updated)
     }
 
     fn finish(&self, task_id: &str, status: &str) -> RepositoryResult<usize> {
-        self.connection
-            .execute(
-                r#"
+        let transaction = self.connection.unchecked_transaction()?;
+        let updated = transaction.execute(
+            r#"
             UPDATE tasks
             SET status = ?2,
                 finished_at = CURRENT_TIMESTAMP,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?1 AND status IN ('claimed', 'running')
             "#,
-                params![task_id, status],
-            )
-            .map_err(RepositoryError::from)
+            params![task_id, status],
+        )?;
+        if updated > 0 {
+            insert_transition_in_transaction(
+                &transaction,
+                TransitionInsert {
+                    domain: "task".to_string(),
+                    entity_id: task_id.to_string(),
+                    transition_type: format!("task_{status}"),
+                    summary: format!("Task `{task_id}` {status}."),
+                    payload: Some(serde_json::json!({ "status": status })),
+                },
+            )?;
+        }
+        transaction.commit()?;
+        Ok(updated)
     }
 }
 
@@ -394,6 +478,132 @@ impl EventRepository<'_> {
     }
 }
 
+impl TransitionStore for TransitionRepository<'_> {
+    fn record(&self, transition: TransitionInsert) -> RepositoryResult<RuntimeTransitionRecord> {
+        let id = insert_transition(self.connection, transition)?;
+        self.get(id)
+    }
+
+    fn list(
+        &self,
+        domain: Option<&str>,
+        entity_id: Option<&str>,
+        limit: usize,
+    ) -> RepositoryResult<Vec<RuntimeTransitionRecord>> {
+        let mut statement = self.connection.prepare(
+            r#"
+            SELECT id, domain, entity_id, transition_type, summary, payload_json, created_at
+            FROM runtime_transitions
+            WHERE (?1 IS NULL OR domain = ?1)
+              AND (?2 IS NULL OR entity_id = ?2)
+            ORDER BY id ASC
+            LIMIT ?3
+            "#,
+        )?;
+        let rows = statement.query_map(params![domain, entity_id, limit], row_to_transition)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(RepositoryError::from)
+    }
+}
+
+impl TransitionRepository<'_> {
+    fn get(&self, id: i64) -> RepositoryResult<RuntimeTransitionRecord> {
+        self.connection
+            .query_row(
+                r#"
+                SELECT id, domain, entity_id, transition_type, summary, payload_json, created_at
+                FROM runtime_transitions
+                WHERE id = ?1
+                "#,
+                [id],
+                row_to_transition,
+            )
+            .map_err(RepositoryError::from)
+    }
+}
+
+fn insert_transition(
+    connection: &Connection,
+    transition: TransitionInsert,
+) -> RepositoryResult<i64> {
+    let payload_json = encode_payload(transition.payload)?;
+    connection.execute(
+        r#"
+        INSERT INTO runtime_transitions(domain, entity_id, transition_type, summary, payload_json)
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        "#,
+        params![
+            transition.domain,
+            transition.entity_id,
+            transition.transition_type,
+            transition.summary,
+            payload_json
+        ],
+    )?;
+    Ok(connection.last_insert_rowid())
+}
+
+fn insert_transition_in_transaction(
+    transaction: &Transaction<'_>,
+    transition: TransitionInsert,
+) -> RepositoryResult<i64> {
+    let payload_json = encode_payload(transition.payload)?;
+    transaction.execute(
+        r#"
+        INSERT INTO runtime_transitions(domain, entity_id, transition_type, summary, payload_json)
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        "#,
+        params![
+            transition.domain,
+            transition.entity_id,
+            transition.transition_type,
+            transition.summary,
+            payload_json
+        ],
+    )?;
+    Ok(transaction.last_insert_rowid())
+}
+
+fn encode_payload(payload: Option<Value>) -> RepositoryResult<Option<String>> {
+    payload
+        .map(|payload| serde_json::to_string(&payload).map_err(RepositoryError::from))
+        .transpose()
+}
+
+fn get_approval_in_transaction(
+    connection: &Transaction<'_>,
+    id: &str,
+) -> RepositoryResult<ApprovalRecord> {
+    connection
+        .query_row(
+            r#"
+            SELECT id, scope, status, title, summary, requested_by, response, responder, reason,
+                   metadata_json, created_at, responded_at
+            FROM approvals
+            WHERE id = ?1
+            "#,
+            [id],
+            row_to_approval,
+        )
+        .map_err(RepositoryError::from)
+}
+
+fn get_task_in_transaction(connection: &Transaction<'_>, id: &str) -> RepositoryResult<TaskRecord> {
+    connection
+        .query_row(
+            r#"
+            SELECT id, source_item_id, title, status, worker, claimed_by, claimed_at, started_at,
+                   finished_at, workspace_path, workspace_branch, workspace_base_ref, created_at,
+                   updated_at
+            FROM tasks
+            WHERE id = ?1
+            "#,
+            [id],
+            row_to_task,
+        )
+        .map_err(RepositoryError::from)
+}
+
 fn row_to_approval(row: &Row<'_>) -> rusqlite::Result<ApprovalRecord> {
     let metadata_json: Option<String> = row.get("metadata_json")?;
     Ok(ApprovalRecord {
@@ -456,6 +666,20 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         workspace_base_ref: row.get("workspace_base_ref")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
+    })
+}
+
+fn row_to_transition(row: &Row<'_>) -> rusqlite::Result<RuntimeTransitionRecord> {
+    let id: i64 = row.get("id")?;
+    let payload_json: Option<String> = row.get("payload_json")?;
+    Ok(RuntimeTransitionRecord {
+        cursor: format!("transition:{id}"),
+        domain: row.get("domain")?,
+        entity_id: row.get("entity_id")?,
+        transition_type: row.get("transition_type")?,
+        summary: row.get("summary")?,
+        payload: payload_json.and_then(|raw| serde_json::from_str(&raw).ok()),
+        created_at: row.get("created_at")?,
     })
 }
 
@@ -591,6 +815,39 @@ mod tests {
             .list_events(&task.id, 10)
             .expect("list task events");
         assert_eq!(events.len(), 1);
+
+        let transitions = repository
+            .transitions()
+            .list(Some("task"), Some(&task.id), 10)
+            .expect("list transitions");
+        assert_eq!(transitions.len(), 1);
+        assert_eq!(transitions[0].transition_type, "task_created");
+    }
+
+    #[test]
+    fn repository_records_runtime_transitions() {
+        let project = TempDir::new().expect("temp dir");
+        let storage = storage::connect(project.path(), None).expect("storage");
+        let repository = storage.repository();
+
+        let transition = repository
+            .transitions()
+            .record(TransitionInsert {
+                domain: "task".to_string(),
+                entity_id: "PROJ-001-T001".to_string(),
+                transition_type: "task_created".to_string(),
+                summary: "Task created.".to_string(),
+                payload: Some(json!({"source": "test"})),
+            })
+            .expect("record transition");
+
+        assert_eq!(transition.cursor, "transition:1");
+        let transitions = repository
+            .transitions()
+            .list(Some("task"), Some("PROJ-001-T001"), 10)
+            .expect("list transitions");
+        assert_eq!(transitions.len(), 1);
+        assert_eq!(transitions[0].payload.as_ref().unwrap()["source"], "test");
     }
 
     #[test]

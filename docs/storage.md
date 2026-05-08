@@ -49,6 +49,7 @@ Runtime-owned mutable state belongs behind the storage boundary:
 - task attempts and task events
 - worker assignments and execution metadata
 - approvals and responses
+- runtime transitions for lifecycle/state changes
 - findings and dispositions
 - verification evidence records
 - future leases, client/session metadata, and distributed coordination records
@@ -69,11 +70,30 @@ Current portable traits:
 - `EventStore`: project event recording and replay, including task-event
   projection.
 - `TaskStore`: task creation, lookup, lifecycle updates, and task event replay.
+- `TransitionStore`: append-only runtime transition recording and replay.
 
 The traits return `RepositoryResult<T>` with a backend-neutral
 `RepositoryError`. Tool modules should handle `NotFound`, `Conflict`, and
 backend failures without matching SQLite-specific error variants. The SQLite
 repository maps its native errors into those portable categories.
+
+## Append-Only Transitions
+
+Current-state tables such as `tasks` and `approvals` are materialized views of
+runtime state. Important lifecycle mutations should also write an append-only
+transition record with:
+
+- domain, such as `task` or `approval`
+- entity id, such as a task id or approval id
+- stable transition type, such as `task_created` or `approval_approved`
+- safe summary and bounded payload
+- creation timestamp and replay cursor
+
+Migrated writes update current state and append the transition in the same
+SQLite transaction. Invalid or duplicate mutations should not append successful
+transition records. `events_replay` includes runtime transitions alongside
+project and task events so a host can explain how an entity reached its current
+state without reading hidden storage tables directly.
 
 ## Adding Runtime Repositories
 
