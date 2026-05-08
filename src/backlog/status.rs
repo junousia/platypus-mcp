@@ -114,6 +114,7 @@ fn runnable_backlog_candidates(
             area: item.frontmatter.area.clone(),
             suggested_worker: item.frontmatter.suggested_worker.clone(),
             owned_surfaces: item.frontmatter.owned_surfaces.clone(),
+            external_refs: item.frontmatter.external_refs.clone(),
         })
         .collect()
 }

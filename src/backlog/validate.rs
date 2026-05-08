@@ -190,6 +190,35 @@ fn validate_item_shape(
             frontmatter.epic
         ));
     }
+    for reference in &frontmatter.external_refs {
+        if reference.provider.trim().is_empty()
+            || reference.kind.trim().is_empty()
+            || reference.id.trim().is_empty()
+        {
+            errors.push(format!(
+                "{}: external_refs provider, kind, and id are required",
+                path.display()
+            ));
+        }
+        let has_location = reference
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+            || reference
+                .locator
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_some();
+        if !has_location {
+            errors.push(format!(
+                "{}: external_refs require url or locator",
+                path.display()
+            ));
+        }
+    }
     for section in REQUIRED_SECTIONS {
         if !item.sections.contains(*section) {
             errors.push(format!("{}: missing section `{}`", path.display(), section));

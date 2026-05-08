@@ -97,6 +97,10 @@ and scripts; MCP hosts should still call tools through MCP directly.
 - `validate_backlog`: validate backlog item and epic files.
 - `list_backlog`: list runnable backlog candidates.
 
+Backlog item frontmatter may include provider-neutral `external_refs`. Use them
+to preserve where work came from or where results should be reported without
+making an external tracker the execution contract.
+
 ### Task Plans
 
 - `draft_task_plan`: draft a strict plan for one backlog item without writing

@@ -66,6 +66,9 @@ pub fn create_backlog_item(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let acceptance = clean_vec(params.acceptance.clone());
+    if let Err(error) = validate_external_refs(&params.external_refs) {
+        return ActionResult::failed(action, "Could not create backlog item.", error);
+    }
     if params.title.trim().is_empty()
         || params.goal.trim().is_empty()
         || contract.is_none()
@@ -170,6 +173,7 @@ fn backlog_item_text(
         suggested_worker: clean_optional(params.suggested_worker.clone())
             .or_else(|| Some("coder".to_string())),
         owned_surfaces: clean_vec(params.owned_surfaces.clone()),
+        external_refs: params.external_refs.clone(),
     };
     let yaml = serde_yaml::to_string(&frontmatter).map_err(|error| error.to_string())?;
     let mut body = format!(
@@ -194,4 +198,31 @@ fn backlog_item_text(
         body.push_str(&format!("\n## Notes\n\n{}\n", notes));
     }
     Ok(body)
+}
+
+fn validate_external_refs(refs: &[crate::models::ExternalRef]) -> Result<(), String> {
+    for reference in refs {
+        if reference.provider.trim().is_empty()
+            || reference.kind.trim().is_empty()
+            || reference.id.trim().is_empty()
+        {
+            return Err("external_refs provider, kind, and id are required".to_string());
+        }
+        let has_location = reference
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+            || reference
+                .locator
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_some();
+        if !has_location {
+            return Err("external_refs require url or locator".to_string());
+        }
+    }
+    Ok(())
 }

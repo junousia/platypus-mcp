@@ -1,0 +1,74 @@
+item_id: MCP-033
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Backlog items can carry provider-neutral external references without weakening the local execution contract.
+- id: R2
+  text: External references are strictly validated and surfaced through backlog inspection tools.
+- id: R3
+  text: Documentation explains input, execution, and reporting surfaces.
+design:
+  summary: Add an external_refs frontmatter schema, propagate it through create/list/work queue models, and document the provider-neutral reference model.
+  owned_surfaces:
+  - src/backlog
+  - src/models.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - tests
+  notes: Keep this as local schema support only. Provider import adapters belong to MCP-034 and MCP-035.
+tasks:
+- id: MCP-033-T01
+  title: Add external reference schema
+  goal: Add typed external_refs models to backlog frontmatter and create_backlog_item params.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/backlog
+  - src/models.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Valid external_refs parse and serialize.
+  - Unknown fields inside external refs are rejected.
+  - Backlog items without external refs remain valid.
+  notes: null
+- id: MCP-033-T02
+  title: Surface external refs through queue tools
+  goal: Include external refs in list_backlog and inspect_work_queue candidate output.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-033-T01
+  owned_surfaces:
+  - src/backlog
+  - src/models.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Backlog candidates include external_refs.
+  - Work queue output preserves external_refs without provider-specific assumptions.
+  - Tests cover create and list paths.
+  notes: null
+- id: MCP-033-T03
+  title: Document external surfaces
+  goal: Explain external_refs and the distinction between intake, execution, and reporting surfaces.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-033-T02
+  owned_surfaces:
+  - docs/tools.md
+  - docs/workflow.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Docs state that local backlog remains the executable snapshot.
+  - Docs describe generic providers without making GitHub special in the core schema.
+  notes: null
