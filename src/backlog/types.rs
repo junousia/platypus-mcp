@@ -1,3 +1,4 @@
+use crate::models::ExternalRef;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, path::PathBuf};
 
@@ -20,6 +21,8 @@ pub(super) struct BacklogItemFrontmatter {
     pub suggested_worker: Option<String>,
     #[serde(default)]
     pub owned_surfaces: Vec<String>,
+    #[serde(default)]
+    pub external_refs: Vec<ExternalRef>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +54,7 @@ pub(super) struct BacklogItemFrontmatterOut {
     pub depends_on: Vec<String>,
     pub suggested_worker: Option<String>,
     pub owned_surfaces: Vec<String>,
+    pub external_refs: Vec<ExternalRef>,
 }
 
 #[derive(Debug)]

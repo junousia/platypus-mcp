@@ -64,6 +64,13 @@ Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime
 status, task attempts, PR metadata, or closure state.
 
+Backlog items may include `external_refs` for intake and reporting surfaces
+such as GitHub, Linear, Jira, GitLab, support tickets, specs, or local design
+documents. These references are metadata only: the local backlog item remains
+the executable snapshot for planning and dispatch. Each reference records a
+provider, kind, stable id, and either a URL or locator, with optional import
+timestamp and source hash.
+
 ## Task Planning
 
 Use `classify_planning_needs` or `inspect_work_queue` to determine whether an

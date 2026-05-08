@@ -65,6 +65,29 @@ mod tests {
     }
 
     #[test]
+    fn validate_backlog_rejects_invalid_external_refs() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "First task", "P1", &[]);
+        let path = temp.path().join("backlog/items/PROJ-001.md");
+        let mut text = fs::read_to_string(&path).expect("item");
+        text = text.replacen(
+            "owned_surfaces: []",
+            "owned_surfaces: []\nexternal_refs:\n- provider: github\n  kind: issue\n  id: owner/repo#1",
+            1,
+        );
+        fs::write(path, text).expect("item");
+
+        let validation = validate_backlog(temp.path(), Some(root_arg(temp.path()).as_str()), true);
+
+        assert!(matches!(validation.status, ActionStatus::Failed));
+        assert!(validation
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("external_refs require url or locator"));
+    }
+
+    #[test]
     fn list_backlog_excludes_items_closed_by_split_trailer_paragraphs() {
         let temp = project_fixture();
         write_item(temp.path(), "PROJ-001", "First task", "P1", &[]);
@@ -116,6 +139,15 @@ mod tests {
                 depends_on: vec!["PROJ-001".to_string()],
                 suggested_worker: Some("coder".to_string()),
                 owned_surfaces: vec!["src".to_string()],
+                external_refs: vec![crate::models::ExternalRef {
+                    provider: "github".to_string(),
+                    kind: "issue".to_string(),
+                    id: "owner/repo#1".to_string(),
+                    url: Some("https://github.com/owner/repo/issues/1".to_string()),
+                    locator: None,
+                    imported_at: None,
+                    source_hash: Some("sha256:test".to_string()),
+                }],
                 goal: "Create the feature.".to_string(),
                 implementation_contract: Some("Implement the scoped change.".to_string()),
                 contract: None,
@@ -132,6 +164,13 @@ mod tests {
         let root = root_arg(temp.path());
         let validation = validate_backlog(temp.path(), Some(root.as_str()), true);
         assert!(matches!(validation.status, ActionStatus::Completed));
+        let parsed = validate::validate_backlog_at_root(temp.path(), true);
+        let created = parsed
+            .items
+            .iter()
+            .find(|item| item.frontmatter.id == "PROJ-002")
+            .expect("created item");
+        assert_eq!(created.frontmatter.external_refs[0].id, "owner/repo#1");
     }
 
     #[test]

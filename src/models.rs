@@ -113,12 +113,26 @@ pub struct CreateBacklogItemParams {
     pub suggested_worker: Option<String>,
     #[serde(default)]
     pub owned_surfaces: Vec<String>,
+    #[serde(default)]
+    pub external_refs: Vec<ExternalRef>,
     pub goal: String,
     pub implementation_contract: Option<String>,
     pub contract: Option<String>,
     #[serde(default)]
     pub acceptance: Vec<String>,
     pub notes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalRef {
+    pub provider: String,
+    pub kind: String,
+    pub id: String,
+    pub url: Option<String>,
+    pub locator: Option<String>,
+    pub imported_at: Option<String>,
+    pub source_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -605,6 +619,7 @@ pub struct BacklogCandidate {
     pub area: String,
     pub suggested_worker: Option<String>,
     pub owned_surfaces: Vec<String>,
+    pub external_refs: Vec<ExternalRef>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
