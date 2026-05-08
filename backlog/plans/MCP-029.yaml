@@ -1,0 +1,77 @@
+item_id: MCP-029
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: Runtime storage must be expressed through portable typed boundaries rather than SQLite-specific query details in feature modules.
+- id: R2
+  text: SQLite must remain the only implemented backend and existing MCP tool behavior must remain compatible.
+- id: R3
+  text: The repository must document which state is repo-owned and which state is runtime-storage-owned.
+design:
+  summary: Add portable storage traits and a backend-neutral repository error for core runtime repositories, migrate representative approval/event/task paths to those traits, and document the local-first but not local-only storage architecture.
+  owned_surfaces:
+  - src/storage
+  - src/approvals.rs
+  - src/events.rs
+  - src/tasks.rs
+  - docs/storage.md
+  - tests
+  notes: Keep this as the first storage-boundary step. Do not introduce a second backend yet, and do not rewrite every raw SQL caller in one change.
+tasks:
+- id: MCP-029-T01
+  title: Define portable storage traits and repository error
+  goal: Add backend-neutral storage traits for approvals, events, and tasks, plus an error type that does not expose rusqlite to feature modules.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/storage
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Storage traits cover approval reads/writes, event recording/replay, and task creation/lifecycle/event operations.
+  - Trait method signatures return a backend-neutral storage result.
+  - The existing SQLite repository implements the traits.
+  notes: null
+- id: MCP-029-T02
+  title: Migrate representative feature paths to storage traits
+  goal: Move approval, event, and task feature modules away from direct dependency on SQLite repository details where those typed repositories already exist.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on:
+  - MCP-029-T01
+  owned_surfaces:
+  - src/approvals.rs
+  - src/events.rs
+  - src/tasks.rs
+  - src/storage
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Approval list/respond paths handle backend-neutral not-found and backend errors.
+  - Event replay paths use the portable event store boundary.
+  - Task create/event/lifecycle paths use the portable task store boundary for migrated operations.
+  - Existing MCP and unit tests continue to pass.
+  notes: null
+- id: MCP-029-T03
+  title: Document portable storage architecture
+  goal: Explain the storage trait boundary, SQLite reference backend, and future distributed backend constraints.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-029-T02
+  owned_surfaces:
+  - docs/storage.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Documentation clearly separates repo-owned declarative state from runtime-owned mutable state.
+  - Documentation states that SQLite is the reference backend, not the product boundary.
+  - Documentation gives guidance for adding future runtime repositories.
+  notes: null
