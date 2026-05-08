@@ -7,28 +7,30 @@ use crate::{
         ClaimNextTaskParams, ClassifyPlanningNeedsParams, CompleteWorkerExecutionParams,
         ConfigureAgentProfileParams, CreateBacklogItemParams, CreatedBacklogItemData,
         DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
-        DraftExternalBacklogItemsParams, DraftTaskPlanParams, EventsReplayData, EventsReplayParams,
-        EvidenceListData, EvidenceRecordData, ExternalBacklogDraftData, FindingDispositionData,
-        FindingListData, FindingRecordData, FindingValidationData, GenerateTaskBundleParams,
-        GitHubIssueImportData, ImportGitHubIssuesParams, InitProjectParams,
-        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
-        InspectWorkerAssignmentParams, IntegrateWorkerResultParams, LeaseListData, LeaseRecordData,
-        LimitParams, ListEvidenceParams, ListFindingsParams, ListLeasesParams, NextSafeActionData,
-        NextSafeActionParams, PingData, PingParams, PlanningClassificationData,
-        PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData, ReconcileParams,
-        ReconciliationData, RecordEvidenceParams, RecordFindingParams,
-        RecordVerificationEvidenceParams, RecordWorkerEventParams, ReleaseLeaseParams,
-        RenewLeaseParams, RootParams, RunnerPrepareParams, RunnerReportData,
-        SendWorkerGuidanceParams, StartWorkerExecutionParams, TaskBundleData, TaskEventListData,
-        TaskPlanData, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams,
-        TaskPlanValidationData, TaskPlanWriteData, TaskRecordData, UpdateFindingDispositionParams,
-        ValidateBacklogParams, ValidateFindingsParams, WorkQueueData, WorkerAssignmentData,
-        WorkerAssignmentEventData, WorkerGuidanceData, WorkerResultIntegrationData,
-        WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData, WorktreeCleanupParams,
-        WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffParams,
-        WorktreeStatusParams, WriteTaskPlanParams,
+        DraftExternalBacklogItemsParams, DraftExternalReportParams, DraftTaskPlanParams,
+        EventsReplayData, EventsReplayParams, EvidenceListData, EvidenceRecordData,
+        ExternalBacklogDraftData, ExternalReportApprovalData, ExternalReportDispatchData,
+        ExternalReportDraftData, FindingDispositionData, FindingListData, FindingRecordData,
+        FindingValidationData, GenerateTaskBundleParams, GitHubIssueImportData,
+        ImportGitHubIssuesParams, InitProjectParams, InspectTaskEventsParams, InspectTaskParams,
+        InspectWorkQueueParams, InspectWorkerAssignmentParams, IntegrateWorkerResultParams,
+        LeaseListData, LeaseRecordData, LimitParams, ListEvidenceParams, ListFindingsParams,
+        ListLeasesParams, NextSafeActionData, NextSafeActionParams, PingData, PingParams,
+        PlanningClassificationData, PrepareWorkerAssignmentParams, ProjectScaffoldData,
+        ProjectStatusData, ReconcileParams, ReconciliationData, RecordEvidenceParams,
+        RecordExternalReportDispatchParams, RecordFindingParams, RecordVerificationEvidenceParams,
+        RecordWorkerEventParams, ReleaseLeaseParams, RenewLeaseParams,
+        RequestExternalReportApprovalParams, RootParams, RunnerPrepareParams, RunnerReportData,
+        SendWorkerGuidanceParams, StartWorkerExecutionParams, StorageCapabilityProbeData,
+        StorageCapabilityProbeParams, TaskBundleData, TaskEventListData, TaskPlanData,
+        TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams, TaskPlanValidationData,
+        TaskPlanWriteData, TaskRecordData, UpdateFindingDispositionParams, ValidateBacklogParams,
+        ValidateFindingsParams, WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData,
+        WorkerGuidanceData, WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams,
+        WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams, WorktreeData,
+        WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
     },
-    project, reconcile, runner, tasks, workspace,
+    project, reconcile, runner, storage, tasks, workspace,
 };
 use anyhow::Result as AnyhowResult;
 use rmcp::{
@@ -430,6 +432,72 @@ impl PlatypusMcp {
         Parameters(params): Parameters<ImportGitHubIssuesParams>,
     ) -> Json<ActionResult<GitHubIssueImportData>> {
         Json(integrations::import_github_issues(
+            &self.default_root,
+            params,
+        ))
+    }
+
+    #[tool(
+        title = "Draft External Report",
+        description = "Draft a provider-neutral external report payload from local backlog, task, and evidence state.",
+        annotations(
+            title = "Draft External Report",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn draft_external_report(
+        &self,
+        Parameters(params): Parameters<DraftExternalReportParams>,
+    ) -> Json<ActionResult<ExternalReportDraftData>> {
+        Json(integrations::draft_external_report(
+            &self.default_root,
+            params,
+        ))
+    }
+
+    #[tool(
+        title = "Request External Report Approval",
+        description = "Request durable approval before sending a drafted external report through a host or plugin provider.",
+        annotations(
+            title = "Request External Report Approval",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn request_external_report_approval(
+        &self,
+        Parameters(params): Parameters<RequestExternalReportApprovalParams>,
+    ) -> Json<ActionResult<ExternalReportApprovalData>> {
+        Json(integrations::request_external_report_approval(
+            &self.default_root,
+            params,
+        ))
+    }
+
+    #[tool(
+        title = "Record External Report Dispatch",
+        description = "Record an approved host/plugin external report dispatch result.",
+        annotations(
+            title = "Record External Report Dispatch",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn record_external_report_dispatch(
+        &self,
+        Parameters(params): Parameters<RecordExternalReportDispatchParams>,
+    ) -> Json<ActionResult<ExternalReportDispatchData>> {
+        Json(integrations::record_external_report_dispatch(
             &self.default_root,
             params,
         ))
@@ -1107,6 +1175,25 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Storage Capability Probe",
+        description = "Probe the reference storage backend contract without mutating project runtime state.",
+        annotations(
+            title = "Storage Capability Probe",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn storage_capability_probe(
+        &self,
+        Parameters(params): Parameters<StorageCapabilityProbeParams>,
+    ) -> Json<ActionResult<StorageCapabilityProbeData>> {
+        Json(storage::capability_probe(&self.default_root, params))
+    }
+
+    #[tool(
         title = "Record Evidence",
         description = "Record one durable evidence item for a task, finding, or backlog item.",
         annotations(
@@ -1370,6 +1457,9 @@ mod tests {
             "draft_backlog_items",
             "draft_external_backlog_items",
             "import_github_issues",
+            "draft_external_report",
+            "request_external_report_approval",
+            "record_external_report_dispatch",
             "create_backlog_item",
             "draft_task_plan",
             "inspect_task_plan",
@@ -1404,6 +1494,7 @@ mod tests {
             "renew_lease",
             "release_lease",
             "events_replay",
+            "storage_capability_probe",
             "record_evidence",
             "record_verification_evidence",
             "list_evidence",
@@ -1430,6 +1521,8 @@ mod tests {
             "create_backlog_item",
             "write_task_plan",
             "import_github_issues",
+            "request_external_report_approval",
+            "record_external_report_dispatch",
             "dispatch_next_work",
             "claim_next_task",
             "worktree_create",

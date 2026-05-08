@@ -40,6 +40,38 @@ pub(crate) fn external_ref_keys(
         .collect())
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct BacklogItemSnapshot {
+    pub id: String,
+    pub title: String,
+    pub external_refs: Vec<crate::models::ExternalRef>,
+}
+
+pub(crate) fn backlog_item_snapshot(
+    default_root: &std::path::Path,
+    root: Option<&str>,
+    item_id: &str,
+) -> Result<(std::path::PathBuf, BacklogItemSnapshot), String> {
+    let root = filesystem::resolve_root(default_root, root)?;
+    let validation = validate::validate_backlog_at_root(&root, true);
+    if !validation.ok {
+        return Err(validation.errors.join("\n"));
+    }
+    let item = validation
+        .items
+        .iter()
+        .find(|item| item.frontmatter.id == item_id)
+        .ok_or_else(|| format!("backlog item `{item_id}` was not found"))?;
+    Ok((
+        root,
+        BacklogItemSnapshot {
+            id: item.frontmatter.id.clone(),
+            title: item.frontmatter.title.clone(),
+            external_refs: item.frontmatter.external_refs.clone(),
+        },
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

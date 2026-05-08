@@ -1,0 +1,70 @@
+item_id: MCP-041
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: A backend capability probe verifies the documented storage contract through repository/tool boundaries.
+- id: R2
+  text: The probe reports transactions, ordered replay, idempotency/conflicts, leases, migration repeatability, project identity, and recovery as structured checks.
+- id: R3
+  text: Passing the probe is documented as required before adding a shared backend.
+design:
+  summary: Add a deterministic read-only capability probe for the SQLite reference backend and expose it as a diagnostic MCP tool for future backend evaluation.
+  owned_surfaces:
+  - src/storage
+  - src/models.rs
+  - src/server.rs
+  - docs/storage.md
+  - tests/stdio_protocol.rs
+  notes: Keep the probe backend-neutral in shape even though it currently runs against SQLite.
+tasks:
+- id: MCP-041-T01
+  title: Add storage probe models and checks
+  goal: Implement structured capability checks for the runtime backend contract.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/storage
+  - src/models.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - The probe reports named checks with status and detail.
+  - Failures become structured gaps rather than panics.
+  notes: null
+- id: MCP-041-T02
+  title: Expose backend probe tool
+  goal: Add a read-only MCP diagnostic tool for backend capability checks.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on:
+  - MCP-041-T01
+  owned_surfaces:
+  - src/server.rs
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Tool listing includes the backend capability probe.
+  - Stdio tests assert successful probe output.
+  notes: null
+- id: MCP-041-T03
+  title: Document backend probe requirement
+  goal: Update storage docs to make the probe the gate for future shared backends.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-041-T02
+  owned_surfaces:
+  - docs/storage.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Docs say future backends must pass or implement equivalent probe checks.
+  notes: null

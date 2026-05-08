@@ -33,6 +33,9 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"record_finding"));
     assert!(tool_names.contains(&"draft_external_backlog_items"));
     assert!(tool_names.contains(&"import_github_issues"));
+    assert!(tool_names.contains(&"draft_external_report"));
+    assert!(tool_names.contains(&"request_external_report_approval"));
+    assert!(tool_names.contains(&"record_external_report_dispatch"));
     assert!(tool_names.contains(&"draft_task_plan"));
     assert!(tool_names.contains(&"inspect_task_plan"));
     assert!(tool_names.contains(&"list_task_plans"));
@@ -64,6 +67,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"renew_lease"));
     assert!(tool_names.contains(&"release_lease"));
     assert!(tool_names.contains(&"events_replay"));
+    assert!(tool_names.contains(&"storage_capability_probe"));
     assert!(tool_names.contains(&"record_evidence"));
     assert!(tool_names.contains(&"record_verification_evidence"));
     assert!(tool_names.contains(&"list_evidence"));
@@ -815,6 +819,219 @@ async fn stdio_server_imports_github_issues_as_backlog_snapshots() -> anyhow::Re
         skipped["data"]["skipped"][0]["reason"],
         "external reference already imported"
     );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_drafts_approves_and_records_external_report() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+    let initialized = call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "External Report" }),
+    )
+    .await?;
+    assert_stage_status("init_project", &initialized, "completed");
+
+    let imported = call_tool_json(
+        &client,
+        "import_github_issues",
+        json!({
+            "owner": "owner",
+            "repo": "repo",
+            "id_prefix": "GH",
+            "owned_surfaces": ["src"],
+            "issues": [{
+                "number": 1,
+                "title": "Build external report feature",
+                "body": "Track progress back to GitHub.",
+                "state": "open",
+                "url": "https://github.com/owner/repo/issues/1",
+                "labels": ["feature"]
+            }]
+        }),
+    )
+    .await?;
+    assert_stage_status("import_github_issues", &imported, "completed");
+
+    let evidence = call_tool_json(
+        &client,
+        "record_evidence",
+        json!({
+            "source_item_id": "GH-001",
+            "kind": "note",
+            "summary": "Implementation has a safe local draft.",
+            "refs": ["backlog:GH-001"]
+        }),
+    )
+    .await?;
+    assert_stage_status("record_evidence", &evidence, "completed");
+
+    let drafted = call_tool_json(
+        &client,
+        "draft_external_report",
+        json!({
+            "source_item_id": "GH-001",
+            "report_type": "status",
+            "evidence_limit": 5
+        }),
+    )
+    .await?;
+    assert_stage_status("draft_external_report", &drafted, "completed");
+    assert_eq!(drafted["data"]["draft"]["provider"], "github");
+    assert_eq!(drafted["data"]["draft"]["kind"], "issue");
+    assert_eq!(drafted["data"]["draft"]["external_id"], "owner/repo#1");
+    assert_eq!(drafted["data"]["draft"]["requires_approval"], true);
+    assert_eq!(
+        drafted["data"]["evidence"]
+            .as_array()
+            .expect("evidence")
+            .len(),
+        1
+    );
+
+    let approval = call_tool_json(
+        &client,
+        "request_external_report_approval",
+        json!({ "draft": drafted["data"]["draft"].clone(), "requested_by": "manager" }),
+    )
+    .await?;
+    assert_stage_status("request_external_report_approval", &approval, "completed");
+    let approval_id = string_at(&approval, &["data", "approval", "id"], "approval id");
+
+    let pending_dispatch = call_tool_json(
+        &client,
+        "record_external_report_dispatch",
+        json!({
+            "approval_id": approval_id,
+            "provider": "github",
+            "kind": "issue",
+            "external_id": "owner/repo#1",
+            "report_type": "status",
+            "status": "sent",
+            "summary": "Posted status update.",
+            "outbound_ref": "https://github.com/owner/repo/issues/1#issuecomment-1"
+        }),
+    )
+    .await?;
+    assert_stage_status(
+        "record_external_report_dispatch pending",
+        &pending_dispatch,
+        "skipped",
+    );
+
+    let approved = call_tool_json(
+        &client,
+        "approval_respond",
+        json!({
+            "approval_id": string_at(&approval, &["data", "approval", "id"], "approval id"),
+            "decision": "approved",
+            "responder": "user"
+        }),
+    )
+    .await?;
+    assert_stage_status("approval_respond", &approved, "completed");
+
+    let dispatched = call_tool_json(
+        &client,
+        "record_external_report_dispatch",
+        json!({
+            "approval_id": string_at(&approval, &["data", "approval", "id"], "approval id"),
+            "provider": "github",
+            "kind": "issue",
+            "external_id": "owner/repo#1",
+            "report_type": "status",
+            "status": "sent",
+            "summary": "Posted status update.",
+            "outbound_ref": "https://github.com/owner/repo/issues/1#issuecomment-1",
+            "metadata": {
+                "request_token": "secret-value",
+                "provider_request_id": "req-1"
+            }
+        }),
+    )
+    .await?;
+    assert_stage_status("record_external_report_dispatch", &dispatched, "completed");
+    assert_eq!(dispatched["data"]["status"], "sent");
+    assert_eq!(
+        dispatched["data"]["event"]["event_type"],
+        "external_report_dispatch"
+    );
+    assert_eq!(dispatched["data"]["evidence"]["kind"], "external_report");
+    assert_eq!(
+        dispatched["data"]["evidence"]["metadata"]["request_token"],
+        "[redacted]"
+    );
+
+    let denied_approval = call_tool_json(
+        &client,
+        "request_external_report_approval",
+        json!({ "draft": drafted["data"]["draft"].clone(), "requested_by": "manager" }),
+    )
+    .await?;
+    assert_stage_status(
+        "request_external_report_approval denied",
+        &denied_approval,
+        "completed",
+    );
+    let denied_id = string_at(
+        &denied_approval,
+        &["data", "approval", "id"],
+        "denied approval id",
+    );
+    let denied = call_tool_json(
+        &client,
+        "approval_respond",
+        json!({
+            "approval_id": denied_id,
+            "decision": "denied",
+            "responder": "user",
+            "reason": "Needs review."
+        }),
+    )
+    .await?;
+    assert_stage_status("approval_respond denied", &denied, "completed");
+    let denied_dispatch = call_tool_json(
+        &client,
+        "record_external_report_dispatch",
+        json!({
+            "approval_id": string_at(&denied_approval, &["data", "approval", "id"], "denied approval id"),
+            "provider": "github",
+            "kind": "issue",
+            "external_id": "owner/repo#1",
+            "report_type": "status",
+            "status": "sent",
+            "summary": "Posted status update."
+        }),
+    )
+    .await?;
+    assert_stage_status(
+        "record_external_report_dispatch denied",
+        &denied_dispatch,
+        "skipped",
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_runs_storage_capability_probe() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let probe = call_tool_json(&client, "storage_capability_probe", json!({})).await?;
+    assert_stage_status("storage_capability_probe", &probe, "completed");
+    assert_eq!(probe["data"]["backend"], "sqlite");
+    assert_eq!(probe["data"]["ok"], true);
+    let checks = probe["data"]["checks"].as_array().expect("checks");
+    assert!(checks
+        .iter()
+        .any(|check| check["name"] == "schema_repeatability"));
+    assert!(checks.iter().any(|check| check["name"] == "lease_conflict"));
 
     client.cancel().await?;
     Ok(())

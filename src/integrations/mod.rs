@@ -1,3 +1,9 @@
+mod reports;
+
+pub use reports::{
+    draft_external_report, record_external_report_dispatch, request_external_report_approval,
+};
+
 use crate::{
     backlog::{self, create_backlog_item},
     models::{
@@ -456,11 +462,11 @@ fn source_hash(owner: &str, repo: &str, issue: &GitHubIssueRecord) -> String {
     format!("fnv1a64:{hash:016x}")
 }
 
-fn bounded_limit(limit: Option<usize>) -> usize {
+pub(super) fn bounded_limit(limit: Option<usize>) -> usize {
     limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
 }
 
-fn clean_token(field: &str, value: &str) -> Result<String, ExternalIntakeError> {
+pub(super) fn clean_token(field: &str, value: &str) -> Result<String, ExternalIntakeError> {
     let token = clean_required(field, value)?;
     if token.chars().all(|character| {
         character.is_ascii_alphanumeric()
@@ -476,7 +482,7 @@ fn clean_token(field: &str, value: &str) -> Result<String, ExternalIntakeError> 
     }
 }
 
-fn clean_required(field: &str, value: &str) -> Result<String, ExternalIntakeError> {
+pub(super) fn clean_required(field: &str, value: &str) -> Result<String, ExternalIntakeError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         Err(ExternalIntakeError::new(format!("{field} is required")))
@@ -485,7 +491,7 @@ fn clean_required(field: &str, value: &str) -> Result<String, ExternalIntakeErro
     }
 }
 
-fn clean_optional(value: Option<String>) -> Option<String> {
+pub(super) fn clean_optional(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim();
         if trimmed.is_empty() {

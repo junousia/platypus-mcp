@@ -12,7 +12,7 @@ ARGS ?=
 	help \
 	check ci lint fmt-check fmt format test test-lib test-stdio test-one \
 	build doc clean \
-	run run-root runner \
+	run run-root runner smoke smoke-queue smoke-storage \
 	metadata version
 
 help: ## Show categorized developer commands.
@@ -41,6 +41,9 @@ help: ## Show categorized developer commands.
 	@printf '  \033[36mrun-root\033[0m    Run stdio MCP server with ROOT=/path/to/project\n'
 	@printf '  \033[36mrunner\033[0m      Run local preparation runner with MAX_TASKS=1 by default\n\n'
 	@printf '\033[1mInspect\033[0m\n'
+	@printf '  \033[36msmoke\033[0m       Invoke inspect_status through the stdio tool helper\n'
+	@printf '  \033[36msmoke-queue\033[0m Invoke inspect_work_queue through the stdio tool helper\n'
+	@printf '  \033[36msmoke-storage\033[0m Probe storage backend capabilities through MCP\n'
 	@printf '  \033[36mmetadata\033[0m    Print Cargo metadata without dependencies\n'
 	@printf '  \033[36mversion\033[0m     Print Cargo and rustc versions\n\n'
 	@printf '\033[1mVariables\033[0m\n'
@@ -97,6 +100,15 @@ run-root: ## Run stdio MCP server with ROOT=/path/to/project.
 
 runner: ## Run local preparation runner with MAX_TASKS=1 by default.
 	$(CARGO) run -- runner --max-tasks "$(MAX_TASKS)" $(ARGS)
+
+smoke: ## Invoke inspect_status through the stdio tool helper.
+	$(CARGO) run -- tool --root "$(ROOT)" inspect_status '{"limit":5}'
+
+smoke-queue: ## Invoke inspect_work_queue through the stdio tool helper.
+	$(CARGO) run -- tool --root "$(ROOT)" inspect_work_queue '{"limit":5,"require_task_plan":true}'
+
+smoke-storage: ## Probe storage backend capabilities through MCP.
+	$(CARGO) run -- tool --root "$(ROOT)" storage_capability_probe '{}'
 
 metadata: ## Print Cargo metadata without dependencies.
 	$(CARGO) metadata --no-deps

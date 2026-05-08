@@ -1,0 +1,71 @@
+item_id: MCP-037
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Hosts can draft provider-neutral external report payloads from local backlog/task/evidence state.
+- id: R2
+  text: Drafting is read-only and never calls an external provider.
+- id: R3
+  text: Missing external refs, missing evidence, and unsupported report intents return structured recovery guidance.
+design:
+  summary: Add a read-only report drafting tool that selects an imported external ref, summarizes local execution state, and returns a provider-neutral payload suitable for later approval and provider dispatch.
+  owned_surfaces:
+  - src/integrations
+  - src/models.rs
+  - src/server.rs
+  - docs/tools.md
+  - tests/stdio_protocol.rs
+  notes: Keep this separate from sending. Provider network calls remain outside this item.
+tasks:
+- id: MCP-037-T01
+  title: Add external report draft schema
+  goal: Define typed request and response models for provider-neutral report drafts.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - src/models.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - The schema includes provider, kind, external id, report type, title/body, local refs, evidence refs, and safety notes.
+  - The schema can be serialized without exposing hidden runtime fields or credentials.
+  notes: null
+- id: MCP-037-T02
+  title: Implement read-only report drafting
+  goal: Inspect local state and produce deterministic external report payloads without mutating state.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-037-T01
+  owned_surfaces:
+  - src/integrations
+  - src/server.rs
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Drafting works for imported backlog items with external refs.
+  - Missing refs and unsupported report types return skipped or failed structured results.
+  - Tests require no live provider.
+  notes: null
+- id: MCP-037-T03
+  title: Document report draft tool
+  goal: Add the draft tool to the MCP tool contract and reporting flow docs.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-037-T02
+  owned_surfaces:
+  - docs/tools.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Docs explain that report drafts are local and approval/send happens later.
+  notes: null

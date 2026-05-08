@@ -1,4 +1,5 @@
 mod paths;
+mod probe;
 mod repository;
 mod schema;
 mod traits;
@@ -12,6 +13,7 @@ use std::{
 
 pub use schema::SCHEMA_VERSION;
 
+pub use probe::capability_probe;
 pub use repository::{
     ApprovalInsert, ApprovalRepository, EventInsert, EventRepository, Repository, TaskEventInsert,
     TaskInsert, TaskRepository,

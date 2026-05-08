@@ -17,6 +17,7 @@ const VALID_KINDS: &[&str] = &[
     "file_summary",
     "worker_finding",
     "manager_disposition",
+    "external_report",
     "note",
 ];
 

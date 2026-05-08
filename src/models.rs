@@ -128,6 +128,42 @@ pub struct ImportGitHubIssuesParams {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DraftExternalReportParams {
+    pub root: Option<String>,
+    pub source_item_id: String,
+    pub source_task_id: Option<String>,
+    pub provider: Option<String>,
+    pub kind: Option<String>,
+    pub external_id: Option<String>,
+    pub report_type: Option<String>,
+    pub title: Option<String>,
+    pub evidence_limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RequestExternalReportApprovalParams {
+    pub root: Option<String>,
+    pub draft: ExternalReportDraft,
+    pub requested_by: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecordExternalReportDispatchParams {
+    pub root: Option<String>,
+    pub approval_id: String,
+    pub provider: String,
+    pub kind: String,
+    pub external_id: String,
+    pub report_type: String,
+    pub status: String,
+    pub summary: String,
+    pub outbound_ref: Option<String>,
+    pub error: Option<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GitHubIssueRecord {
@@ -196,6 +232,25 @@ pub struct ExternalRef {
     pub locator: Option<String>,
     pub imported_at: Option<String>,
     pub source_hash: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalReportDraft {
+    pub report_key: String,
+    pub provider: String,
+    pub kind: String,
+    pub external_id: String,
+    pub external_url: Option<String>,
+    pub report_type: String,
+    pub source_item_id: String,
+    pub source_task_id: Option<String>,
+    pub title: String,
+    pub body: String,
+    pub local_refs: Vec<String>,
+    pub evidence_refs: Vec<String>,
+    pub safety_notes: Vec<String>,
+    pub requires_approval: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -363,6 +418,11 @@ pub struct EventsReplayParams {
     pub task_id: Option<String>,
     pub scope: Option<String>,
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StorageCapabilityProbeParams {
+    pub root: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -742,6 +802,32 @@ pub struct GitHubIssueImportData {
     pub skipped: Vec<GitHubIssueSkipRecord>,
     pub imported_count: usize,
     pub skipped_count: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ExternalReportDraftData {
+    pub root: String,
+    pub draft: ExternalReportDraft,
+    pub evidence: Vec<EvidenceRecord>,
+    pub task: Option<TaskRecord>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ExternalReportApprovalData {
+    pub root: String,
+    pub approval: ApprovalRecord,
+    pub report_key: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ExternalReportDispatchData {
+    pub root: String,
+    pub approval: ApprovalRecord,
+    pub report_key: String,
+    pub status: String,
+    pub outbound_ref: Option<String>,
+    pub event: EventRecord,
+    pub evidence: EvidenceRecord,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -1184,6 +1270,23 @@ pub struct EventsReplayData {
     pub root: String,
     pub events: Vec<EventRecord>,
     pub returned: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct StorageCapabilityProbeData {
+    pub root: String,
+    pub backend: String,
+    pub ok: bool,
+    pub checks: Vec<StorageCapabilityCheck>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct StorageCapabilityCheck {
+    pub name: String,
+    pub status: String,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]

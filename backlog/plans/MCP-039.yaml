@@ -1,0 +1,65 @@
+item_id: MCP-039
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: A host-style test drives the public MCP tool surface from setup through execution and report drafting.
+- id: R2
+  text: The exercise uses local fixtures and fake workers/providers only.
+- id: R3
+  text: Skipped and failed paths in the exercise include actionable structured recovery guidance.
+design:
+  summary: Extend stdio protocol coverage with a product exercise that imports external work, dispatches it to a fake worker, records verification/integration, reconciles, drafts a report, and records an approved dispatch result.
+  owned_surfaces:
+  - tests/stdio_protocol.rs
+  - docs/workflow.md
+  - docs/tools.md
+  notes: Reuse the existing stdio test harness and fake worktree flow.
+tasks:
+- id: MCP-039-T01
+  title: Add host-style lifecycle test
+  goal: Exercise imported external work through execution, verification, reconciliation, and report drafting.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - The test uses MCP calls, not private Rust helpers.
+  - The test requires no real agents or provider network.
+  notes: null
+- id: MCP-039-T02
+  title: Cover recovery guidance in the exercise
+  goal: Assert representative skipped/failed responses include next_action guidance.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-039-T01
+  owned_surfaces:
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - At least one report drafting or dispatch recovery path is asserted.
+  notes: null
+- id: MCP-039-T03
+  title: Document the reference smoke path
+  goal: Mention the host-style exercise as the reference MCP product smoke path.
+  requirement_refs:
+  - R1
+  depends_on:
+  - MCP-039-T02
+  owned_surfaces:
+  - docs/workflow.md
+  - docs/tools.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Docs point developers to the stdio lifecycle/reporting exercise.
+  notes: null
