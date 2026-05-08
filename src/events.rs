@@ -1,5 +1,6 @@
 use crate::{
     models::{ActionResult, ActionStatus, EventRecord, EventsReplayData, EventsReplayParams},
+    storage::EventStore,
     storage::{self, EventInsert},
 };
 use serde_json::Value;
