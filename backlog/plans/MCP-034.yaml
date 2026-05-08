@@ -1,0 +1,76 @@
+item_id: MCP-034
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: External intake adapters produce provider-neutral backlog draft candidates.
+- id: R2
+  text: The intake boundary deduplicates already imported external references.
+- id: R3
+  text: Documentation explains how direct-code and future plugin adapters should map into local backlog snapshots.
+design:
+  summary: Add a host-provided external intake adapter boundary, expose it through a read-only MCP drafting tool, and document the adapter flow before adding provider-specific GitHub import.
+  owned_surfaces:
+  - src/integrations
+  - src/models.rs
+  - src/server.rs
+  - docs/tools.md
+  - docs/roadmap.md
+  - tests/stdio_protocol.rs
+  notes: Keep the first adapter read-only and host-provided. Network/provider-specific import starts in MCP-035.
+tasks:
+- id: MCP-034-T01
+  title: Define intake adapter types
+  goal: Add provider-neutral external work records, draft candidates, external ref keys, and adapter trait boundaries.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/integrations
+  - src/models.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Adapter input records include kind, id, title, body, URL or locator, labels, metadata, and source hash.
+  - Draft candidates include external refs, mapping reasons, priority/type/area hints, and skip metadata.
+  - Unit tests cover mapping and dedupe.
+  notes: null
+- id: MCP-034-T02
+  title: Expose read-only external drafting tool
+  goal: Add an MCP tool that drafts external backlog candidates from host-provided records without mutating project state.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on:
+  - MCP-034-T01
+  owned_surfaces:
+  - src/server.rs
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Tool listing includes the read-only external drafting tool.
+  - The tool skips already imported refs based on provider, kind, and id.
+  - Invalid input fails with structured errors.
+  notes: null
+- id: MCP-034-T03
+  title: Document external intake boundary
+  goal: Explain how external systems and future plugins map into local executable backlog snapshots.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-034-T02
+  owned_surfaces:
+  - docs/tools.md
+  - docs/roadmap.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Docs identify the host-provided adapter as the first boundary.
+  - Docs preserve local backlog snapshots as the execution contract.
+  - Roadmap calls out provider/plugin adapters as future extensions.
+  notes: null

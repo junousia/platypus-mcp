@@ -35,8 +35,8 @@ deterministic and references the current public tool names.
 
 1. Bootstrap and inspect: `init_project`, `doctor_snapshot`,
    `inspect_status`, `inspect_workflow_config`.
-2. Shape backlog: `draft_backlog_items`, `create_backlog_item`,
-   `validate_backlog`, `list_backlog`.
+2. Shape backlog: `draft_backlog_items`, `draft_external_backlog_items`,
+   `create_backlog_item`, `validate_backlog`, `list_backlog`.
 3. Plan non-trivial work: `draft_task_plan`, `write_task_plan`,
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
 4. Inspect the executable queue: `inspect_work_queue`.
@@ -93,6 +93,8 @@ and scripts; MCP hosts should still call tools through MCP directly.
 
 - `draft_backlog_items`: draft deterministic candidate backlog items from a
   goal.
+- `draft_external_backlog_items`: draft provider-neutral candidates from
+  host-provided external work records and skip already-imported references.
 - `create_backlog_item`: write one structured backlog item.
 - `validate_backlog`: validate backlog item and epic files.
 - `list_backlog`: list runnable backlog candidates.
@@ -100,6 +102,10 @@ and scripts; MCP hosts should still call tools through MCP directly.
 Backlog item frontmatter may include provider-neutral `external_refs`. Use them
 to preserve where work came from or where results should be reported without
 making an external tracker the execution contract.
+
+External intake adapters should map provider-specific records into the same
+draft shape before creating local backlog items. The local backlog item remains
+the stable executable snapshot.
 
 ### Task Plans
 

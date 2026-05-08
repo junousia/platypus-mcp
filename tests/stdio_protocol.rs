@@ -31,6 +31,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"inspect_work_queue"));
     assert!(tool_names.contains(&"classify_planning_needs"));
     assert!(tool_names.contains(&"record_finding"));
+    assert!(tool_names.contains(&"draft_external_backlog_items"));
     assert!(tool_names.contains(&"draft_task_plan"));
     assert!(tool_names.contains(&"inspect_task_plan"));
     assert!(tool_names.contains(&"list_task_plans"));
@@ -639,6 +640,89 @@ async fn stdio_server_dispatches_next_work_without_running_worker() -> anyhow::R
 
     assert_eq!(events["status"], "completed");
     assert_eq!(events["data"]["events"][0]["event_type"], "task_queued");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_drafts_external_backlog_items_and_dedupes_refs() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+    let initialized = call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "External Intake" }),
+    )
+    .await?;
+    assert_stage_status("init_project", &initialized, "completed");
+
+    let created = call_tool_json(
+        &client,
+        "create_backlog_item",
+        json!({
+            "id": "PROJ-001",
+            "title": "Imported issue",
+            "priority": "P1",
+            "type": "feature",
+            "area": "integrations",
+            "epic": "general",
+            "suggested_worker": "coder",
+            "owned_surfaces": ["src"],
+            "external_refs": [{
+                "provider": "github",
+                "kind": "issue",
+                "id": "owner/repo#1",
+                "url": "https://github.com/owner/repo/issues/1",
+                "source_hash": "sha256:one"
+            }],
+            "goal": "Import one issue.",
+            "implementation_contract": "Keep the item local.",
+            "acceptance": ["The item validates."]
+        }),
+    )
+    .await?;
+    assert_stage_status("create_backlog_item", &created, "completed");
+
+    let drafted = call_tool_json(
+        &client,
+        "draft_external_backlog_items",
+        json!({
+            "provider": "github",
+            "owned_surfaces": ["src"],
+            "records": [
+                {
+                    "kind": "issue",
+                    "id": "owner/repo#1",
+                    "title": "Already imported",
+                    "body": "Existing work.",
+                    "url": "https://github.com/owner/repo/issues/1",
+                    "labels": ["p0"],
+                    "source_hash": "sha256:one"
+                },
+                {
+                    "kind": "issue",
+                    "id": "owner/repo#2",
+                    "title": "New imported work",
+                    "body": "New work.",
+                    "url": "https://github.com/owner/repo/issues/2",
+                    "labels": ["docs", "area:integrations"],
+                    "source_hash": "sha256:two"
+                }
+            ]
+        }),
+    )
+    .await?;
+
+    assert_stage_status("draft_external_backlog_items", &drafted, "completed");
+    assert_eq!(drafted["data"]["returned"], 2);
+    assert_eq!(drafted["data"]["skipped"], 1);
+    assert_eq!(drafted["data"]["drafts"][0]["skipped"], true);
+    assert_eq!(drafted["data"]["drafts"][1]["type"], "docs");
+    assert_eq!(
+        drafted["data"]["drafts"][1]["external_ref"]["id"],
+        "owner/repo#2"
+    );
 
     client.cancel().await?;
     Ok(())

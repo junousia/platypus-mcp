@@ -98,6 +98,36 @@ pub struct DraftBacklogItemsParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct DraftExternalBacklogItemsParams {
+    pub root: Option<String>,
+    pub provider: String,
+    #[serde(default)]
+    pub records: Vec<ExternalWorkRecord>,
+    pub suggested_worker: Option<String>,
+    #[serde(default)]
+    pub owned_surfaces: Vec<String>,
+    #[serde(default)]
+    pub verification_command: Vec<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalWorkRecord {
+    pub kind: String,
+    pub id: String,
+    pub title: String,
+    pub body: Option<String>,
+    pub url: Option<String>,
+    pub locator: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
+    pub source_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateBacklogItemParams {
     pub root: Option<String>,
     pub id: Option<String>,
@@ -640,6 +670,34 @@ pub struct BacklogValidationData {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DraftBacklogData {
     pub drafts: Vec<DraftBacklogItem>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ExternalBacklogDraftData {
+    pub root: String,
+    pub provider: String,
+    pub drafts: Vec<ExternalBacklogDraft>,
+    pub returned: usize,
+    pub skipped: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ExternalBacklogDraft {
+    pub candidate_id: String,
+    pub title: String,
+    pub objective: String,
+    pub priority: String,
+    #[serde(rename = "type")]
+    pub item_type: String,
+    pub area: String,
+    pub owned_surfaces: Vec<String>,
+    pub suggested_worker: Option<String>,
+    pub verification_command: Vec<String>,
+    pub external_ref: ExternalRef,
+    pub labels: Vec<String>,
+    pub mapping_reasons: Vec<String>,
+    pub skipped: bool,
+    pub skip_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
