@@ -1308,6 +1308,101 @@ async fn stdio_server_runs_worker_assignment_lifecycle() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn stdio_server_recovers_after_failed_worker_handoff() -> anyhow::Result<()> {
+    let project = assignment_project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let dispatched = call_tool_json(&client, "dispatch_next_work", json!({})).await?;
+    assert_stage_status("dispatch_next_work", &dispatched, "completed");
+    let task_id = string_at(&dispatched, &["data", "task", "id"], "task id");
+
+    let claimed = call_tool_json(
+        &client,
+        "claim_next_task",
+        json!({
+            "worker": "coder",
+            "claimant": "runner-that-crashed-before-handoff"
+        }),
+    )
+    .await?;
+    assert_stage_status("claim_next_task", &claimed, "completed");
+    assert_eq!(claimed["data"]["task"]["id"], task_id);
+
+    let failed = call_tool_json(
+        &client,
+        "prepare_worker_handoff",
+        json!({
+            "task_id": task_id,
+            "worker": "coder",
+            "claimant": "stdio-test",
+            "base_ref": "missing-ref-for-recovery-test",
+            "verification_command": ["make", "check"]
+        }),
+    )
+    .await?;
+    assert_stage_status("prepare_worker_handoff failed", &failed, "failed");
+    assert!(failed["summary"]
+        .as_str()
+        .expect("summary")
+        .contains("worktree"));
+
+    let inspected = call_tool_json(
+        &client,
+        "inspect_task",
+        json!({
+            "task_id": task_id
+        }),
+    )
+    .await?;
+    assert_stage_status("inspect_task", &inspected, "completed");
+    assert_eq!(inspected["data"]["task"]["status"], "queued");
+    assert!(inspected["data"]["task"]["claimed_by"].is_null());
+    assert!(inspected["data"]["task"]["claimed_at"].is_null());
+
+    let events = call_tool_json(
+        &client,
+        "inspect_task_events",
+        json!({
+            "task_id": task_id
+        }),
+    )
+    .await?;
+    assert_stage_status("inspect_task_events", &events, "completed");
+    let event_types = events["data"]["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .map(|event| event["event_type"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert!(event_types.contains(&"worker_assignment_failed"));
+
+    let guidance = call_tool_json(&client, "next_safe_action", json!({})).await?;
+    assert_stage_status("next_safe_action", &guidance, "completed");
+    assert_eq!(
+        guidance["data"]["recommended_tool"],
+        "prepare_worker_handoff"
+    );
+    assert_eq!(guidance["data"]["params"]["task_id"], task_id);
+
+    let prepared = call_tool_json(
+        &client,
+        "prepare_worker_handoff",
+        json!({
+            "task_id": task_id,
+            "worker": "coder",
+            "claimant": "stdio-test",
+            "verification_command": ["make", "check"]
+        }),
+    )
+    .await?;
+    assert_stage_status("prepare_worker_handoff retry", &prepared, "completed");
+    assert_eq!(prepared["data"]["assignment"]["status"], "prepared");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_runner_prepare_next_persists_worker_assignment() -> anyhow::Result<()> {
     let project = assignment_project_fixture();
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
