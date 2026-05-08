@@ -20,43 +20,50 @@ perspectives.
 
 ## Near-Term Direction
 
-1. Strengthen reconciliation so completed work is not considered handled until
-   verification, integration, and required findings are resolved.
-2. Add full lifecycle smoke tests that use only MCP tools and fake/local
-   worker fixtures.
-3. Expose MCP resources or prompts so hosts can discover the recommended
-   workflow without relying on external chat instructions.
-4. Add a storage backend capability probe that runs the documented transaction,
+1. Add a provider-neutral external report draft boundary so imported GitHub or
+   future tracker work can flow back toward external systems without making
+   those systems the runtime source of truth.
+2. Add an approval-gated external report dispatch boundary that records
+   host/plugin send results without storing credentials in Platypus state.
+3. Add a host-style lifecycle exercise that drives the public MCP tool surface
+   from project setup through imported work, fake worker execution, evidence,
+   reconciliation, and report drafting.
+4. Polish installation and client configuration so Codex and Claude users can
+   configure stdio MCP usage and smoke test the server without guessing.
+5. Add a storage backend capability probe that runs the documented transaction,
    replay, lease, idempotency, migration, and recovery checks through the
    repository traits.
 
 ```mermaid
 flowchart LR
-    done["MCP-020<br/>managed integration"]
-    docs["MCP-023<br/>workflow and roadmap docs"]
-    rec["MCP-021<br/>reconciliation coverage"]
-    smoke["MCP-022<br/>lifecycle smoke test"]
-    prompts["MCP-024<br/>resources and prompts"]
+    intake["MCP-035<br/>GitHub import snapshots"]
+    policy["MCP-036<br/>external reporting policy"]
+    draft["MCP-037<br/>report drafts"]
+    dispatch["MCP-038<br/>approved report dispatch"]
+    smoke["MCP-039<br/>host-style lifecycle exercise"]
+    install["MCP-040<br/>install and client config"]
     storage["MCP-032<br/>backend contract"]
-    probe["future<br/>backend capability probe"]
+    probe["MCP-041<br/>backend capability probe"]
 
-    done --> rec
-    docs --> rec
-    rec --> smoke
-    docs --> prompts
-    smoke --> prompts
-    docs --> storage --> probe
+    intake --> policy --> draft --> dispatch
+    draft --> smoke
+    install --> smoke
+    storage --> probe
 ```
 
 ## Backlog Tranche
 
-- `MCP-021`: integration evidence and reconciliation coverage.
-- `MCP-022`: full lifecycle smoke scenario.
-- `MCP-024`: MCP resources and prompts for host guidance.
+- `MCP-037`: draft provider-neutral external report payloads.
+- `MCP-038`: add the approval-gated external report dispatch boundary.
+- `MCP-039`: exercise the public MCP host lifecycle end to end with local
+  fixtures.
+- `MCP-040`: polish installation and Codex/Claude client configuration.
+- `MCP-041`: probe the documented storage backend capability contract.
 
-`MCP-020` added managed worker result integration, and `MCP-023` refreshed
-these repository-level docs so future work items stay aligned with the current
-tooling and intended product direction.
+`MCP-035` and `MCP-036` established external import snapshots and reporting
+policy. The next tranche turns that policy into a concrete report draft/send
+boundary, then proves the whole MCP workflow can be exercised without real
+agents or provider network calls.
 
 ## Design Defaults
 
