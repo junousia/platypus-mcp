@@ -102,3 +102,17 @@ and `next_action` when recovery guidance is needed.
 - External report sending is split into a local draft, explicit approval, and a
   separate dispatch-result record.
 - Runtime state lives under the configured project root in `.platy/`.
+
+## Crates.io Release
+
+The `Publish` GitHub Actions workflow publishes `platypus-mcp` to crates.io
+when a GitHub release is published. It can also be run manually as a dry run.
+
+Repository setup:
+
+1. Create a crates.io API token.
+2. Add it as the GitHub repository secret `CARGO_REGISTRY_TOKEN`.
+3. Publish a GitHub release for the version in `Cargo.toml`.
+
+The workflow always runs `make check` and `make publish-dry-run` before the
+upload step.
