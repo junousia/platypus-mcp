@@ -44,7 +44,8 @@ use rmcp::{
     tool, tool_handler, tool_router, ErrorData as McpError, Json, RoleServer, ServerHandler,
     ServiceExt,
 };
-use std::{collections::BTreeSet, path::PathBuf};
+use serde_json::{Map, Value};
+use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub struct PlatypusMcp {
@@ -55,7 +56,7 @@ pub struct PlatypusMcp {
 impl PlatypusMcp {
     pub fn new() -> Self {
         Self {
-            tool_router: Self::tool_router(),
+            tool_router: Self::tool_router_with_compatible_schemas(),
             default_root: std::env::var("PLATYPUS_MCP_ROOT")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
@@ -69,6 +70,68 @@ impl PlatypusMcp {
             .map(|tool| tool.name.to_string())
             .collect()
     }
+
+    fn tool_router_with_compatible_schemas() -> ToolRouter<Self> {
+        let mut router = Self::tool_router();
+        for route in router.map.values_mut() {
+            route.attr.input_schema =
+                Arc::new(normalize_schema_object((*route.attr.input_schema).clone()));
+            if let Some(output_schema) = route.attr.output_schema.as_ref() {
+                route.attr.output_schema =
+                    Some(Arc::new(normalize_schema_object((**output_schema).clone())));
+            }
+        }
+        router
+    }
+}
+
+fn normalize_schema_object(schema: rmcp::model::JsonObject) -> rmcp::model::JsonObject {
+    let mut value = Value::Object(schema);
+    normalize_schema_value(&mut value);
+    match value {
+        Value::Object(schema) => schema,
+        _ => Map::new(),
+    }
+}
+
+fn normalize_schema_value(value: &mut Value) {
+    match value {
+        Value::Object(schema) => {
+            if matches!(schema.get("nullable"), Some(Value::Bool(true)))
+                && !schema.contains_key("type")
+                && matches!(schema.get("const"), Some(Value::Null))
+            {
+                schema.remove("nullable");
+                schema.insert("type".to_string(), Value::String("null".to_string()));
+            }
+
+            if schema.get("type").and_then(Value::as_str) == Some("integer")
+                && schema
+                    .get("format")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_rust_unsigned_integer_format)
+            {
+                schema.remove("format");
+            }
+
+            for child in schema.values_mut() {
+                normalize_schema_value(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                normalize_schema_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_rust_unsigned_integer_format(format: &str) -> bool {
+    matches!(
+        format,
+        "uint" | "uint8" | "uint16" | "uint32" | "uint64" | "usize"
+    )
 }
 
 impl Default for PlatypusMcp {
@@ -1611,6 +1674,41 @@ mod tests {
         assert_property_is_object(&tools, "write_task_plan", "plan");
     }
 
+    #[test]
+    fn tool_schemas_do_not_emit_nullable_without_type() {
+        let server = PlatypusMcp::new();
+        let tools = server.tool_router.list_all();
+
+        for tool in tools {
+            let input = serde_json::to_value(tool.input_schema.as_ref()).expect("input schema");
+            assert_no_nullable_without_type(&input, &format!("{}.inputSchema", tool.name));
+
+            if let Some(output_schema) = tool.output_schema.as_ref() {
+                let output = serde_json::to_value(output_schema.as_ref()).expect("output schema");
+                assert_no_nullable_without_type(&output, &format!("{}.outputSchema", tool.name));
+            }
+        }
+    }
+
+    #[test]
+    fn tool_schemas_do_not_emit_rust_unsigned_integer_formats() {
+        let server = PlatypusMcp::new();
+        let tools = server.tool_router.list_all();
+
+        for tool in tools {
+            let input = serde_json::to_value(tool.input_schema.as_ref()).expect("input schema");
+            assert_no_rust_unsigned_integer_formats(&input, &format!("{}.inputSchema", tool.name));
+
+            if let Some(output_schema) = tool.output_schema.as_ref() {
+                let output = serde_json::to_value(output_schema.as_ref()).expect("output schema");
+                assert_no_rust_unsigned_integer_formats(
+                    &output,
+                    &format!("{}.outputSchema", tool.name),
+                );
+            }
+        }
+    }
+
     fn assert_array_items_are_objects(
         tools: &[rmcp::model::Tool],
         tool_name: &str,
@@ -1662,6 +1760,51 @@ mod tests {
             Some(Value::String(kind)) => kind == "object",
             Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind == "object"),
             _ => false,
+        }
+    }
+
+    fn assert_no_nullable_without_type(schema: &Value, path: &str) {
+        match schema {
+            Value::Object(object) => {
+                assert!(
+                    !(matches!(object.get("nullable"), Some(Value::Bool(true)))
+                        && !object.contains_key("type")),
+                    "{path} contains nullable without type: {object:#?}"
+                );
+                for (key, value) in object {
+                    assert_no_nullable_without_type(value, &format!("{path}.{key}"));
+                }
+            }
+            Value::Array(items) => {
+                for (index, value) in items.iter().enumerate() {
+                    assert_no_nullable_without_type(value, &format!("{path}[{index}]"));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn assert_no_rust_unsigned_integer_formats(schema: &Value, path: &str) {
+        match schema {
+            Value::Object(object) => {
+                assert!(
+                    !(object.get("type").and_then(Value::as_str) == Some("integer")
+                        && object
+                            .get("format")
+                            .and_then(Value::as_str)
+                            .is_some_and(is_rust_unsigned_integer_format)),
+                    "{path} contains Rust unsigned integer format: {object:#?}"
+                );
+                for (key, value) in object {
+                    assert_no_rust_unsigned_integer_formats(value, &format!("{path}.{key}"));
+                }
+            }
+            Value::Array(items) => {
+                for (index, value) in items.iter().enumerate() {
+                    assert_no_rust_unsigned_integer_formats(value, &format!("{path}[{index}]"));
+                }
+            }
+            _ => {}
         }
     }
 }
