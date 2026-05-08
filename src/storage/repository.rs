@@ -1,9 +1,9 @@
 use super::traits::{
-    ApprovalStore, EventStore, RepositoryError, RepositoryResult, TaskStore, TransitionInsert,
-    TransitionStore,
+    ApprovalStore, EventStore, LeaseInsert, LeaseStore, RepositoryError, RepositoryResult,
+    TaskStore, TransitionInsert, TransitionStore,
 };
 use crate::models::{
-    ApprovalRecord, EventRecord, RuntimeTransitionRecord, TaskEventRecord, TaskRecord,
+    ApprovalRecord, EventRecord, LeaseRecord, RuntimeTransitionRecord, TaskEventRecord, TaskRecord,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use serde_json::Value;
@@ -38,6 +38,12 @@ impl<'connection> Repository<'connection> {
 
     pub fn transitions(&self) -> TransitionRepository<'connection> {
         TransitionRepository {
+            connection: self.connection,
+        }
+    }
+
+    pub fn leases(&self) -> LeaseRepository<'connection> {
+        LeaseRepository {
             connection: self.connection,
         }
     }
@@ -186,6 +192,10 @@ pub struct EventRepository<'connection> {
 }
 
 pub struct TransitionRepository<'connection> {
+    connection: &'connection Connection,
+}
+
+pub struct LeaseRepository<'connection> {
     connection: &'connection Connection,
 }
 
@@ -522,6 +532,157 @@ impl TransitionRepository<'_> {
     }
 }
 
+impl LeaseStore for LeaseRepository<'_> {
+    fn acquire(&self, lease: LeaseInsert) -> RepositoryResult<LeaseRecord> {
+        if let Some(conflict) =
+            self.active_conflict(&lease.scope, &lease.target_id, Some(&lease.owner))?
+        {
+            return Err(RepositoryError::Conflict {
+                message: format!(
+                    "active lease `{}` already held by `{}`",
+                    conflict.id, conflict.owner
+                ),
+            });
+        }
+        let id = self.next_id()?;
+        let ttl = ttl_modifier(lease.ttl_seconds);
+        let metadata_json = serde_json::to_string(&lease.metadata)?;
+        self.connection.execute(
+            r#"
+            INSERT INTO leases(id, scope, target_id, owner, status, metadata_json, expires_at)
+            VALUES (?1, ?2, ?3, ?4, 'active', ?5, datetime('now', ?6))
+            "#,
+            params![
+                &id,
+                lease.scope,
+                lease.target_id,
+                lease.owner,
+                metadata_json,
+                ttl
+            ],
+        )?;
+        self.get(&id)
+    }
+
+    fn list(
+        &self,
+        scope: Option<&str>,
+        target_id: Option<&str>,
+        status: Option<&str>,
+        include_expired: bool,
+        limit: usize,
+    ) -> RepositoryResult<Vec<LeaseRecord>> {
+        let mut statement = self.connection.prepare(
+            r#"
+            SELECT id, scope, target_id, owner, status, metadata_json, acquired_at, renewed_at,
+                   released_at, expires_at
+            FROM leases
+            WHERE (?1 IS NULL OR scope = ?1)
+              AND (?2 IS NULL OR target_id = ?2)
+              AND (?3 IS NULL OR status = ?3)
+              AND (?4 OR status != 'active' OR expires_at > CURRENT_TIMESTAMP)
+            ORDER BY acquired_at ASC, id ASC
+            LIMIT ?5
+            "#,
+        )?;
+        let rows = statement.query_map(
+            params![scope, target_id, status, include_expired, limit],
+            row_to_lease,
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(RepositoryError::from)
+    }
+
+    fn active_conflict(
+        &self,
+        scope: &str,
+        target_id: &str,
+        owner: Option<&str>,
+    ) -> RepositoryResult<Option<LeaseRecord>> {
+        self.connection
+            .query_row(
+                r#"
+                SELECT id, scope, target_id, owner, status, metadata_json, acquired_at, renewed_at,
+                       released_at, expires_at
+                FROM leases
+                WHERE scope = ?1
+                  AND target_id = ?2
+                  AND status = 'active'
+                  AND expires_at > CURRENT_TIMESTAMP
+                  AND (?3 IS NULL OR owner != ?3)
+                ORDER BY acquired_at ASC, id ASC
+                LIMIT 1
+                "#,
+                params![scope, target_id, owner],
+                row_to_lease,
+            )
+            .optional()
+            .map_err(RepositoryError::from)
+    }
+
+    fn renew(
+        &self,
+        lease_id: &str,
+        owner: &str,
+        ttl_seconds: u64,
+    ) -> RepositoryResult<LeaseRecord> {
+        let ttl = ttl_modifier(ttl_seconds);
+        let updated = self.connection.execute(
+            r#"
+            UPDATE leases
+            SET renewed_at = CURRENT_TIMESTAMP,
+                expires_at = datetime('now', ?3)
+            WHERE id = ?1 AND owner = ?2 AND status = 'active' AND expires_at > CURRENT_TIMESTAMP
+            "#,
+            params![lease_id, owner, ttl],
+        )?;
+        if updated == 0 {
+            return Err(RepositoryError::NotFound);
+        }
+        self.get(lease_id)
+    }
+
+    fn release(&self, lease_id: &str, owner: &str) -> RepositoryResult<LeaseRecord> {
+        let updated = self.connection.execute(
+            r#"
+            UPDATE leases
+            SET status = 'released',
+                released_at = CURRENT_TIMESTAMP
+            WHERE id = ?1 AND owner = ?2 AND status = 'active'
+            "#,
+            params![lease_id, owner],
+        )?;
+        if updated == 0 {
+            return Err(RepositoryError::NotFound);
+        }
+        self.get(lease_id)
+    }
+}
+
+impl LeaseRepository<'_> {
+    fn get(&self, id: &str) -> RepositoryResult<LeaseRecord> {
+        self.connection
+            .query_row(
+                r#"
+                SELECT id, scope, target_id, owner, status, metadata_json, acquired_at, renewed_at,
+                       released_at, expires_at
+                FROM leases
+                WHERE id = ?1
+                "#,
+                [id],
+                row_to_lease,
+            )
+            .map_err(RepositoryError::from)
+    }
+
+    fn next_id(&self) -> rusqlite::Result<String> {
+        let existing: i64 =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM leases", [], |row| row.get(0))?;
+        Ok(format!("LSE-{:03}", existing + 1))
+    }
+}
+
 fn insert_transition(
     connection: &Connection,
     transition: TransitionInsert,
@@ -568,6 +729,10 @@ fn encode_payload(payload: Option<Value>) -> RepositoryResult<Option<String>> {
     payload
         .map(|payload| serde_json::to_string(&payload).map_err(RepositoryError::from))
         .transpose()
+}
+
+fn ttl_modifier(ttl_seconds: u64) -> String {
+    format!("+{} seconds", ttl_seconds.max(1))
 }
 
 fn get_approval_in_transaction(
@@ -680,6 +845,24 @@ fn row_to_transition(row: &Row<'_>) -> rusqlite::Result<RuntimeTransitionRecord>
         summary: row.get("summary")?,
         payload: payload_json.and_then(|raw| serde_json::from_str(&raw).ok()),
         created_at: row.get("created_at")?,
+    })
+}
+
+fn row_to_lease(row: &Row<'_>) -> rusqlite::Result<LeaseRecord> {
+    let metadata_json: Option<String> = row.get("metadata_json")?;
+    Ok(LeaseRecord {
+        id: row.get("id")?,
+        scope: row.get("scope")?,
+        target_id: row.get("target_id")?,
+        owner: row.get("owner")?,
+        status: row.get("status")?,
+        metadata: metadata_json
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default(),
+        acquired_at: row.get("acquired_at")?,
+        renewed_at: row.get("renewed_at")?,
+        released_at: row.get("released_at")?,
+        expires_at: row.get("expires_at")?,
     })
 }
 
@@ -848,6 +1031,49 @@ mod tests {
             .expect("list transitions");
         assert_eq!(transitions.len(), 1);
         assert_eq!(transitions[0].payload.as_ref().unwrap()["source"], "test");
+    }
+
+    #[test]
+    fn repository_acquires_renews_and_releases_leases() {
+        let project = TempDir::new().expect("temp dir");
+        let storage = storage::connect(project.path(), None).expect("storage");
+        let repository = storage.repository();
+        let leases = repository.leases();
+
+        let lease = leases
+            .acquire(LeaseInsert {
+                scope: "project".to_string(),
+                target_id: "root".to_string(),
+                owner: "manager".to_string(),
+                ttl_seconds: 60,
+                metadata: BTreeMap::new(),
+            })
+            .expect("acquire lease");
+        assert_eq!(lease.id, "LSE-001");
+
+        let conflict = leases
+            .acquire(LeaseInsert {
+                scope: "project".to_string(),
+                target_id: "root".to_string(),
+                owner: "worker".to_string(),
+                ttl_seconds: 60,
+                metadata: BTreeMap::new(),
+            })
+            .expect_err("conflict");
+        assert!(conflict.is_conflict());
+
+        let renewed = leases
+            .renew(&lease.id, "manager", 120)
+            .expect("renew lease");
+        assert!(renewed.renewed_at.is_some());
+
+        let released = leases.release(&lease.id, "manager").expect("release lease");
+        assert_eq!(released.status, "released");
+
+        let active = leases
+            .active_conflict("project", "root", None)
+            .expect("active conflict");
+        assert!(active.is_none());
     }
 
     #[test]

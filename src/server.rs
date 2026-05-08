@@ -1,28 +1,31 @@
 use crate::{
     approvals, assignments, backlog, bundle, config, dispatch, events, evidence, findings,
-    guidance, host_guidance,
+    guidance, host_guidance, leases,
     models::{
-        ActionResult, AgentProfileData, AgentProfilesData, AgentProfilesParams, ApprovalListData,
-        ApprovalListParams, ApprovalRespondParams, ApprovalResponseData, ClaimNextTaskParams,
-        ClassifyPlanningNeedsParams, CompleteWorkerExecutionParams, ConfigureAgentProfileParams,
-        CreateBacklogItemParams, CreatedBacklogItemData, DispatchNextWorkData, DoctorSnapshotData,
-        DraftBacklogData, DraftBacklogItemsParams, DraftTaskPlanParams, EventsReplayData,
-        EventsReplayParams, EvidenceListData, EvidenceRecordData, FindingDispositionData,
-        FindingListData, FindingRecordData, FindingValidationData, GenerateTaskBundleParams,
-        InitProjectParams, InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
-        InspectWorkerAssignmentParams, IntegrateWorkerResultParams, LimitParams,
-        ListEvidenceParams, ListFindingsParams, NextSafeActionData, NextSafeActionParams, PingData,
-        PingParams, PlanningClassificationData, PrepareWorkerAssignmentParams, ProjectScaffoldData,
-        ProjectStatusData, ReconcileParams, ReconciliationData, RecordEvidenceParams,
-        RecordFindingParams, RecordVerificationEvidenceParams, RecordWorkerEventParams, RootParams,
-        RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams,
-        StartWorkerExecutionParams, TaskBundleData, TaskEventListData, TaskPlanData,
-        TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams, TaskPlanValidationData,
-        TaskPlanWriteData, TaskRecordData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams, WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData,
-        WorkerGuidanceData, WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams,
-        WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams, WorktreeData,
-        WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
+        AcquireLeaseParams, ActionResult, AgentProfileData, AgentProfilesData, AgentProfilesParams,
+        ApprovalListData, ApprovalListParams, ApprovalRespondParams, ApprovalResponseData,
+        ClaimNextTaskParams, ClassifyPlanningNeedsParams, CompleteWorkerExecutionParams,
+        ConfigureAgentProfileParams, CreateBacklogItemParams, CreatedBacklogItemData,
+        DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
+        DraftTaskPlanParams, EventsReplayData, EventsReplayParams, EvidenceListData,
+        EvidenceRecordData, FindingDispositionData, FindingListData, FindingRecordData,
+        FindingValidationData, GenerateTaskBundleParams, InitProjectParams,
+        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
+        InspectWorkerAssignmentParams, IntegrateWorkerResultParams, LeaseListData, LeaseRecordData,
+        LimitParams, ListEvidenceParams, ListFindingsParams, ListLeasesParams, NextSafeActionData,
+        NextSafeActionParams, PingData, PingParams, PlanningClassificationData,
+        PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData, ReconcileParams,
+        ReconciliationData, RecordEvidenceParams, RecordFindingParams,
+        RecordVerificationEvidenceParams, RecordWorkerEventParams, ReleaseLeaseParams,
+        RenewLeaseParams, RootParams, RunnerPrepareParams, RunnerReportData,
+        SendWorkerGuidanceParams, StartWorkerExecutionParams, TaskBundleData, TaskEventListData,
+        TaskPlanData, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams,
+        TaskPlanValidationData, TaskPlanWriteData, TaskRecordData, UpdateFindingDispositionParams,
+        ValidateBacklogParams, ValidateFindingsParams, WorkQueueData, WorkerAssignmentData,
+        WorkerAssignmentEventData, WorkerGuidanceData, WorkerResultIntegrationData,
+        WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData, WorktreeCleanupParams,
+        WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffParams,
+        WorktreeStatusParams, WriteTaskPlanParams,
     },
     project, reconcile, runner, tasks, workspace,
 };
@@ -964,6 +967,82 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Acquire Lease",
+        description = "Acquire a durable project or task lease.",
+        annotations(
+            title = "Acquire Lease",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn acquire_lease(
+        &self,
+        Parameters(params): Parameters<AcquireLeaseParams>,
+    ) -> Json<ActionResult<LeaseRecordData>> {
+        Json(leases::acquire_lease(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "List Leases",
+        description = "List active or historical project and task leases.",
+        annotations(
+            title = "List Leases",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn list_leases(
+        &self,
+        Parameters(params): Parameters<ListLeasesParams>,
+    ) -> Json<ActionResult<LeaseListData>> {
+        Json(leases::list_leases(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Renew Lease",
+        description = "Renew an active durable project or task lease.",
+        annotations(
+            title = "Renew Lease",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn renew_lease(
+        &self,
+        Parameters(params): Parameters<RenewLeaseParams>,
+    ) -> Json<ActionResult<LeaseRecordData>> {
+        Json(leases::renew_lease(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Release Lease",
+        description = "Release an active durable project or task lease.",
+        annotations(
+            title = "Release Lease",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn release_lease(
+        &self,
+        Parameters(params): Parameters<ReleaseLeaseParams>,
+    ) -> Json<ActionResult<LeaseRecordData>> {
+        Json(leases::release_lease(&self.default_root, params))
+    }
+
+    #[tool(
         title = "Events Replay",
         description = "Replay bounded project, task, worker, and approval events.",
         annotations(
@@ -1273,6 +1352,10 @@ mod tests {
             "inspect_task_events",
             "approval_list",
             "approval_respond",
+            "acquire_lease",
+            "list_leases",
+            "renew_lease",
+            "release_lease",
             "events_replay",
             "record_evidence",
             "record_verification_evidence",
@@ -1314,6 +1397,9 @@ mod tests {
             "complete_worker_task",
             "runner_prepare_next",
             "approval_respond",
+            "acquire_lease",
+            "renew_lease",
+            "release_lease",
             "record_evidence",
             "record_verification_evidence",
             "configure_agent_profile",

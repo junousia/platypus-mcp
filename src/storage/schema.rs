@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 9;
+pub const SCHEMA_VERSION: i32 = 10;
 
 pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -129,6 +129,25 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_runtime_transitions_domain_entity
             ON runtime_transitions(domain, entity_id, id);
+
+        CREATE TABLE IF NOT EXISTS leases (
+            id TEXT PRIMARY KEY,
+            scope TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            status TEXT NOT NULL,
+            metadata_json TEXT,
+            acquired_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            renewed_at TEXT,
+            released_at TEXT,
+            expires_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_leases_scope_target_status
+            ON leases(scope, target_id, status);
+
+        CREATE INDEX IF NOT EXISTS idx_leases_expires_at
+            ON leases(expires_at);
 
         CREATE TABLE IF NOT EXISTS evidence (
             id TEXT PRIMARY KEY,

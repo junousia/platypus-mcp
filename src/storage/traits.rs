@@ -1,6 +1,6 @@
 use super::repository::{ApprovalInsert, EventInsert, TaskEventInsert, TaskInsert};
 use crate::models::{
-    ApprovalRecord, EventRecord, RuntimeTransitionRecord, TaskEventRecord, TaskRecord,
+    ApprovalRecord, EventRecord, LeaseRecord, RuntimeTransitionRecord, TaskEventRecord, TaskRecord,
 };
 use serde_json::Value;
 use std::{
@@ -113,6 +113,36 @@ pub trait TransitionStore {
         entity_id: Option<&str>,
         limit: usize,
     ) -> RepositoryResult<Vec<RuntimeTransitionRecord>>;
+}
+
+#[derive(Debug, Clone)]
+pub struct LeaseInsert {
+    pub scope: String,
+    pub target_id: String,
+    pub owner: String,
+    pub ttl_seconds: u64,
+    pub metadata: std::collections::BTreeMap<String, Value>,
+}
+
+pub trait LeaseStore {
+    fn acquire(&self, lease: LeaseInsert) -> RepositoryResult<LeaseRecord>;
+    fn list(
+        &self,
+        scope: Option<&str>,
+        target_id: Option<&str>,
+        status: Option<&str>,
+        include_expired: bool,
+        limit: usize,
+    ) -> RepositoryResult<Vec<LeaseRecord>>;
+    fn active_conflict(
+        &self,
+        scope: &str,
+        target_id: &str,
+        owner: Option<&str>,
+    ) -> RepositoryResult<Option<LeaseRecord>>;
+    fn renew(&self, lease_id: &str, owner: &str, ttl_seconds: u64)
+        -> RepositoryResult<LeaseRecord>;
+    fn release(&self, lease_id: &str, owner: &str) -> RepositoryResult<LeaseRecord>;
 }
 
 pub trait TaskStore {

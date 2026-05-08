@@ -1,6 +1,7 @@
 use crate::{
     backlog,
     models::{ActionResult, ActionStatus, BacklogListData, DispatchNextWorkData, RootParams},
+    storage::{self, LeaseStore},
     tasks::{self, NewTask, NewTaskEvent},
 };
 use serde_json::json;
@@ -42,6 +43,37 @@ pub fn dispatch_next_work(
             error: None,
         };
     };
+
+    let storage = match storage::connect(default_root, Some(&root)) {
+        Ok(storage) => storage,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not open lease storage.", error.to_string())
+        }
+    };
+    match storage
+        .repository()
+        .leases()
+        .active_conflict("project", "root", None)
+    {
+        Ok(Some(lease)) => {
+            return ActionResult::skipped(
+                action,
+                format!(
+                    "Project is leased by `{}` until {}.",
+                    lease.owner, lease.expires_at
+                ),
+                "Wait for the lease to expire or release it before dispatching work.",
+            )
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not inspect project lease.",
+                error.to_string(),
+            )
+        }
+    }
 
     let task = match tasks::create_task_record(
         default_root,
