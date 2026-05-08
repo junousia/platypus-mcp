@@ -131,6 +131,7 @@ fn scaffold_entry(
 fn scaffold_files(project_name: &str) -> Vec<(&'static str, String)> {
     vec![
         ("AGENTS.md", agents_doc()),
+        ("CLAUDE.md", claude_doc()),
         ("platy.yaml", project_config(project_name)),
         ("WORKFLOW.md", workflow_doc()),
         ("backlog/README.md", backlog_readme()),
@@ -210,7 +211,16 @@ state, and Git closure trailers.
 }
 
 fn agents_doc() -> String {
-    r#"# Agent Instructions
+    agent_guidance_doc("Agent Instructions")
+}
+
+fn claude_doc() -> String {
+    agent_guidance_doc("Claude Instructions")
+}
+
+fn agent_guidance_doc(title: &str) -> String {
+    format!(
+        r#"# {title}
 
 This repository uses Platypus MCP as its spec-driven development control
 surface. When the MCP server is available, prefer Platypus tools over ad hoc
@@ -240,7 +250,7 @@ file edits or informal task tracking.
 - Use `record_verification_evidence` before claiming verified completion.
 - Use `reconcile_project` when state is unclear.
 "#
-    .to_string()
+    )
 }
 
 fn general_epic() -> String {
@@ -291,6 +301,7 @@ mod tests {
         assert_eq!(data.skipped, 0);
         assert!(temp.path().join("platy.yaml").is_file());
         assert!(temp.path().join("AGENTS.md").is_file());
+        assert!(temp.path().join("CLAUDE.md").is_file());
         let config = fs::read_to_string(temp.path().join("platy.yaml")).expect("config");
         assert!(config.contains("workflow:"));
         assert!(config.contains("merge_style: merge_commit"));
@@ -298,6 +309,14 @@ mod tests {
         assert!(agents.contains("spec-driven development"));
         assert!(agents.contains("next_safe_action"));
         assert!(agents.contains("draft_task_plan"));
+        let claude = fs::read_to_string(temp.path().join("CLAUDE.md")).expect("claude");
+        assert!(claude.contains("spec-driven development"));
+        assert!(claude.contains("next_safe_action"));
+        assert!(claude.contains("draft_task_plan"));
+        assert_eq!(
+            agents.replace("Agent Instructions", "Shared Instructions"),
+            claude.replace("Claude Instructions", "Shared Instructions")
+        );
         let workflow = fs::read_to_string(temp.path().join("WORKFLOW.md")).expect("workflow");
         assert!(workflow.contains("spec-driven development"));
         assert!(workflow.contains("dispatch_next_work"));
@@ -316,6 +335,7 @@ mod tests {
     fn init_project_skips_existing_files_without_overwrite() {
         let temp = TempDir::new().expect("temp dir");
         fs::write(temp.path().join("platy.yaml"), "custom: true\n").expect("config");
+        fs::write(temp.path().join("CLAUDE.md"), "# Custom Claude\n").expect("claude");
         let root = temp.path().to_string_lossy().into_owned();
 
         let result = init_project(
@@ -331,6 +351,10 @@ mod tests {
         assert_eq!(
             fs::read_to_string(temp.path().join("platy.yaml")).expect("config"),
             "custom: true\n"
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("CLAUDE.md")).expect("claude"),
+            "# Custom Claude\n"
         );
         assert!(result.data.expect("data").skipped > 0);
     }

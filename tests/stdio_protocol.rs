@@ -473,7 +473,12 @@ async fn stdio_server_initializes_project_scaffold() -> anyhow::Result<()> {
     assert_eq!(response["status"], "completed");
     assert!(response["data"]["created"].as_u64().unwrap_or(0) > 0);
     assert!(project.path().join("platy.yaml").is_file());
+    assert!(project.path().join("AGENTS.md").is_file());
+    assert!(project.path().join("CLAUDE.md").is_file());
     assert!(project.path().join("backlog/epics/general.md").is_file());
+    let claude = fs::read_to_string(project.path().join("CLAUDE.md"))?;
+    assert!(claude.contains("spec-driven development"));
+    assert!(claude.contains("draft_task_plan"));
 
     client.cancel().await?;
     Ok(())
