@@ -1,8 +1,10 @@
 use crate::{
-    backlog,
+    backlog::{self, create_backlog_item},
     models::{
-        ActionResult, ActionStatus, DraftExternalBacklogItemsParams, ExternalBacklogDraft,
-        ExternalBacklogDraftData, ExternalRef, ExternalWorkRecord,
+        ActionResult, ActionStatus, CreateBacklogItemParams, DraftExternalBacklogItemsParams,
+        ExternalBacklogDraft, ExternalBacklogDraftData, ExternalRef, ExternalWorkRecord,
+        GitHubIssueImportData, GitHubIssueImportRecord, GitHubIssueRecord, GitHubIssueSkipRecord,
+        ImportGitHubIssuesParams,
     },
 };
 use std::{collections::BTreeSet, path::Path};
@@ -82,6 +84,7 @@ impl ExternalIntakeAdapter for HostProvidedIntakeAdapter {
             request.verification_command
         };
         let mut drafts = Vec::new();
+        let mut seen_refs = request.existing_refs;
         for record in request.records.into_iter().take(request.limit) {
             let kind = clean_token("kind", &record.kind)?;
             let id = clean_required("id", &record.id)?;
@@ -99,7 +102,7 @@ impl ExternalIntakeAdapter for HostProvidedIntakeAdapter {
                 return Err(ExternalIntakeError::new("record requires url or locator"));
             }
             let key = ExternalRefKey::from_ref(&external_ref);
-            let skipped = request.existing_refs.contains(&key);
+            let skipped = !seen_refs.insert(key.clone());
             let objective = record
                 .body
                 .as_deref()
@@ -211,20 +214,264 @@ pub fn draft_external_backlog_items(
     }
 }
 
+pub fn import_github_issues(
+    default_root: &Path,
+    params: ImportGitHubIssuesParams,
+) -> ActionResult<GitHubIssueImportData> {
+    let action = "import_github_issues";
+    let owner = match clean_token("owner", &params.owner) {
+        Ok(owner) => owner,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not import GitHub issues.",
+                error.to_string(),
+            )
+        }
+    };
+    let repo = match clean_token("repo", &params.repo) {
+        Ok(repo) => repo,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not import GitHub issues.",
+                error.to_string(),
+            )
+        }
+    };
+    let root = match backlog::resolve_backlog_root(default_root, params.root.as_deref()) {
+        Ok(root) => root,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not import GitHub issues.", error)
+        }
+    };
+    if params.issues.is_empty() {
+        return ActionResult::skipped(
+            action,
+            "No GitHub issues were provided.",
+            "Pass host-provided issue records or use a future live GitHub provider.",
+        );
+    }
+
+    let state_filter = params
+        .state
+        .as_deref()
+        .map(str::trim)
+        .filter(|state| !state.is_empty())
+        .unwrap_or("open")
+        .to_ascii_lowercase();
+    let limit = bounded_limit(params.limit);
+    let mut skipped = Vec::new();
+    let records = params
+        .issues
+        .into_iter()
+        .filter_map(|issue| {
+            let state = issue
+                .state
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("open")
+                .to_ascii_lowercase();
+            let issue_id = issue_id(&owner, &repo, issue.number);
+            if state != state_filter {
+                skipped.push(GitHubIssueSkipRecord {
+                    issue: issue_id,
+                    reason: format!("state `{state}` did not match `{state_filter}`"),
+                });
+                None
+            } else {
+                Some(issue_to_external_record(&owner, &repo, issue))
+            }
+        })
+        .take(limit)
+        .collect::<Vec<_>>();
+
+    let drafts = match draft_external_backlog_items(
+        default_root,
+        DraftExternalBacklogItemsParams {
+            root: params.root.clone(),
+            provider: "github".to_string(),
+            records,
+            suggested_worker: params.suggested_worker.clone(),
+            owned_surfaces: params.owned_surfaces.clone(),
+            verification_command: params.verification_command.clone(),
+            limit: Some(limit),
+        },
+    ) {
+        ActionResult {
+            status: ActionStatus::Completed | ActionStatus::Skipped,
+            data: Some(data),
+            ..
+        } => data.drafts,
+        ActionResult { error, summary, .. } => {
+            return ActionResult::failed(
+                action,
+                "Could not draft GitHub issue imports.",
+                error.unwrap_or(summary),
+            )
+        }
+    };
+
+    let mut imported = Vec::new();
+    for draft in drafts {
+        if draft.skipped {
+            skipped.push(GitHubIssueSkipRecord {
+                issue: draft.external_ref.id,
+                reason: draft.skip_reason.unwrap_or_else(|| "skipped".to_string()),
+            });
+            continue;
+        }
+        let created = create_backlog_item(
+            default_root,
+            CreateBacklogItemParams {
+                root: params.root.clone(),
+                id: None,
+                id_prefix: params.id_prefix.clone().or_else(|| Some("GH".to_string())),
+                title: draft.title.clone(),
+                priority: Some(draft.priority.clone()),
+                item_type: Some(draft.item_type.clone()),
+                area: Some(draft.area.clone()),
+                epic: Some("general".to_string()),
+                depends_on: Vec::new(),
+                suggested_worker: draft.suggested_worker.clone(),
+                owned_surfaces: draft.owned_surfaces.clone(),
+                external_refs: vec![draft.external_ref.clone()],
+                goal: draft.objective.clone(),
+                implementation_contract: Some(format!(
+                    "Implement the local backlog snapshot imported from GitHub issue `{}`. Keep execution decisions in this repository.",
+                    draft.external_ref.id
+                )),
+                contract: None,
+                acceptance: vec![
+                    "The imported issue is represented by a valid local backlog item.".to_string(),
+                    "Implementation work remains scoped to the local backlog contract.".to_string(),
+                ],
+                notes: Some(
+                    "Imported from GitHub issue data supplied by the MCP host. Live sync/reporting is not part of this snapshot."
+                        .to_string(),
+                ),
+            },
+        );
+        match created {
+            ActionResult {
+                status: ActionStatus::Completed,
+                data: Some(data),
+                ..
+            } => imported.push(GitHubIssueImportRecord {
+                item_id: data.item_id,
+                path: data.path,
+                issue: draft.external_ref.id,
+                url: draft
+                    .external_ref
+                    .url
+                    .clone()
+                    .or(draft.external_ref.locator.clone())
+                    .unwrap_or_default(),
+            }),
+            ActionResult { error, summary, .. } => {
+                return ActionResult::failed(
+                    action,
+                    "Could not create imported backlog item.",
+                    error.unwrap_or(summary),
+                )
+            }
+        }
+    }
+
+    let data = GitHubIssueImportData {
+        root: root.display().to_string(),
+        owner,
+        repo,
+        imported_count: imported.len(),
+        skipped_count: skipped.len(),
+        imported,
+        skipped,
+    };
+    if data.imported_count == 0 {
+        ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Skipped,
+            summary: "No GitHub issues were imported.".to_string(),
+            next_action: Some("Inspect skipped issues or provide new issue records.".to_string()),
+            data: Some(data),
+            error: None,
+        }
+    } else {
+        ActionResult::completed(
+            action,
+            format!("Imported {} GitHub issue(s).", data.imported_count),
+            data,
+        )
+    }
+}
+
+fn issue_to_external_record(
+    owner: &str,
+    repo: &str,
+    issue: GitHubIssueRecord,
+) -> ExternalWorkRecord {
+    let url = issue.url.clone().or_else(|| {
+        Some(format!(
+            "https://github.com/{owner}/{repo}/issues/{}",
+            issue.number
+        ))
+    });
+    let source_hash = issue
+        .source_hash
+        .clone()
+        .or_else(|| Some(source_hash(&owner, &repo, &issue)));
+    ExternalWorkRecord {
+        kind: "issue".to_string(),
+        id: issue_id(owner, repo, issue.number),
+        title: issue.title,
+        body: issue.body,
+        url,
+        locator: None,
+        labels: issue.labels,
+        metadata: issue.metadata,
+        source_hash,
+    }
+}
+
+fn issue_id(owner: &str, repo: &str, number: u64) -> String {
+    format!("{owner}/{repo}#{number}")
+}
+
+fn source_hash(owner: &str, repo: &str, issue: &GitHubIssueRecord) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in format!(
+        "{owner}\0{repo}\0{}\0{}\0{}\0{}\0{}",
+        issue.number,
+        issue.title,
+        issue.body.as_deref().unwrap_or(""),
+        issue.url.as_deref().unwrap_or(""),
+        issue.labels.join(",")
+    )
+    .as_bytes()
+    {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fnv1a64:{hash:016x}")
+}
+
 fn bounded_limit(limit: Option<usize>) -> usize {
     limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
 }
 
 fn clean_token(field: &str, value: &str) -> Result<String, ExternalIntakeError> {
     let token = clean_required(field, value)?;
-    if token
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
-    {
+    if token.chars().all(|character| {
+        character.is_ascii_alphanumeric()
+            || character == '-'
+            || character == '_'
+            || character == '.'
+    }) {
         Ok(token.to_ascii_lowercase())
     } else {
         Err(ExternalIntakeError::new(format!(
-            "{field} must contain ASCII letters, digits, '-' or '_'"
+            "{field} must contain ASCII letters, digits, '.', '-' or '_'"
         )))
     }
 }
@@ -326,6 +573,17 @@ mod tests {
                         metadata: Default::default(),
                         source_hash: Some("sha256:2".to_string()),
                     },
+                    ExternalWorkRecord {
+                        kind: "issue".to_string(),
+                        id: "owner/repo#2".to_string(),
+                        title: "Duplicate new issue".to_string(),
+                        body: None,
+                        url: Some("https://github.com/owner/repo/issues/2".to_string()),
+                        locator: None,
+                        labels: vec!["docs".to_string()],
+                        metadata: Default::default(),
+                        source_hash: Some("sha256:2".to_string()),
+                    },
                 ],
                 existing_refs: existing,
                 suggested_worker: Some("coder".to_string()),
@@ -335,9 +593,10 @@ mod tests {
             })
             .expect("drafts");
 
-        assert_eq!(drafts.len(), 2);
+        assert_eq!(drafts.len(), 3);
         assert!(drafts[0].skipped);
         assert!(!drafts[1].skipped);
         assert_eq!(drafts[1].item_type, "docs");
+        assert!(drafts[2].skipped);
     }
 }

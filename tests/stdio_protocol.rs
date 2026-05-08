@@ -32,6 +32,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"classify_planning_needs"));
     assert!(tool_names.contains(&"record_finding"));
     assert!(tool_names.contains(&"draft_external_backlog_items"));
+    assert!(tool_names.contains(&"import_github_issues"));
     assert!(tool_names.contains(&"draft_task_plan"));
     assert!(tool_names.contains(&"inspect_task_plan"));
     assert!(tool_names.contains(&"list_task_plans"));
@@ -722,6 +723,97 @@ async fn stdio_server_drafts_external_backlog_items_and_dedupes_refs() -> anyhow
     assert_eq!(
         drafted["data"]["drafts"][1]["external_ref"]["id"],
         "owner/repo#2"
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_imports_github_issues_as_backlog_snapshots() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+    let initialized = call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "GitHub Import" }),
+    )
+    .await?;
+    assert_stage_status("init_project", &initialized, "completed");
+
+    let imported = call_tool_json(
+        &client,
+        "import_github_issues",
+        json!({
+            "owner": "owner",
+            "repo": "repo",
+            "id_prefix": "GH",
+            "owned_surfaces": ["src"],
+            "issues": [
+                {
+                    "number": 1,
+                    "title": "Build imported feature",
+                    "body": "Implement this from GitHub.",
+                    "state": "open",
+                    "url": "https://github.com/owner/repo/issues/1",
+                    "labels": ["p0", "feature", "area:integrations"],
+                    "updated_at": "2026-05-08T00:00:00Z"
+                },
+                {
+                    "number": 2,
+                    "title": "Closed issue",
+                    "body": "Do not import by default.",
+                    "state": "closed",
+                    "url": "https://github.com/owner/repo/issues/2",
+                    "labels": ["docs"]
+                }
+            ]
+        }),
+    )
+    .await?;
+
+    assert_stage_status("import_github_issues", &imported, "completed");
+    assert_eq!(imported["data"]["imported_count"], 1);
+    assert_eq!(imported["data"]["skipped_count"], 1);
+    assert_eq!(imported["data"]["imported"][0]["item_id"], "GH-001");
+
+    let validation = call_tool_json(&client, "validate_backlog", json!({})).await?;
+    assert_stage_status("validate_backlog", &validation, "completed");
+
+    let listed = call_tool_json(&client, "list_backlog", json!({})).await?;
+    assert_stage_status("list_backlog", &listed, "completed");
+    assert_eq!(
+        listed["data"]["candidates"][0]["external_refs"][0]["provider"],
+        "github"
+    );
+    assert_eq!(
+        listed["data"]["candidates"][0]["external_refs"][0]["id"],
+        "owner/repo#1"
+    );
+
+    let skipped = call_tool_json(
+        &client,
+        "import_github_issues",
+        json!({
+            "owner": "owner",
+            "repo": "repo",
+            "id_prefix": "GH",
+            "issues": [{
+                "number": 1,
+                "title": "Build imported feature",
+                "body": "Implement this from GitHub.",
+                "state": "open",
+                "url": "https://github.com/owner/repo/issues/1",
+                "labels": ["p0"]
+            }]
+        }),
+    )
+    .await?;
+    assert_stage_status("import_github_issues duplicate", &skipped, "skipped");
+    assert_eq!(skipped["data"]["imported_count"], 0);
+    assert_eq!(
+        skipped["data"]["skipped"][0]["reason"],
+        "external reference already imported"
     );
 
     client.cancel().await?;

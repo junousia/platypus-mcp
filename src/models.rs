@@ -111,6 +111,39 @@ pub struct DraftExternalBacklogItemsParams {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ImportGitHubIssuesParams {
+    pub root: Option<String>,
+    pub owner: String,
+    pub repo: String,
+    #[serde(default)]
+    pub issues: Vec<GitHubIssueRecord>,
+    pub state: Option<String>,
+    pub id_prefix: Option<String>,
+    pub suggested_worker: Option<String>,
+    #[serde(default)]
+    pub owned_surfaces: Vec<String>,
+    #[serde(default)]
+    pub verification_command: Vec<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GitHubIssueRecord {
+    pub number: u64,
+    pub title: String,
+    pub body: Option<String>,
+    pub state: Option<String>,
+    pub url: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
+    pub updated_at: Option<String>,
+    pub source_hash: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalWorkRecord {
@@ -698,6 +731,31 @@ pub struct ExternalBacklogDraft {
     pub mapping_reasons: Vec<String>,
     pub skipped: bool,
     pub skip_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GitHubIssueImportData {
+    pub root: String,
+    pub owner: String,
+    pub repo: String,
+    pub imported: Vec<GitHubIssueImportRecord>,
+    pub skipped: Vec<GitHubIssueSkipRecord>,
+    pub imported_count: usize,
+    pub skipped_count: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GitHubIssueImportRecord {
+    pub item_id: String,
+    pub path: String,
+    pub issue: String,
+    pub url: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GitHubIssueSkipRecord {
+    pub issue: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

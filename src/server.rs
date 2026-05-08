@@ -10,7 +10,8 @@ use crate::{
         DraftExternalBacklogItemsParams, DraftTaskPlanParams, EventsReplayData, EventsReplayParams,
         EvidenceListData, EvidenceRecordData, ExternalBacklogDraftData, FindingDispositionData,
         FindingListData, FindingRecordData, FindingValidationData, GenerateTaskBundleParams,
-        InitProjectParams, InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
+        GitHubIssueImportData, ImportGitHubIssuesParams, InitProjectParams,
+        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
         InspectWorkerAssignmentParams, IntegrateWorkerResultParams, LeaseListData, LeaseRecordData,
         LimitParams, ListEvidenceParams, ListFindingsParams, ListLeasesParams, NextSafeActionData,
         NextSafeActionParams, PingData, PingParams, PlanningClassificationData,
@@ -407,6 +408,28 @@ impl PlatypusMcp {
         Parameters(params): Parameters<DraftExternalBacklogItemsParams>,
     ) -> Json<ActionResult<ExternalBacklogDraftData>> {
         Json(integrations::draft_external_backlog_items(
+            &self.default_root,
+            params,
+        ))
+    }
+
+    #[tool(
+        title = "Import GitHub Issues",
+        description = "Import host-provided GitHub issue records as local backlog snapshots.",
+        annotations(
+            title = "Import GitHub Issues",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn import_github_issues(
+        &self,
+        Parameters(params): Parameters<ImportGitHubIssuesParams>,
+    ) -> Json<ActionResult<GitHubIssueImportData>> {
+        Json(integrations::import_github_issues(
             &self.default_root,
             params,
         ))
@@ -1346,6 +1369,7 @@ mod tests {
             "init_project",
             "draft_backlog_items",
             "draft_external_backlog_items",
+            "import_github_issues",
             "create_backlog_item",
             "draft_task_plan",
             "inspect_task_plan",
@@ -1405,6 +1429,7 @@ mod tests {
             "init_project",
             "create_backlog_item",
             "write_task_plan",
+            "import_github_issues",
             "dispatch_next_work",
             "claim_next_task",
             "worktree_create",

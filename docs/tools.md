@@ -36,7 +36,8 @@ deterministic and references the current public tool names.
 1. Bootstrap and inspect: `init_project`, `doctor_snapshot`,
    `inspect_status`, `inspect_workflow_config`.
 2. Shape backlog: `draft_backlog_items`, `draft_external_backlog_items`,
-   `create_backlog_item`, `validate_backlog`, `list_backlog`.
+   `import_github_issues`, `create_backlog_item`, `validate_backlog`,
+   `list_backlog`.
 3. Plan non-trivial work: `draft_task_plan`, `write_task_plan`,
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
 4. Inspect the executable queue: `inspect_work_queue`.
@@ -95,6 +96,9 @@ and scripts; MCP hosts should still call tools through MCP directly.
   goal.
 - `draft_external_backlog_items`: draft provider-neutral candidates from
   host-provided external work records and skip already-imported references.
+- `import_github_issues`: import host-provided GitHub issue records as local
+  backlog snapshots. The first implementation does not call GitHub directly;
+  the MCP host supplies issue JSON from its approved GitHub integration.
 - `create_backlog_item`: write one structured backlog item.
 - `validate_backlog`: validate backlog item and epic files.
 - `list_backlog`: list runnable backlog candidates.
