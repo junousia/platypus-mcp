@@ -1,0 +1,81 @@
+item_id: MCP-028
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: The work queue deterministically reports whether a backlog item needs direct, standard, or full planning.
+- id: R2
+  text: Planning requirements are enforced only when policy requires standard or full planning.
+- id: R3
+  text: MCP hosts can inspect planning classification without mutating project state.
+design:
+  summary: Add reusable planning-policy classification in guidance, expose the result through inspect_work_queue and a dedicated read-only tool, and document deterministic direct/standard/full rules.
+  owned_surfaces:
+  - src/guidance.rs
+  - src/models.rs
+  - src/server.rs
+  - tests/stdio_protocol.rs
+  - docs/tools.md
+  - docs/workflow.md
+  notes: 'Use conservative deterministic heuristics first: small docs/test/single-surface items can be direct; multi-surface or MCP workflow changes are standard; storage/security/worktree/approval/dispatch/worker/protocol lifecycle changes are full.'
+tasks:
+- id: MCP-028-T01
+  title: Implement planning classification model and tool
+  goal: Add typed planning classification output and a read-only MCP tool for one item or runnable queue classification.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/guidance.rs
+  - src/models.rs
+  - src/server.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Planning mode output includes required_mode, required_artifact, and structured reasons.
+  - The dedicated MCP tool is read-only and exposed in tool listing.
+  - Classification does not mutate backlog or runtime state.
+  notes: null
+- id: MCP-028-T02
+  title: Wire planning policy into work queue readiness
+  goal: Make inspect_work_queue use planning classification so direct items do not require task plans while standard/full items do.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on:
+  - MCP-028-T01
+  owned_surfaces:
+  - src/guidance.rs
+  - src/models.rs
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Direct items are ready without a task plan when policy is enabled.
+  - Standard/full items recommend draft_task_plan or validate_task_plan when their plan is missing or invalid.
+  - Valid standard/full plans allow dispatch recommendation.
+  notes: null
+- id: MCP-028-T03
+  title: Document planning policy
+  goal: Explain direct, standard, and full planning modes in repo docs and host guidance.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-028-T02
+  owned_surfaces:
+  - docs/tools.md
+  - docs/workflow.md
+  - src/host_guidance.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Docs describe when design/task plans are required.
+  - Host guidance points clients to planning classification before dispatch.
+  - Examples avoid implying every item always needs a plan.
+  notes: null

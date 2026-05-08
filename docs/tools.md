@@ -9,9 +9,10 @@ Platypus tools return typed JSON with a shared envelope:
 - `data`: typed result payload
 - `error`: optional failure detail
 
-Hosts should prefer `inspect_work_queue` when choosing runnable backlog work and
-`next_safe_action` when deciding the next lifecycle command. The lower-level
-tools remain available for precise control and testing.
+Hosts should prefer `inspect_work_queue` when choosing runnable backlog work,
+`classify_planning_needs` when explaining whether design/task planning is
+required, and `next_safe_action` when deciding the next lifecycle command. The
+lower-level tools remain available for precise control and testing.
 
 ## Host Guidance Resources And Prompts
 
@@ -116,6 +117,8 @@ trailers.
 - `next_safe_action`: recommend the next safe tool call and parameters.
 - `inspect_work_queue`: inspect runnable backlog candidates with task-plan
   state and a recommended next tool.
+- `classify_planning_needs`: classify runnable items as `direct`, `standard`,
+  or `full` planning mode with structured reasons.
 - `dispatch_next_work`: create a queued task from the next runnable backlog
   item.
 - `inspect_task`: inspect one task lifecycle record.

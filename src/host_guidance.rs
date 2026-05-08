@@ -25,8 +25,8 @@ model turns, and external worker execution.
    `inspect_workflow_config`.
 2. Shape work with `draft_backlog_items`, `create_backlog_item`,
    `validate_backlog`, and `list_backlog`.
-3. Use `inspect_work_queue` to choose executable backlog work and understand
-   task-plan readiness.
+3. Use `inspect_work_queue` or `classify_planning_needs` to choose executable
+   backlog work and understand direct, standard, or full planning needs.
 4. For non-trivial work, use `draft_task_plan`, `write_task_plan`,
    `validate_task_plan`, `inspect_task_plan`, and `list_task_plans` to create a
    committed executable plan.
@@ -53,8 +53,10 @@ Use status tools before making assumptions about the repository or task queue.
 - `inspect_workflow_config` reports integration policy such as merge style and
   verification gates.
 - `list_agent_profiles` shows manager and worker roles.
-- `inspect_work_queue` combines runnable backlog candidates with task-plan
-  readiness.
+- `inspect_work_queue` combines runnable backlog candidates with planning mode
+  and task-plan readiness.
+- `classify_planning_needs` explains whether runnable items need direct,
+  standard, or full planning.
 - `next_safe_action` converts the current lifecycle state into the next safe
   tool call.
 
@@ -80,6 +82,9 @@ There is no manual `backlog/index.md`; hosts should compute queue state through
 For non-trivial items, use `draft_task_plan` and `write_task_plan` to create
 `backlog/plans/<ITEM>.yaml`. Plan YAML is strict and reviewable, but still not
 runtime state.
+
+Planning policy is deterministic: direct items can be dispatched from the
+backlog contract; standard and full items require a valid task plan first.
 "#;
 
 const WORKER_HANDOFF_TEXT: &str = r#"# Worker Handoff Guidance

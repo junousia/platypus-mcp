@@ -1,9 +1,10 @@
 use crate::{
     backlog,
     models::{
-        ActionResult, ActionStatus, BacklogCandidate, BacklogListData, InspectWorkQueueParams,
-        NextSafeActionData, NextSafeActionParams, TaskPlanQueryParams, WorkQueueData,
-        WorkQueueItem, WorkQueuePlanState,
+        ActionResult, ActionStatus, BacklogCandidate, BacklogListData, ClassifyPlanningNeedsParams,
+        InspectWorkQueueParams, NextSafeActionData, NextSafeActionParams, PlanningClassification,
+        PlanningClassificationData, TaskPlanQueryParams, WorkQueueData, WorkQueueItem,
+        WorkQueuePlanState,
     },
     storage,
 };
@@ -195,6 +196,70 @@ pub fn inspect_work_queue(
     }
 }
 
+pub fn classify_planning_needs(
+    default_root: &Path,
+    params: ClassifyPlanningNeedsParams,
+) -> ActionResult<PlanningClassificationData> {
+    let action = "classify_planning_needs";
+    let listed = backlog::list_backlog(default_root, params.root.as_deref(), params.limit);
+    let (root, candidates) = match listed {
+        ActionResult {
+            status: ActionStatus::Completed | ActionStatus::Skipped,
+            data: Some(BacklogListData { root, candidates }),
+            ..
+        } => (root, candidates),
+        ActionResult { summary, error, .. } => {
+            return ActionResult::failed(
+                action,
+                "Could not classify planning needs.",
+                error.unwrap_or(summary),
+            )
+        }
+    };
+    let item_filter = params
+        .item_id
+        .as_deref()
+        .map(|value| value.to_ascii_uppercase());
+    let classifications = candidates
+        .iter()
+        .filter(|candidate| {
+            item_filter
+                .as_ref()
+                .map(|filter| candidate.item_id == *filter)
+                .unwrap_or(true)
+        })
+        .map(classify_candidate)
+        .collect::<Vec<_>>();
+    let returned = classifications.len();
+
+    if item_filter.is_some() && returned == 0 {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Skipped,
+            summary: "No runnable backlog item matched the requested item.".to_string(),
+            next_action: Some(
+                "Use list_backlog or inspect_work_queue to inspect runnable items.".to_string(),
+            ),
+            data: Some(PlanningClassificationData {
+                root,
+                classifications,
+                returned,
+            }),
+            error: None,
+        };
+    }
+
+    ActionResult::completed(
+        action,
+        format!("Classified {returned} backlog item(s)."),
+        PlanningClassificationData {
+            root,
+            classifications,
+            returned,
+        },
+    )
+}
+
 #[derive(Debug)]
 struct AssignmentHint {
     id: String,
@@ -322,9 +387,11 @@ fn work_queue_item(
     candidate: BacklogCandidate,
     require_task_plan: bool,
 ) -> WorkQueueItem {
+    let planning = classify_candidate(&candidate);
     let plan = task_plan_state(default_root, root, &candidate.item_id);
     let plan_valid = plan.status == "valid";
-    let ready_to_dispatch = !require_task_plan || plan_valid;
+    let planning_required = require_task_plan && planning.required_mode != "direct";
+    let ready_to_dispatch = !planning_required || plan_valid;
     let (recommended_tool, reason) = if ready_to_dispatch {
         (
             "dispatch_next_work".to_string(),
@@ -344,11 +411,108 @@ fn work_queue_item(
     WorkQueueItem {
         position,
         candidate,
+        planning,
         plan,
         ready_to_dispatch,
         recommended_tool,
         reason,
     }
+}
+
+fn classify_candidate(candidate: &BacklogCandidate) -> PlanningClassification {
+    let mut reasons = Vec::new();
+    let mut mode = "direct";
+    let text = format!(
+        "{} {} {} {}",
+        candidate.title, candidate.area, candidate.item_type, candidate.priority
+    )
+    .to_ascii_lowercase();
+    let surfaces = candidate
+        .owned_surfaces
+        .iter()
+        .map(|surface| surface.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+
+    if candidate.owned_surfaces.len() > 1 {
+        mode = "standard";
+        reasons.push("touches multiple owned surfaces".to_string());
+    }
+    if matches!(
+        candidate.item_type.as_str(),
+        "foundation" | "feature" | "safety" | "ux"
+    ) {
+        mode = max_mode(mode, "standard");
+        reasons.push(format!(
+            "{} item type usually needs planned execution",
+            candidate.item_type
+        ));
+    }
+    if surfaces
+        .iter()
+        .any(|surface| surface == "src/server.rs" || surface == "src/models.rs")
+    {
+        mode = max_mode(mode, "standard");
+        reasons.push("changes MCP tool schema or server surface".to_string());
+    }
+    if text.contains("workflow") {
+        mode = max_mode(mode, "standard");
+        reasons.push("changes user or developer workflow".to_string());
+    }
+    if text.contains("security") || text.contains("approval") || text.contains("safe") {
+        mode = "full";
+        reasons.push("touches security or approval-sensitive behavior".to_string());
+    }
+    if high_risk_surface(&surfaces) {
+        mode = "full";
+        reasons.push("touches high-risk lifecycle or persistence surfaces".to_string());
+    }
+    if text.contains("migration")
+        || text.contains("daemon")
+        || text.contains("network")
+        || text.contains("protocol")
+        || text.contains("architecture")
+    {
+        mode = "full";
+        reasons.push(
+            "mentions architecture, protocol, migration, daemon, or network behavior".to_string(),
+        );
+    }
+    if reasons.is_empty() {
+        reasons.push("small low-risk item can be handled directly".to_string());
+    }
+
+    PlanningClassification {
+        item_id: candidate.item_id.clone(),
+        required_mode: mode.to_string(),
+        required_artifact: match mode {
+            "standard" | "full" => Some(format!("backlog/plans/{}.yaml", candidate.item_id)),
+            _ => None,
+        },
+        reasons,
+    }
+}
+
+fn max_mode(current: &str, candidate: &str) -> &'static str {
+    if current == "full" || candidate == "full" {
+        "full"
+    } else if current == "standard" || candidate == "standard" {
+        "standard"
+    } else {
+        "direct"
+    }
+}
+
+fn high_risk_surface(surfaces: &[String]) -> bool {
+    surfaces.iter().any(|surface| {
+        surface.starts_with("src/storage")
+            || surface.starts_with("src/workspace")
+            || surface.starts_with("src/approvals")
+            || surface.starts_with("src/assignments")
+            || surface.starts_with("src/runner")
+            || surface.starts_with("src/workers")
+            || surface.starts_with("src/reconcile")
+            || surface == "src/dispatch.rs"
+    })
 }
 
 fn task_plan_state(default_root: &Path, root: &str, item_id: &str) -> WorkQueuePlanState {
@@ -522,6 +686,67 @@ mod tests {
     }
 
     #[test]
+    fn direct_items_do_not_require_task_plan() {
+        let project = backlog_project();
+        write_item_with(
+            project.path(),
+            ItemFixture {
+                id: "PROJ-001",
+                title: "Update docs",
+                item_type: "docs",
+                area: "docs",
+                owned_surfaces: &["README.md"],
+            },
+        );
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: Some(true),
+            },
+        );
+        let data = result.data.expect("queue");
+
+        assert_eq!(data.recommended_tool, "dispatch_next_work");
+        assert_eq!(data.items[0].planning.required_mode, "direct");
+        assert!(data.items[0].ready_to_dispatch);
+    }
+
+    #[test]
+    fn classifies_full_planning_for_high_risk_surfaces() {
+        let project = backlog_project();
+        write_item_with(
+            project.path(),
+            ItemFixture {
+                id: "PROJ-001",
+                title: "Change approval security",
+                item_type: "safety",
+                area: "approvals",
+                owned_surfaces: &["src/approvals.rs"],
+            },
+        );
+
+        let result = classify_planning_needs(
+            project.path(),
+            ClassifyPlanningNeedsParams {
+                root: None,
+                item_id: Some("PROJ-001".to_string()),
+                limit: Some(10),
+            },
+        );
+        let data = result.data.expect("classification");
+
+        assert_eq!(data.returned, 1);
+        assert_eq!(data.classifications[0].required_mode, "full");
+        assert_eq!(
+            data.classifications[0].required_artifact.as_deref(),
+            Some("backlog/plans/PROJ-001.yaml")
+        );
+    }
+
+    #[test]
     fn inspects_work_queue_and_recommends_dispatch_with_valid_plan() {
         let project = backlog_project();
         write_item(project.path(), "PROJ-001", "First item");
@@ -597,20 +822,48 @@ area: general
     }
 
     fn write_item(root: &Path, id: &str, title: &str) {
+        write_item_with(
+            root,
+            ItemFixture {
+                id,
+                title,
+                item_type: "feature",
+                area: "general",
+                owned_surfaces: &["src/lib.rs"],
+            },
+        );
+    }
+
+    struct ItemFixture<'a> {
+        id: &'a str,
+        title: &'a str,
+        item_type: &'a str,
+        area: &'a str,
+        owned_surfaces: &'a [&'a str],
+    }
+
+    fn write_item_with(root: &Path, fixture: ItemFixture<'_>) {
+        let surfaces = fixture
+            .owned_surfaces
+            .iter()
+            .map(|surface| format!("- {surface}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         fs::write(
-            root.join("backlog/items").join(format!("{id}.md")),
+            root.join("backlog/items")
+                .join(format!("{}.md", fixture.id)),
             format!(
                 r#"---
 id: {id}
 title: {title}
 priority: P1
-type: feature
-area: general
+type: {item_type}
+area: {area}
 epic: general
 depends_on: []
 suggested_worker: coder
 owned_surfaces:
-- src/lib.rs
+{surfaces}
 ---
 
 # {id} {title}
@@ -626,7 +879,12 @@ Keep the change scoped.
 ## Acceptance
 
 - The item is implemented.
-"#
+"#,
+                id = fixture.id,
+                title = fixture.title,
+                item_type = fixture.item_type,
+                area = fixture.area,
+                surfaces = surfaces
             ),
         )
         .expect("item");

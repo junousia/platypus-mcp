@@ -66,10 +66,21 @@ status, task attempts, PR metadata, or closure state.
 
 ## Task Planning
 
-For non-trivial items, create a committed task plan before dispatch. Use
-`draft_task_plan` to produce a starting point, `write_task_plan` to persist it
-under `backlog/plans/<ITEM>.yaml`, and `validate_task_plan` before treating it
-as executable.
+Use `classify_planning_needs` or `inspect_work_queue` to determine whether an
+item needs further planning. `direct` items can be dispatched from the backlog
+contract alone. `standard` and `full` items require a committed task plan before
+dispatch. Use `draft_task_plan` to produce a starting point, `write_task_plan`
+to persist it under `backlog/plans/<ITEM>.yaml`, and `validate_task_plan`
+before treating it as executable.
+
+The first policy is deterministic and conservative:
+
+- `direct`: small low-risk docs/test/single-surface work.
+- `standard`: feature, foundation, safety, or UX work; multiple owned surfaces;
+  MCP schema/server changes; or workflow changes.
+- `full`: storage, worktree, approval, assignment, runner, worker, dispatch,
+  reconciliation, security, protocol, daemon, network, migration, or
+  architecture-sensitive work.
 
 Task plans are strict YAML artifacts. They may contain requirements, a design
 summary, owned surfaces, verification commands, and executable planned tasks.

@@ -110,6 +110,7 @@ fn runnable_backlog_candidates(
             item_id: item.frontmatter.id.clone(),
             title: item.frontmatter.title.clone(),
             priority: item.frontmatter.priority.clone(),
+            item_type: item.frontmatter.item_type.clone(),
             area: item.frontmatter.area.clone(),
             suggested_worker: item.frontmatter.suggested_worker.clone(),
             owned_surfaces: item.frontmatter.owned_surfaces.clone(),
