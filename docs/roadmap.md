@@ -68,5 +68,7 @@ tooling and intended product direction.
 - Better host guidance through MCP prompts/resources.
 - More complete Codex and Claude adapter behavior, still behind the generic
   worker boundary.
+- External intake adapters for GitHub, Linear, Jira, GitLab, and custom
+  plugin-backed sources, all mapping into local executable backlog snapshots.
 - Optional richer storage abstraction if SQL scattering becomes a maintenance
   risk.

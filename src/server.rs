@@ -1,16 +1,16 @@
 use crate::{
     approvals, assignments, backlog, bundle, config, dispatch, events, evidence, findings,
-    guidance, host_guidance, leases,
+    guidance, host_guidance, integrations, leases,
     models::{
         AcquireLeaseParams, ActionResult, AgentProfileData, AgentProfilesData, AgentProfilesParams,
         ApprovalListData, ApprovalListParams, ApprovalRespondParams, ApprovalResponseData,
         ClaimNextTaskParams, ClassifyPlanningNeedsParams, CompleteWorkerExecutionParams,
         ConfigureAgentProfileParams, CreateBacklogItemParams, CreatedBacklogItemData,
         DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
-        DraftTaskPlanParams, EventsReplayData, EventsReplayParams, EvidenceListData,
-        EvidenceRecordData, FindingDispositionData, FindingListData, FindingRecordData,
-        FindingValidationData, GenerateTaskBundleParams, InitProjectParams,
-        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
+        DraftExternalBacklogItemsParams, DraftTaskPlanParams, EventsReplayData, EventsReplayParams,
+        EvidenceListData, EvidenceRecordData, ExternalBacklogDraftData, FindingDispositionData,
+        FindingListData, FindingRecordData, FindingValidationData, GenerateTaskBundleParams,
+        InitProjectParams, InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
         InspectWorkerAssignmentParams, IntegrateWorkerResultParams, LeaseListData, LeaseRecordData,
         LimitParams, ListEvidenceParams, ListFindingsParams, ListLeasesParams, NextSafeActionData,
         NextSafeActionParams, PingData, PingParams, PlanningClassificationData,
@@ -388,6 +388,28 @@ impl PlatypusMcp {
         Parameters(params): Parameters<DraftBacklogItemsParams>,
     ) -> Json<ActionResult<DraftBacklogData>> {
         Json(backlog::draft_backlog_items(params))
+    }
+
+    #[tool(
+        title = "Draft External Backlog Items",
+        description = "Draft provider-neutral backlog candidates from host-provided external work records.",
+        annotations(
+            title = "Draft External Backlog Items",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn draft_external_backlog_items(
+        &self,
+        Parameters(params): Parameters<DraftExternalBacklogItemsParams>,
+    ) -> Json<ActionResult<ExternalBacklogDraftData>> {
+        Json(integrations::draft_external_backlog_items(
+            &self.default_root,
+            params,
+        ))
     }
 
     #[tool(
@@ -1323,6 +1345,7 @@ mod tests {
             "doctor_snapshot",
             "init_project",
             "draft_backlog_items",
+            "draft_external_backlog_items",
             "create_backlog_item",
             "draft_task_plan",
             "inspect_task_plan",

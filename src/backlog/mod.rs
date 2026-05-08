@@ -18,6 +18,28 @@ pub use validate::validate_backlog;
 
 pub(crate) use closure::closed_item_ids;
 
+pub(crate) fn resolve_backlog_root(
+    default_root: &std::path::Path,
+    root: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    filesystem::resolve_root(default_root, root)
+}
+
+pub(crate) fn external_ref_keys(
+    root: &std::path::Path,
+) -> Result<std::collections::BTreeSet<crate::integrations::ExternalRefKey>, String> {
+    let validation = validate::validate_backlog_at_root(root, true);
+    if !validation.ok {
+        return Err(validation.errors.join("\n"));
+    }
+    Ok(validation
+        .items
+        .iter()
+        .flat_map(|item| item.frontmatter.external_refs.iter())
+        .map(crate::integrations::ExternalRefKey::from_ref)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
