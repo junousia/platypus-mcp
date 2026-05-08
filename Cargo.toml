@@ -1,9 +1,24 @@
 [package]
-name = "platypus-mcp-rs"
+name = "platypus-mcp"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-publish = false
+description = "Local-first MCP server for deterministic Platypus project orchestration"
+repository = "https://github.com/junousia/platypus-mcp"
+homepage = "https://github.com/junousia/platypus-mcp"
+readme = "README.md"
+keywords = ["mcp", "agent", "orchestration", "automation"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    ".agents/",
+    ".codex/",
+    ".platy/",
+    "/AGENTS.md",
+    "/WORKFLOW.md",
+    "/backlog/",
+    "/platy.yaml",
+    "target/",
+]
 
 [dependencies]
 anyhow = "1.0"

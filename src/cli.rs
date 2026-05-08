@@ -79,10 +79,10 @@ impl ToolInvocation {
         }
 
         if positional.is_empty() {
-            bail!("usage: platypus-mcp-rs tool [--root <path>] <tool-name> [json-object]");
+            bail!("usage: platypus-mcp tool [--root <path>] <tool-name> [json-object]");
         }
         if positional.len() > 2 {
-            bail!("usage: platypus-mcp-rs tool [--root <path>] <tool-name> [json-object]");
+            bail!("usage: platypus-mcp tool [--root <path>] <tool-name> [json-object]");
         }
 
         let name = positional[0].clone();

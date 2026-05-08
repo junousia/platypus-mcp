@@ -14,7 +14,7 @@ use std::{
 use tempfile::TempDir;
 use tokio::process::Command;
 
-use platypus_mcp_rs::tasks::{record_task_event, NewTaskEvent};
+use platypus_mcp::tasks::{record_task_event, NewTaskEvent};
 
 #[tokio::test]
 async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
@@ -1969,7 +1969,7 @@ fn server_binary() -> PathBuf {
     if path.ends_with("deps") {
         path.pop();
     }
-    path.push("platypus-mcp-rs");
+    path.push("platypus-mcp");
     path
 }
 

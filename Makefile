@@ -11,7 +11,7 @@ ARGS ?=
 .PHONY: \
 	help \
 	check ci lint fmt-check fmt format test test-lib test-stdio test-one \
-	build doc clean \
+	build doc clean package publish-dry-run publish \
 	run run-root runner smoke smoke-queue smoke-storage \
 	metadata version
 
@@ -35,6 +35,9 @@ help: ## Show categorized developer commands.
 	@printf '\033[1mBuild And Docs\033[0m\n'
 	@printf '  \033[36mbuild\033[0m       Build debug binary\n'
 	@printf '  \033[36mdoc\033[0m         Build Rust API docs without dependencies\n'
+	@printf '  \033[36mpackage\033[0m     Verify crates.io package contents\n'
+	@printf '  \033[36mpublish-dry-run\033[0m Validate crates.io publishing without uploading\n'
+	@printf '  \033[36mpublish\033[0m     Publish the crate to crates.io\n'
 	@printf '  \033[36mclean\033[0m       Remove Cargo build output\n\n'
 	@printf '\033[1mRun\033[0m\n'
 	@printf '  \033[36mrun\033[0m         Run stdio MCP server in the current directory\n'
@@ -88,6 +91,15 @@ build: ## Build debug binary.
 
 doc: ## Build Rust API docs without dependencies.
 	$(CARGO) doc --no-deps
+
+package: ## Verify crates.io package contents.
+	$(CARGO) package --list
+
+publish-dry-run: ## Validate crates.io publishing without uploading.
+	$(CARGO) publish --dry-run
+
+publish: ## Publish the crate to crates.io.
+	$(CARGO) publish
 
 clean: ## Remove Cargo build output.
 	$(CARGO) clean
