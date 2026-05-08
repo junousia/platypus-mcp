@@ -105,6 +105,12 @@ Run the local preparation runner:
 make runner
 ```
 
+Invoke one MCP tool through the stdio contract for local smoke testing:
+
+```bash
+cargo run -- tool --root "$PWD" inspect_work_queue '{"limit":5}'
+```
+
 Inspect the current workflow integration policy:
 
 ```bash

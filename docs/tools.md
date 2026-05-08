@@ -75,6 +75,19 @@ flowchart LR
 - `list_agent_profiles`: list configured manager and worker profiles.
 - `configure_agent_profile`: create or update one agent profile.
 
+## Local Tool Smoke Helper
+
+For development, the binary can invoke one MCP tool through its own stdio
+server and print the structured result as formatted JSON:
+
+```bash
+cargo run -- tool --root "$PWD" inspect_work_queue '{"limit":5}'
+```
+
+The helper exits non-zero when the MCP tool returns a failed structured result
+or when the protocol call itself fails. It is intended for local smoke testing
+and scripts; MCP hosts should still call tools through MCP directly.
+
 ### Backlog
 
 - `draft_backlog_items`: draft deterministic candidate backlog items from a

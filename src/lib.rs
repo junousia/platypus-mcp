@@ -2,6 +2,7 @@ pub mod approvals;
 pub mod assignments;
 pub mod backlog;
 pub mod bundle;
+pub mod cli;
 pub mod config;
 pub mod dispatch;
 pub mod events;

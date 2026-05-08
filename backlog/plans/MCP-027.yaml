@@ -1,0 +1,57 @@
+item_id: MCP-027
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Developers can invoke Platypus MCP tools from the repository command line without hand-writing stdio JSON-RPC scripts.
+- id: R2
+  text: The helper exercises the real MCP tool contract and does not duplicate tool business logic.
+design:
+  summary: Add a small developer-facing command path that invokes one named MCP tool with JSON arguments and prints the structured result as formatted JSON.
+  owned_surfaces:
+  - src/main.rs
+  - src/cli.rs
+  - tests
+  - docs/tools.md
+  - README.md
+  notes: Keep this as a smoke-testing and development helper, not a replacement for MCP hosts.
+tasks:
+- id: MCP-027-T01
+  title: Implement MCP tool invocation helper
+  goal: Add the command path and argument/result handling for invoking a named MCP tool with JSON arguments.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/main.rs
+  - src/cli.rs
+  - src/server.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - A developer can call a named MCP tool with JSON arguments from the repo command line.
+  - The helper prints structured tool output as readable JSON.
+  - Failed MCP tool results or protocol errors produce a non-zero exit.
+  notes: null
+- id: MCP-027-T02
+  title: Cover helper workflow in tests and docs
+  goal: Add tests and documentation for the helper, including read-only and mutating tool smoke paths.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on:
+  - MCP-027-T01
+  owned_surfaces:
+  - tests
+  - docs/tools.md
+  - README.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Tests cover inspect_work_queue through the helper.
+  - Tests cover one mutating tool against an isolated temporary project.
+  - Documentation shows example commands and expected behavior.
+  notes: null
