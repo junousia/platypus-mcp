@@ -1,0 +1,58 @@
+item_id: MCP-044
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: Provide a SqliteProjectState type that implements ProjectState while preserving current behavior.
+- id: R2
+  text: Keep SQLite-specific setup, schema, and repository details behind the SQLite backend module.
+- id: R3
+  text: Cover backend opening and at least safe read/lifecycle scaffolding with tests.
+design:
+  summary: Add a SQLite backend shell under src/state/sqlite that wraps the existing storage connection and implements the ProjectState trait. This item should prefer read/scaffolding implementations and explicit unsupported errors over large behavior migration.
+  owned_surfaces:
+  - src/state/sqlite
+  - src/state
+  - src/storage
+  - src/lib.rs
+  - tests
+  notes: This is a foundation shell for later migration. Do not move MCP tool handlers yet, and do not duplicate existing lifecycle logic unless needed for a minimal trait implementation.
+tasks:
+- id: MCP-044-T01
+  title: Add SQLite ProjectState backend shell
+  goal: Create SqliteProjectState, backend opening/configuration types, and ProjectState implementation methods that safely delegate or return explicit unsupported errors for behavior not migrated yet.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/state/sqlite
+  - src/state
+  - src/storage
+  - src/lib.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - SqliteProjectState can be constructed for a project root through the state module.
+  - SQLite setup details are private to the SQLite backend module.
+  - ProjectState methods implemented by the shell preserve existing behavior or return backend-neutral unsupported errors.
+  notes: null
+- id: MCP-044-T02
+  title: Test SQLite backend shell
+  goal: Add focused tests for opening the SQLite state backend and exercising implemented ProjectState read/lifecycle scaffolding without changing MCP tool behavior.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-044-T01
+  owned_surfaces:
+  - src/state/sqlite
+  - tests
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Tests cover opening SqliteProjectState inside a project root.
+  - Tests prove unsupported methods fail with ProjectStateError::Unsupported where behavior is not migrated yet.
+  - make check passes with existing MCP behavior unchanged.
+  notes: null
