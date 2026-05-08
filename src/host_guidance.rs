@@ -23,15 +23,17 @@ model turns, and external worker execution.
 
 1. Inspect setup with `doctor_snapshot`, `inspect_status`, and
    `inspect_workflow_config`.
-2. Ask `next_safe_action` before advancing lifecycle state.
-3. Shape work with `draft_backlog_items`, `create_backlog_item`,
+2. Shape work with `draft_backlog_items`, `create_backlog_item`,
    `validate_backlog`, and `list_backlog`.
+3. Use `inspect_work_queue` to choose executable backlog work and understand
+   task-plan readiness.
 4. For non-trivial work, use `draft_task_plan`, `write_task_plan`,
    `validate_task_plan`, `inspect_task_plan`, and `list_task_plans` to create a
    committed executable plan.
-5. Dispatch only through `dispatch_next_work`, then prepare the worker with
+5. Ask `next_safe_action` before advancing lifecycle state.
+6. Dispatch only through `dispatch_next_work`, then prepare the worker with
    `prepare_worker_handoff`.
-6. Start, track, complete, verify, integrate, and reconcile with
+7. Start, track, complete, verify, integrate, and reconcile with
    `start_worker_task`, `record_worker_progress`, `complete_worker_task`,
    `record_verification_evidence`, `integrate_worker_result`, and
    `reconcile_project`.
@@ -51,7 +53,10 @@ Use status tools before making assumptions about the repository or task queue.
 - `inspect_workflow_config` reports integration policy such as merge style and
   verification gates.
 - `list_agent_profiles` shows manager and worker roles.
-- `next_safe_action` converts the current state into the next safe tool call.
+- `inspect_work_queue` combines runnable backlog candidates with task-plan
+  readiness.
+- `next_safe_action` converts the current lifecycle state into the next safe
+  tool call.
 
 Report setup blockers directly from structured tool output. Do not invent
 missing state from chat context.
@@ -70,7 +75,7 @@ state, or blocked/done fields. Closure is derived from Git trailers such as
 `Platypus-Closes` and `Platypus-Verification`.
 
 There is no manual `backlog/index.md`; hosts should compute queue state through
-`list_backlog`, `inspect_status`, and `next_safe_action`.
+`list_backlog`, `inspect_work_queue`, `inspect_status`, and `next_safe_action`.
 
 For non-trivial items, use `draft_task_plan` and `write_task_plan` to create
 `backlog/plans/<ITEM>.yaml`. Plan YAML is strict and reviewable, but still not

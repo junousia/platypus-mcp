@@ -28,6 +28,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"doctor_snapshot"));
     assert!(tool_names.contains(&"init_project"));
     assert!(tool_names.contains(&"next_safe_action"));
+    assert!(tool_names.contains(&"inspect_work_queue"));
     assert!(tool_names.contains(&"record_finding"));
     assert!(tool_names.contains(&"draft_task_plan"));
     assert!(tool_names.contains(&"inspect_task_plan"));
@@ -227,6 +228,55 @@ async fn stdio_server_drafts_writes_and_validates_task_plan() -> anyhow::Result<
         inspected["data"]["plan"]["tasks"][0]["verification"][0],
         "make check"
     );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_inspects_work_queue_with_task_plan_state() -> anyhow::Result<()> {
+    let project = assignment_project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let missing = call_tool_json(
+        &client,
+        "inspect_work_queue",
+        json!({ "limit": 5, "require_task_plan": true }),
+    )
+    .await?;
+    assert_stage_status("inspect_work_queue missing plan", &missing, "completed");
+    assert_eq!(missing["data"]["recommended_tool"], "draft_task_plan");
+    assert_eq!(
+        missing["data"]["items"][0]["candidate"]["item_id"],
+        "PROJ-001"
+    );
+    assert_eq!(missing["data"]["items"][0]["plan"]["status"], "missing");
+    assert_eq!(missing["data"]["items"][0]["ready_to_dispatch"], false);
+
+    let drafted =
+        call_tool_json(&client, "draft_task_plan", json!({ "item_id": "PROJ-001" })).await?;
+    let written = call_tool_json(
+        &client,
+        "write_task_plan",
+        json!({
+            "item_id": "PROJ-001",
+            "plan": drafted["data"]["plan"].clone()
+        }),
+    )
+    .await?;
+    assert_stage_status("write_task_plan", &written, "completed");
+
+    let ready = call_tool_json(
+        &client,
+        "inspect_work_queue",
+        json!({ "limit": 5, "require_task_plan": true }),
+    )
+    .await?;
+    assert_stage_status("inspect_work_queue ready", &ready, "completed");
+    assert_eq!(ready["data"]["recommended_tool"], "dispatch_next_work");
+    assert_eq!(ready["data"]["items"][0]["plan"]["status"], "valid");
+    assert_eq!(ready["data"]["items"][0]["plan"]["task_count"], 1);
+    assert_eq!(ready["data"]["items"][0]["ready_to_dispatch"], true);
 
     client.cancel().await?;
     Ok(())

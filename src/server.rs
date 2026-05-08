@@ -9,16 +9,16 @@ use crate::{
         DraftBacklogItemsParams, DraftTaskPlanParams, EventsReplayData, EventsReplayParams,
         EvidenceListData, EvidenceRecordData, FindingDispositionData, FindingListData,
         FindingRecordData, FindingValidationData, GenerateTaskBundleParams, InitProjectParams,
-        InspectTaskEventsParams, InspectTaskParams, InspectWorkerAssignmentParams,
-        IntegrateWorkerResultParams, LimitParams, ListEvidenceParams, ListFindingsParams,
-        NextSafeActionData, NextSafeActionParams, PingData, PingParams,
-        PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData, ReconcileParams,
-        ReconciliationData, RecordEvidenceParams, RecordFindingParams,
+        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
+        InspectWorkerAssignmentParams, IntegrateWorkerResultParams, LimitParams,
+        ListEvidenceParams, ListFindingsParams, NextSafeActionData, NextSafeActionParams, PingData,
+        PingParams, PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData,
+        ReconcileParams, ReconciliationData, RecordEvidenceParams, RecordFindingParams,
         RecordVerificationEvidenceParams, RecordWorkerEventParams, RootParams, RunnerPrepareParams,
         RunnerReportData, SendWorkerGuidanceParams, StartWorkerExecutionParams, TaskBundleData,
         TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams,
         TaskPlanValidationData, TaskPlanWriteData, TaskRecordData, UpdateFindingDispositionParams,
-        ValidateBacklogParams, ValidateFindingsParams, WorkerAssignmentData,
+        ValidateBacklogParams, ValidateFindingsParams, WorkQueueData, WorkerAssignmentData,
         WorkerAssignmentEventData, WorkerGuidanceData, WorkerResultIntegrationData,
         WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData, WorktreeCleanupParams,
         WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffParams,
@@ -238,6 +238,25 @@ impl PlatypusMcp {
         Parameters(params): Parameters<NextSafeActionParams>,
     ) -> Json<ActionResult<NextSafeActionData>> {
         Json(guidance::next_safe_action(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Inspect Work Queue",
+        description = "Inspect runnable backlog work with task-plan status and recommended next tool.",
+        annotations(
+            title = "Inspect Work Queue",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn inspect_work_queue(
+        &self,
+        Parameters(params): Parameters<InspectWorkQueueParams>,
+    ) -> Json<ActionResult<WorkQueueData>> {
+        Json(guidance::inspect_work_queue(&self.default_root, params))
     }
 
     #[tool(
@@ -1196,6 +1215,7 @@ mod tests {
             "inspect_status",
             "project_status",
             "next_safe_action",
+            "inspect_work_queue",
             "list_backlog",
             "validate_backlog",
             "doctor_snapshot",

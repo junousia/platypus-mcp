@@ -11,7 +11,9 @@ deterministic task dispatch, isolated Git worktrees, worker handoff bundles,
 worker progress/result recording, approvals, events, findings, evidence, agent
 profiles, workflow integration configuration, and reconciliation.
 
-Use `next_safe_action` as the host-facing guide for the next safe tool call.
+Use `inspect_work_queue` to choose executable backlog work and
+`next_safe_action` as the host-facing guide for the next safe lifecycle tool
+call.
 The preferred workflow is documented in [docs/workflow.md](docs/workflow.md),
 and the full tool surface is documented in [docs/tools.md](docs/tools.md).
 

@@ -1,6 +1,10 @@
 use crate::{
     backlog,
-    models::{ActionResult, BacklogListData, NextSafeActionData, NextSafeActionParams},
+    models::{
+        ActionResult, ActionStatus, BacklogCandidate, BacklogListData, InspectWorkQueueParams,
+        NextSafeActionData, NextSafeActionParams, TaskPlanQueryParams, WorkQueueData,
+        WorkQueueItem, WorkQueuePlanState,
+    },
     storage,
 };
 use rusqlite::OptionalExtension;
@@ -132,6 +136,65 @@ pub fn next_safe_action(
     )
 }
 
+pub fn inspect_work_queue(
+    default_root: &Path,
+    params: InspectWorkQueueParams,
+) -> ActionResult<WorkQueueData> {
+    let action = "inspect_work_queue";
+    let require_task_plan = params.require_task_plan.unwrap_or(false);
+    let listed = backlog::list_backlog(default_root, params.root.as_deref(), params.limit);
+    let (root, candidates) = match listed {
+        ActionResult {
+            status: ActionStatus::Completed | ActionStatus::Skipped,
+            data: Some(BacklogListData { root, candidates }),
+            ..
+        } => (root, candidates),
+        ActionResult { summary, error, .. } => {
+            return ActionResult::failed(
+                action,
+                "Could not inspect executable work queue.",
+                error.unwrap_or(summary),
+            )
+        }
+    };
+
+    let items: Vec<WorkQueueItem> = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            work_queue_item(default_root, &root, index + 1, candidate, require_task_plan)
+        })
+        .collect();
+
+    let (recommended_tool, reason, params) = recommended_queue_action(&root, &items);
+    let summary = if items.is_empty() {
+        "No runnable backlog items.".to_string()
+    } else {
+        format!("{} runnable backlog item(s) inspected.", items.len())
+    };
+    let status = if items.is_empty() {
+        ActionStatus::Skipped
+    } else {
+        ActionStatus::Completed
+    };
+    ActionResult {
+        action: action.to_string(),
+        status,
+        summary: summary.clone(),
+        next_action: Some(reason.clone()),
+        data: Some(WorkQueueData {
+            root,
+            require_task_plan,
+            recommended_tool,
+            summary,
+            reason,
+            params,
+            items,
+        }),
+        error: None,
+    }
+}
+
 #[derive(Debug)]
 struct AssignmentHint {
     id: String,
@@ -252,6 +315,128 @@ fn row_to_task_hint(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskHint> {
     })
 }
 
+fn work_queue_item(
+    default_root: &Path,
+    root: &str,
+    position: usize,
+    candidate: BacklogCandidate,
+    require_task_plan: bool,
+) -> WorkQueueItem {
+    let plan = task_plan_state(default_root, root, &candidate.item_id);
+    let plan_valid = plan.status == "valid";
+    let ready_to_dispatch = !require_task_plan || plan_valid;
+    let (recommended_tool, reason) = if ready_to_dispatch {
+        (
+            "dispatch_next_work".to_string(),
+            "Backlog item is runnable.".to_string(),
+        )
+    } else if plan.status == "missing" {
+        (
+            "draft_task_plan".to_string(),
+            "A task plan is required before dispatch.".to_string(),
+        )
+    } else {
+        (
+            "validate_task_plan".to_string(),
+            "Task plan must be fixed before dispatch.".to_string(),
+        )
+    };
+    WorkQueueItem {
+        position,
+        candidate,
+        plan,
+        ready_to_dispatch,
+        recommended_tool,
+        reason,
+    }
+}
+
+fn task_plan_state(default_root: &Path, root: &str, item_id: &str) -> WorkQueuePlanState {
+    let listed = backlog::list_task_plans(
+        default_root,
+        TaskPlanQueryParams {
+            root: Some(root.to_string()),
+            item_id: Some(item_id.to_string()),
+            include_errors: Some(true),
+        },
+    );
+    let summary = listed
+        .data
+        .as_ref()
+        .and_then(|data| data.plans.first())
+        .cloned();
+    let validation = backlog::validate_task_plan(
+        default_root,
+        TaskPlanQueryParams {
+            root: Some(root.to_string()),
+            item_id: Some(item_id.to_string()),
+            include_errors: Some(true),
+        },
+    );
+    let errors = validation
+        .data
+        .as_ref()
+        .map(|data| data.errors.clone())
+        .unwrap_or_else(|| validation.error.iter().cloned().collect());
+
+    match summary {
+        Some(summary) if validation.status == ActionStatus::Completed => WorkQueuePlanState {
+            status: "valid".to_string(),
+            path: Some(summary.path),
+            mode: summary.mode,
+            task_count: summary.task_count,
+            requirement_count: summary.requirement_count,
+            errors,
+        },
+        Some(summary) => WorkQueuePlanState {
+            status: "invalid".to_string(),
+            path: Some(summary.path),
+            mode: summary.mode,
+            task_count: summary.task_count,
+            requirement_count: summary.requirement_count,
+            errors,
+        },
+        None => WorkQueuePlanState {
+            status: "missing".to_string(),
+            path: None,
+            mode: None,
+            task_count: 0,
+            requirement_count: 0,
+            errors,
+        },
+    }
+}
+
+fn recommended_queue_action(
+    root: &str,
+    items: &[WorkQueueItem],
+) -> (String, String, BTreeMap<String, Value>) {
+    let Some(first) = items.first() else {
+        return (
+            "create_backlog_item".to_string(),
+            "Create or draft a backlog item before dispatching work.".to_string(),
+            map_params([("root", root), ("summary", "Describe the work item.")]),
+        );
+    };
+
+    let item_id = first.candidate.item_id.as_str();
+    let mut params = map_params([("root", root)]);
+    match first.recommended_tool.as_str() {
+        "dispatch_next_work" => {
+            params.insert("summary".to_string(), Value::String(String::new()));
+        }
+        "draft_task_plan" | "validate_task_plan" => {
+            params.insert("item_id".to_string(), Value::String(item_id.to_string()));
+        }
+        _ => {}
+    }
+    (
+        first.recommended_tool.clone(),
+        format!("{} {}", item_id, first.reason),
+        params,
+    )
+}
+
 fn completed<const N: usize>(
     action: &str,
     root: &str,
@@ -277,10 +462,19 @@ fn completed<const N: usize>(
     )
 }
 
+fn map_params<const N: usize>(params: [(&str, &str); N]) -> BTreeMap<String, Value> {
+    params
+        .into_iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(key, value)| (key.to_string(), Value::String(value.to_string())))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tasks::{create_task_record, NewTask};
+    use std::fs;
     use tempfile::TempDir;
 
     #[test]
@@ -302,5 +496,139 @@ mod tests {
 
         assert_eq!(data.recommended_tool, "prepare_worker_handoff");
         assert_eq!(data.params["task_id"], "PROJ-001-T001");
+    }
+
+    #[test]
+    fn inspects_work_queue_with_missing_required_task_plan() {
+        let project = backlog_project();
+        write_item(project.path(), "PROJ-001", "First item");
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: Some(true),
+            },
+        );
+        let data = result.data.expect("queue");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.recommended_tool, "draft_task_plan");
+        assert_eq!(data.items.len(), 1);
+        assert_eq!(data.items[0].plan.status, "missing");
+        assert!(!data.items[0].ready_to_dispatch);
+        assert_eq!(data.params["item_id"], "PROJ-001");
+    }
+
+    #[test]
+    fn inspects_work_queue_and_recommends_dispatch_with_valid_plan() {
+        let project = backlog_project();
+        write_item(project.path(), "PROJ-001", "First item");
+        fs::create_dir_all(project.path().join("backlog/plans")).expect("plans");
+        fs::write(
+            project.path().join("backlog/plans/PROJ-001.yaml"),
+            r#"item_id: PROJ-001
+version: 1
+mode: standard
+requirements:
+  - id: R1
+    text: Do the work.
+design:
+  summary: Focused implementation.
+  owned_surfaces:
+    - src/lib.rs
+  notes: null
+tasks:
+  - id: PROJ-001-T01
+    title: Implement first item
+    goal: Complete the first item.
+    requirement_refs:
+      - R1
+    depends_on: []
+    owned_surfaces:
+      - src/lib.rs
+    suggested_worker: coder
+    verification:
+      - make check
+    acceptance:
+      - The item is implemented and verified.
+    notes: null
+"#,
+        )
+        .expect("plan");
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: Some(true),
+            },
+        );
+        let data = result.data.expect("queue");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.recommended_tool, "dispatch_next_work");
+        assert_eq!(data.items[0].plan.status, "valid");
+        assert!(data.items[0].ready_to_dispatch);
+        assert_eq!(data.items[0].plan.task_count, 1);
+    }
+
+    fn backlog_project() -> TempDir {
+        let project = TempDir::new().expect("temp dir");
+        fs::create_dir_all(project.path().join("backlog/items")).expect("items");
+        fs::create_dir_all(project.path().join("backlog/epics")).expect("epics");
+        fs::write(
+            project.path().join("backlog/epics/general.md"),
+            r#"---
+id: general
+title: General
+status: active
+priority: P1
+area: general
+---
+
+# General
+"#,
+        )
+        .expect("epic");
+        project
+    }
+
+    fn write_item(root: &Path, id: &str, title: &str) {
+        fs::write(
+            root.join("backlog/items").join(format!("{id}.md")),
+            format!(
+                r#"---
+id: {id}
+title: {title}
+priority: P1
+type: feature
+area: general
+epic: general
+depends_on: []
+suggested_worker: coder
+owned_surfaces:
+- src/lib.rs
+---
+
+# {id} {title}
+
+## Goal
+
+Deliver the item.
+
+## Implementation Contract
+
+Keep the change scoped.
+
+## Acceptance
+
+- The item is implemented.
+"#
+            ),
+        )
+        .expect("item");
     }
 }
