@@ -1,10 +1,12 @@
 use crate::{
-    backlog,
-    models::{ActionResult, ActionStatus, BacklogListData, DispatchNextWorkData, RootParams},
-    storage::{self, LeaseStore},
-    tasks::{self, NewTask, NewTaskEvent},
+    models::{
+        ActionResult, ActionStatus, BacklogCandidate, DispatchNextWorkData, RootParams, TaskRecord,
+    },
+    state::{
+        sqlite::SqliteProjectState, BacklogCandidateSnapshot, DispatchWorkCommand, ProjectState,
+        ProjectStateError, TaskSnapshot,
+    },
 };
-use serde_json::json;
 use std::path::Path;
 
 pub fn dispatch_next_work(
@@ -12,119 +14,96 @@ pub fn dispatch_next_work(
     params: RootParams,
 ) -> ActionResult<DispatchNextWorkData> {
     let action = "dispatch_next_work";
-    let backlog = backlog::list_backlog(default_root, params.root.as_deref(), Some(1));
-    let BacklogListData { root, candidates } = match backlog {
-        ActionResult {
-            status: ActionStatus::Completed,
-            data: Some(data),
-            ..
-        }
-        | ActionResult {
-            status: ActionStatus::Skipped,
-            data: Some(data),
-            ..
-        } => data,
-        ActionResult { error, summary, .. } => {
-            return ActionResult::failed(
-                action,
-                "Could not select runnable backlog work.",
-                error.unwrap_or(summary),
-            );
-        }
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
+        Err(error) => return state_error(action, "Could not open project state.", error),
     };
-
-    let Some(candidate) = candidates.into_iter().next() else {
-        return ActionResult {
+    match state.dispatch_work(DispatchWorkCommand {
+        summary: None,
+        preferred_worker: None,
+    }) {
+        Ok(outcome) => {
+            let task = task_record(outcome.task);
+            ActionResult {
+                action: action.to_string(),
+                status: ActionStatus::Completed,
+                summary: format!("Dispatched {} as task {}.", task.source_item_id, task.id),
+                next_action: Some(
+                    "Use inspect_task_events and an external harness to execute the queued task."
+                        .to_string(),
+                ),
+                data: Some(DispatchNextWorkData {
+                    root: state.root().display().to_string(),
+                    candidate: backlog_candidate(outcome.candidate),
+                    task,
+                }),
+                error: None,
+            }
+        }
+        Err(ProjectStateError::NotFound { .. }) => ActionResult {
             action: action.to_string(),
             status: ActionStatus::Skipped,
             summary: "No runnable backlog items to dispatch.".to_string(),
             next_action: Some("Create or unblock backlog items.".to_string()),
             data: None,
             error: None,
-        };
-    };
-
-    let storage = match storage::connect(default_root, Some(&root)) {
-        Ok(storage) => storage,
-        Err(error) => {
-            return ActionResult::failed(action, "Could not open lease storage.", error.to_string())
-        }
-    };
-    match storage
-        .repository()
-        .leases()
-        .active_conflict("project", "root", None)
-    {
-        Ok(Some(lease)) => {
-            return ActionResult::skipped(
+        },
+        Err(ProjectStateError::Conflict { message }) if message.contains("leased by") => {
+            ActionResult::skipped(
                 action,
-                format!(
-                    "Project is leased by `{}` until {}.",
-                    lease.owner, lease.expires_at
-                ),
+                message,
                 "Wait for the lease to expire or release it before dispatching work.",
             )
         }
-        Ok(None) => {}
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not inspect project lease.",
-                error.to_string(),
-            )
-        }
+        Err(error) => state_error(action, "Could not dispatch runnable backlog work.", error),
     }
+}
 
-    let task = match tasks::create_task_record(
-        default_root,
-        Some(&root),
-        NewTask {
-            source_item_id: candidate.item_id.clone(),
-            title: candidate.title.clone(),
-            worker: candidate.suggested_worker.clone(),
-        },
-    ) {
-        Ok(task) => task,
-        Err(error) => {
-            return ActionResult::failed(action, "Could not create task record.", error);
-        }
-    };
+fn state_error<T: schemars::JsonSchema + serde::Serialize>(
+    action: &str,
+    summary: &str,
+    error: ProjectStateError,
+) -> ActionResult<T> {
+    ActionResult::failed(action, summary, error.to_string())
+}
 
-    if let Err(error) = tasks::record_task_event(
-        default_root,
-        Some(&root),
-        NewTaskEvent {
-            task_id: task.id.clone(),
-            sequence: Some(1),
-            event_type: "task_queued".to_string(),
-            summary: format!(
-                "Queued {} for external worker execution.",
-                candidate.item_id
-            ),
-            payload: Some(json!({
-                "source": candidate.source,
-                "item_id": candidate.item_id,
-                "worker": candidate.suggested_worker,
-                "status": "queued"
-            })),
-        },
-    ) {
-        return ActionResult::failed(action, "Could not persist task event.", error);
+fn backlog_candidate(candidate: BacklogCandidateSnapshot) -> BacklogCandidate {
+    BacklogCandidate {
+        source: candidate.source,
+        item_id: candidate.item_id,
+        title: candidate.title,
+        priority: candidate.priority,
+        item_type: candidate.item_type,
+        area: candidate.area,
+        suggested_worker: candidate.suggested_worker,
+        owned_surfaces: candidate.owned_surfaces,
+        external_refs: candidate.external_refs,
     }
+}
 
-    ActionResult {
-        action: action.to_string(),
-        status: ActionStatus::Completed,
-        summary: format!("Dispatched {} as task {}.", task.source_item_id, task.id),
-        next_action: Some(
-            "Use inspect_task_events and an external harness to execute the queued task."
-                .to_string(),
+fn task_record(task: TaskSnapshot) -> TaskRecord {
+    let (workspace_path, workspace_branch, workspace_base_ref) = match task.worker_workspace {
+        Some(workspace) => (
+            Some(workspace.path),
+            Some(workspace.branch),
+            Some(workspace.base_ref),
         ),
-        data: Some(DispatchNextWorkData {
-            root,
-            candidate,
-            task,
-        }),
-        error: None,
+        None => (None, None, None),
+    };
+    TaskRecord {
+        id: task.id,
+        source_item_id: task.source_item_id,
+        title: task.title,
+        status: task.status,
+        worker: task.worker,
+        claimed_by: task.claimed_by,
+        claimed_at: task.claimed_at,
+        started_at: task.started_at,
+        finished_at: task.finished_at,
+        workspace_path,
+        workspace_branch,
+        workspace_base_ref,
+        created_at: task.created_at,
+        updated_at: task.updated_at,
     }
 }

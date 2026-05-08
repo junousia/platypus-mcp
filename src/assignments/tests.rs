@@ -1,5 +1,5 @@
 use super::*;
-use crate::tasks::{create_task_record, inspect_task_events, NewTask};
+use crate::tasks::{self, create_task_record, inspect_task_events, NewTask};
 use std::{collections::BTreeMap, fs, process::Command};
 use tempfile::TempDir;
 

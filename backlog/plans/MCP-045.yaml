@@ -1,0 +1,83 @@
+item_id: MCP-045
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: Lifecycle MCP tools route task and assignment state transitions through ProjectState methods instead of raw storage or SQL-shaped repositories.
+- id: R2
+  text: SQLite ProjectState preserves existing task, assignment, worker event, and completion behavior including duplicate active-task and active-assignment safeguards.
+- id: R3
+  text: No lifecycle MCP tool outside the SQLite backend imports rusqlite or accepts raw database connections.
+design:
+  summary: 'Move the orchestration boundary one layer up: expose dispatch, prepare assignment, start execution, append worker event, and complete execution through SqliteProjectState, then make existing MCP tool functions call those domain methods and adapt snapshots back into existing public response models. Keep worktree creation and bundle generation in the assignment orchestration path, but persist all lifecycle state changes through ProjectState.'
+  owned_surfaces:
+  - src/state
+  - src/dispatch.rs
+  - src/tasks.rs
+  - src/assignments
+  - src/runner.rs
+  - tests/stdio_protocol.rs
+  notes: Keep public MCP schemas stable. It is acceptable for ProjectState methods to delegate to existing storage internals during this migration, but lifecycle callers should depend on ProjectState rather than direct rusqlite/storage access.
+tasks:
+- id: MCP-045-T01
+  title: Implement SQLite lifecycle ProjectState methods
+  goal: Add working SqliteProjectState methods for dispatch_work, prepare_assignment, start_execution, append_worker_event, and complete_execution using existing invariants and repository helpers.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/state
+  - src/assignments
+  suggested_worker: coder
+  verification:
+  - cargo test state::sqlite
+  - cargo test assignments::tests
+  acceptance:
+  - Duplicate active tasks fail safely through ProjectState dispatch.
+  - Duplicate active assignments fail safely through ProjectState prepare_assignment.
+  - Assignment start, event append, and completion return domain snapshots.
+  notes: null
+- id: MCP-045-T02
+  title: Route lifecycle MCP tools through ProjectState
+  goal: Update dispatch, task/assignment lifecycle tools, and runner paths so lifecycle mutations call ProjectState methods and keep response schemas stable.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on:
+  - MCP-045-T01
+  owned_surfaces:
+  - src/dispatch.rs
+  - src/tasks.rs
+  - src/assignments
+  - src/runner.rs
+  suggested_worker: coder
+  verification:
+  - cargo test stdio_server_dispatches_next_work_without_running_worker
+  - cargo test stdio_server_guides_friendly_worker_assignment_lifecycle
+  - cargo test stdio_server_runs_worker_assignment_lifecycle
+  acceptance:
+  - dispatch_next_work calls ProjectState::dispatch_work.
+  - prepare/start/record/complete worker assignment paths call ProjectState methods for state mutation.
+  - No lifecycle MCP tool outside src/state/sqlite imports rusqlite.
+  notes: null
+- id: MCP-045-T03
+  title: Cover lifecycle contract and full smoke
+  goal: Add or update tests proving ProjectState lifecycle behavior and unchanged stdio lifecycle behavior.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-045-T01
+  - MCP-045-T02
+  owned_surfaces:
+  - src/state
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - ProjectState contract tests cover duplicate active task and duplicate active assignment conflicts.
+  - Existing stdio lifecycle tests pass.
+  - Full make check passes.
+  notes: null

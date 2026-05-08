@@ -1119,7 +1119,7 @@ pub struct TaskBundleData {
     pub bundle: TaskBundle,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
 pub struct TaskBundle {
     pub task_id: String,
     pub item_id: String,
