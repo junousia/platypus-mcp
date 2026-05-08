@@ -17,6 +17,7 @@ pub mod project;
 pub mod reconcile;
 pub mod runner;
 pub mod server;
+pub mod state;
 pub mod storage;
 pub mod tasks;
 pub mod workers;
