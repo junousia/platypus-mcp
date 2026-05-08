@@ -99,8 +99,9 @@ pub fn events_replay(
         }
     }
     events.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
+        left.replay_order
+            .cmp(&right.replay_order)
+            .then_with(|| left.created_at.cmp(&right.created_at))
             .then_with(|| left.cursor.cmp(&right.cursor))
     });
     if events.len() > limit {
@@ -139,6 +140,7 @@ fn transition_to_event(transition: crate::models::RuntimeTransitionRecord) -> Ev
         summary: transition.summary,
         payload: transition.payload,
         created_at: transition.created_at,
+        replay_order: transition.replay_order,
     }
 }
 
@@ -241,6 +243,17 @@ mod tests {
             .events
             .iter()
             .any(|event| event.event_type == "task_created"));
+        let task_created = data
+            .events
+            .iter()
+            .position(|event| event.event_type == "task_created")
+            .expect("task_created event");
+        let worker_started = data
+            .events
+            .iter()
+            .position(|event| event.event_type == "worker_started")
+            .expect("worker_started event");
+        assert!(task_created < worker_started);
     }
 
     #[test]

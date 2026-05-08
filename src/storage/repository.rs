@@ -5,7 +5,7 @@ use super::traits::{
 use crate::models::{
     ApprovalRecord, EventRecord, LeaseRecord, RuntimeTransitionRecord, TaskEventRecord, TaskRecord,
 };
-use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -246,14 +246,15 @@ impl TaskStore for TaskRepository<'_> {
     }
 
     fn record_event(&self, event: TaskEventInsert) -> RepositoryResult<TaskEventRecord> {
-        let sequence = event
-            .sequence
-            .map(Ok)
-            .unwrap_or_else(|| self.next_sequence(&event.task_id))?;
+        let transaction =
+            Transaction::new_unchecked(self.connection, TransactionBehavior::Immediate)?;
+        let sequence = event.sequence.map(Ok).unwrap_or_else(|| {
+            next_task_event_sequence_in_transaction(&transaction, &event.task_id)
+        })?;
         let payload_json = event
             .payload
             .map(|payload| serde_json::to_string(&payload).unwrap_or_else(|_| "null".to_string()));
-        self.connection.execute(
+        transaction.execute(
             r#"
             INSERT INTO task_events(task_id, sequence, event_type, summary, payload_json)
             VALUES (?1, ?2, ?3, ?4, ?5)
@@ -266,17 +267,28 @@ impl TaskStore for TaskRepository<'_> {
                 payload_json
             ],
         )?;
-        self.get_event(&event.task_id, sequence)
-            .map_err(RepositoryError::from)
+        record_stream_entry_in_transaction(
+            &transaction,
+            "task",
+            &format!("{}:{sequence}", event.task_id),
+        )?;
+        let record = get_task_event_in_transaction(&transaction, &event.task_id, sequence)?;
+        transaction.commit()?;
+        Ok(record)
     }
 
     fn list_events(&self, task_id: &str, limit: usize) -> RepositoryResult<Vec<TaskEventRecord>> {
         let mut statement = self.connection.prepare(
             r#"
-            SELECT task_id, sequence, event_type, summary, payload_json, created_at
+            SELECT task_events.task_id, task_events.sequence, task_events.event_type,
+                   task_events.summary, task_events.payload_json, task_events.created_at,
+                   COALESCE(runtime_stream.id, 0) AS replay_order
             FROM task_events
-            WHERE task_id = ?1
-            ORDER BY sequence ASC, id ASC
+            LEFT JOIN runtime_stream
+              ON runtime_stream.source = 'task'
+             AND runtime_stream.source_key = task_events.task_id || ':' || task_events.sequence
+            WHERE task_events.task_id = ?1
+            ORDER BY task_events.sequence ASC, task_events.id ASC
             LIMIT ?2
             "#,
         )?;
@@ -359,18 +371,6 @@ impl TaskStore for TaskRepository<'_> {
 }
 
 impl TaskRepository<'_> {
-    fn get_event(&self, task_id: &str, sequence: i64) -> rusqlite::Result<TaskEventRecord> {
-        self.connection.query_row(
-            r#"
-            SELECT task_id, sequence, event_type, summary, payload_json, created_at
-            FROM task_events
-            WHERE task_id = ?1 AND sequence = ?2
-            "#,
-            params![task_id, sequence],
-            row_to_task_event,
-        )
-    }
-
     fn next_task_id(&self, source_item_id: &str) -> rusqlite::Result<String> {
         let existing: i64 = self.connection.query_row(
             "SELECT COUNT(*) FROM tasks WHERE source_item_id = ?1",
@@ -383,19 +383,6 @@ impl TaskRepository<'_> {
             existing + 1
         ))
     }
-
-    fn next_sequence(&self, task_id: &str) -> rusqlite::Result<i64> {
-        let current: Option<i64> = self
-            .connection
-            .query_row(
-                "SELECT MAX(sequence) FROM task_events WHERE task_id = ?1",
-                [task_id],
-                |row| row.get(0),
-            )
-            .optional()?
-            .flatten();
-        Ok(current.unwrap_or(0) + 1)
-    }
 }
 
 impl EventStore for EventRepository<'_> {
@@ -403,7 +390,8 @@ impl EventStore for EventRepository<'_> {
         let payload_json = event
             .payload
             .map(|payload| serde_json::to_string(&payload).unwrap_or_else(|_| "null".to_string()));
-        self.connection.execute(
+        let transaction = self.connection.unchecked_transaction()?;
+        transaction.execute(
             r#"
             INSERT INTO events(event_type, scope, task_id, summary, payload_json)
             VALUES (?1, ?2, ?3, ?4, ?5)
@@ -416,8 +404,11 @@ impl EventStore for EventRepository<'_> {
                 payload_json
             ],
         )?;
-        self.get(self.connection.last_insert_rowid())
-            .map_err(RepositoryError::from)
+        let id = transaction.last_insert_rowid();
+        record_stream_entry_in_transaction(&transaction, "event", &id.to_string())?;
+        let record = get_event_in_transaction(&transaction, id)?;
+        transaction.commit()?;
+        Ok(record)
     }
 
     fn list(
@@ -428,11 +419,16 @@ impl EventStore for EventRepository<'_> {
     ) -> RepositoryResult<Vec<EventRecord>> {
         let mut statement = self.connection.prepare(
             r#"
-            SELECT id, event_type, scope, task_id, summary, payload_json, created_at
+            SELECT events.id, events.event_type, events.scope, events.task_id, events.summary,
+                   events.payload_json, events.created_at,
+                   COALESCE(runtime_stream.id, 0) AS replay_order
             FROM events
-            WHERE (?1 IS NULL OR scope = ?1)
-              AND (?2 IS NULL OR task_id = ?2)
-            ORDER BY id ASC
+            LEFT JOIN runtime_stream
+              ON runtime_stream.source = 'event'
+             AND runtime_stream.source_key = CAST(events.id AS TEXT)
+            WHERE (?1 IS NULL OR events.scope = ?1)
+              AND (?2 IS NULL OR events.task_id = ?2)
+            ORDER BY COALESCE(runtime_stream.id, 0) ASC, events.id ASC
             LIMIT ?3
             "#,
         )?;
@@ -448,10 +444,15 @@ impl EventStore for EventRepository<'_> {
     ) -> RepositoryResult<Vec<EventRecord>> {
         let mut statement = self.connection.prepare(
             r#"
-            SELECT task_id, sequence, event_type, summary, payload_json, created_at
+            SELECT task_events.task_id, task_events.sequence, task_events.event_type,
+                   task_events.summary, task_events.payload_json, task_events.created_at,
+                   COALESCE(runtime_stream.id, 0) AS replay_order
             FROM task_events
-            WHERE (?1 IS NULL OR task_id = ?1)
-            ORDER BY id ASC
+            LEFT JOIN runtime_stream
+              ON runtime_stream.source = 'task'
+             AND runtime_stream.source_key = task_events.task_id || ':' || task_events.sequence
+            WHERE (?1 IS NULL OR task_events.task_id = ?1)
+            ORDER BY COALESCE(runtime_stream.id, 0) ASC, task_events.id ASC
             LIMIT ?2
             "#,
         )?;
@@ -467,6 +468,7 @@ impl EventStore for EventRepository<'_> {
                 summary: row.get("summary")?,
                 payload: payload_json.and_then(|raw| serde_json::from_str(&raw).ok()),
                 created_at: row.get("created_at")?,
+                replay_order: row.get("replay_order")?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -474,24 +476,13 @@ impl EventStore for EventRepository<'_> {
     }
 }
 
-impl EventRepository<'_> {
-    fn get(&self, id: i64) -> rusqlite::Result<EventRecord> {
-        self.connection.query_row(
-            r#"
-            SELECT id, event_type, scope, task_id, summary, payload_json, created_at
-            FROM events
-            WHERE id = ?1
-            "#,
-            [id],
-            row_to_event,
-        )
-    }
-}
-
 impl TransitionStore for TransitionRepository<'_> {
     fn record(&self, transition: TransitionInsert) -> RepositoryResult<RuntimeTransitionRecord> {
-        let id = insert_transition(self.connection, transition)?;
-        self.get(id)
+        let transaction = self.connection.unchecked_transaction()?;
+        let id = insert_transition_in_transaction(&transaction, transition)?;
+        let record = get_transition_in_transaction(&transaction, id)?;
+        transaction.commit()?;
+        Ok(record)
     }
 
     fn list(
@@ -502,11 +493,17 @@ impl TransitionStore for TransitionRepository<'_> {
     ) -> RepositoryResult<Vec<RuntimeTransitionRecord>> {
         let mut statement = self.connection.prepare(
             r#"
-            SELECT id, domain, entity_id, transition_type, summary, payload_json, created_at
+            SELECT runtime_transitions.id, runtime_transitions.domain, runtime_transitions.entity_id,
+                   runtime_transitions.transition_type, runtime_transitions.summary,
+                   runtime_transitions.payload_json, runtime_transitions.created_at,
+                   COALESCE(runtime_stream.id, 0) AS replay_order
             FROM runtime_transitions
-            WHERE (?1 IS NULL OR domain = ?1)
-              AND (?2 IS NULL OR entity_id = ?2)
-            ORDER BY id ASC
+            LEFT JOIN runtime_stream
+              ON runtime_stream.source = 'transition'
+             AND runtime_stream.source_key = CAST(runtime_transitions.id AS TEXT)
+            WHERE (?1 IS NULL OR runtime_transitions.domain = ?1)
+              AND (?2 IS NULL OR runtime_transitions.entity_id = ?2)
+            ORDER BY COALESCE(runtime_stream.id, 0) ASC, runtime_transitions.id ASC
             LIMIT ?3
             "#,
         )?;
@@ -516,27 +513,16 @@ impl TransitionStore for TransitionRepository<'_> {
     }
 }
 
-impl TransitionRepository<'_> {
-    fn get(&self, id: i64) -> RepositoryResult<RuntimeTransitionRecord> {
-        self.connection
-            .query_row(
-                r#"
-                SELECT id, domain, entity_id, transition_type, summary, payload_json, created_at
-                FROM runtime_transitions
-                WHERE id = ?1
-                "#,
-                [id],
-                row_to_transition,
-            )
-            .map_err(RepositoryError::from)
-    }
-}
-
 impl LeaseStore for LeaseRepository<'_> {
     fn acquire(&self, lease: LeaseInsert) -> RepositoryResult<LeaseRecord> {
-        if let Some(conflict) =
-            self.active_conflict(&lease.scope, &lease.target_id, Some(&lease.owner))?
-        {
+        let transaction =
+            Transaction::new_unchecked(self.connection, TransactionBehavior::Immediate)?;
+        if let Some(conflict) = active_lease_conflict_in_transaction(
+            &transaction,
+            &lease.scope,
+            &lease.target_id,
+            None,
+        )? {
             return Err(RepositoryError::Conflict {
                 message: format!(
                     "active lease `{}` already held by `{}`",
@@ -544,10 +530,10 @@ impl LeaseStore for LeaseRepository<'_> {
                 ),
             });
         }
-        let id = self.next_id()?;
+        let id = next_lease_id_in_transaction(&transaction)?;
         let ttl = ttl_modifier(lease.ttl_seconds);
         let metadata_json = serde_json::to_string(&lease.metadata)?;
-        self.connection.execute(
+        transaction.execute(
             r#"
             INSERT INTO leases(id, scope, target_id, owner, status, metadata_json, expires_at)
             VALUES (?1, ?2, ?3, ?4, 'active', ?5, datetime('now', ?6))
@@ -561,7 +547,9 @@ impl LeaseStore for LeaseRepository<'_> {
                 ttl
             ],
         )?;
-        self.get(&id)
+        let record = get_lease_in_transaction(&transaction, &id)?;
+        transaction.commit()?;
+        Ok(record)
     }
 
     fn list(
@@ -674,34 +662,6 @@ impl LeaseRepository<'_> {
             )
             .map_err(RepositoryError::from)
     }
-
-    fn next_id(&self) -> rusqlite::Result<String> {
-        let existing: i64 =
-            self.connection
-                .query_row("SELECT COUNT(*) FROM leases", [], |row| row.get(0))?;
-        Ok(format!("LSE-{:03}", existing + 1))
-    }
-}
-
-fn insert_transition(
-    connection: &Connection,
-    transition: TransitionInsert,
-) -> RepositoryResult<i64> {
-    let payload_json = encode_payload(transition.payload)?;
-    connection.execute(
-        r#"
-        INSERT INTO runtime_transitions(domain, entity_id, transition_type, summary, payload_json)
-        VALUES (?1, ?2, ?3, ?4, ?5)
-        "#,
-        params![
-            transition.domain,
-            transition.entity_id,
-            transition.transition_type,
-            transition.summary,
-            payload_json
-        ],
-    )?;
-    Ok(connection.last_insert_rowid())
 }
 
 fn insert_transition_in_transaction(
@@ -722,7 +682,24 @@ fn insert_transition_in_transaction(
             payload_json
         ],
     )?;
-    Ok(transaction.last_insert_rowid())
+    let id = transaction.last_insert_rowid();
+    record_stream_entry_in_transaction(transaction, "transition", &id.to_string())?;
+    Ok(id)
+}
+
+fn record_stream_entry_in_transaction(
+    transaction: &Transaction<'_>,
+    source: &str,
+    source_key: &str,
+) -> RepositoryResult<()> {
+    transaction.execute(
+        r#"
+        INSERT OR IGNORE INTO runtime_stream(source, source_key)
+        VALUES (?1, ?2)
+        "#,
+        params![source, source_key],
+    )?;
+    Ok(())
 }
 
 fn encode_payload(payload: Option<Value>) -> RepositoryResult<Option<String>> {
@@ -769,6 +746,141 @@ fn get_task_in_transaction(connection: &Transaction<'_>, id: &str) -> Repository
         .map_err(RepositoryError::from)
 }
 
+fn get_event_in_transaction(
+    connection: &Transaction<'_>,
+    id: i64,
+) -> RepositoryResult<EventRecord> {
+    connection
+        .query_row(
+            r#"
+            SELECT events.id, events.event_type, events.scope, events.task_id, events.summary,
+                   events.payload_json, events.created_at,
+                   COALESCE(runtime_stream.id, 0) AS replay_order
+            FROM events
+            LEFT JOIN runtime_stream
+              ON runtime_stream.source = 'event'
+             AND runtime_stream.source_key = CAST(events.id AS TEXT)
+            WHERE events.id = ?1
+            "#,
+            [id],
+            row_to_event,
+        )
+        .map_err(RepositoryError::from)
+}
+
+fn get_task_event_in_transaction(
+    connection: &Transaction<'_>,
+    task_id: &str,
+    sequence: i64,
+) -> RepositoryResult<TaskEventRecord> {
+    connection
+        .query_row(
+            r#"
+            SELECT task_events.task_id, task_events.sequence, task_events.event_type,
+                   task_events.summary, task_events.payload_json, task_events.created_at,
+                   COALESCE(runtime_stream.id, 0) AS replay_order
+            FROM task_events
+            LEFT JOIN runtime_stream
+              ON runtime_stream.source = 'task'
+             AND runtime_stream.source_key = task_events.task_id || ':' || task_events.sequence
+            WHERE task_events.task_id = ?1 AND task_events.sequence = ?2
+            "#,
+            params![task_id, sequence],
+            row_to_task_event,
+        )
+        .map_err(RepositoryError::from)
+}
+
+fn get_transition_in_transaction(
+    connection: &Transaction<'_>,
+    id: i64,
+) -> RepositoryResult<RuntimeTransitionRecord> {
+    connection
+        .query_row(
+            r#"
+            SELECT runtime_transitions.id, runtime_transitions.domain,
+                   runtime_transitions.entity_id, runtime_transitions.transition_type,
+                   runtime_transitions.summary, runtime_transitions.payload_json,
+                   runtime_transitions.created_at,
+                   COALESCE(runtime_stream.id, 0) AS replay_order
+            FROM runtime_transitions
+            LEFT JOIN runtime_stream
+              ON runtime_stream.source = 'transition'
+             AND runtime_stream.source_key = CAST(runtime_transitions.id AS TEXT)
+            WHERE runtime_transitions.id = ?1
+            "#,
+            [id],
+            row_to_transition,
+        )
+        .map_err(RepositoryError::from)
+}
+
+fn get_lease_in_transaction(
+    connection: &Transaction<'_>,
+    id: &str,
+) -> RepositoryResult<LeaseRecord> {
+    connection
+        .query_row(
+            r#"
+            SELECT id, scope, target_id, owner, status, metadata_json, acquired_at, renewed_at,
+                   released_at, expires_at
+            FROM leases
+            WHERE id = ?1
+            "#,
+            [id],
+            row_to_lease,
+        )
+        .map_err(RepositoryError::from)
+}
+
+fn active_lease_conflict_in_transaction(
+    connection: &Transaction<'_>,
+    scope: &str,
+    target_id: &str,
+    owner: Option<&str>,
+) -> RepositoryResult<Option<LeaseRecord>> {
+    connection
+        .query_row(
+            r#"
+            SELECT id, scope, target_id, owner, status, metadata_json, acquired_at, renewed_at,
+                   released_at, expires_at
+            FROM leases
+            WHERE scope = ?1
+              AND target_id = ?2
+              AND status = 'active'
+              AND expires_at > CURRENT_TIMESTAMP
+              AND (?3 IS NULL OR owner != ?3)
+            ORDER BY acquired_at ASC, id ASC
+            LIMIT 1
+            "#,
+            params![scope, target_id, owner],
+            row_to_lease,
+        )
+        .optional()
+        .map_err(RepositoryError::from)
+}
+
+fn next_lease_id_in_transaction(connection: &Transaction<'_>) -> rusqlite::Result<String> {
+    let existing: i64 =
+        connection.query_row("SELECT COUNT(*) FROM leases", [], |row| row.get(0))?;
+    Ok(format!("LSE-{:03}", existing + 1))
+}
+
+fn next_task_event_sequence_in_transaction(
+    connection: &Transaction<'_>,
+    task_id: &str,
+) -> rusqlite::Result<i64> {
+    let current: Option<i64> = connection
+        .query_row(
+            "SELECT MAX(sequence) FROM task_events WHERE task_id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(current.unwrap_or(0) + 1)
+}
+
 fn row_to_approval(row: &Row<'_>) -> rusqlite::Result<ApprovalRecord> {
     let metadata_json: Option<String> = row.get("metadata_json")?;
     Ok(ApprovalRecord {
@@ -800,6 +912,7 @@ fn row_to_event(row: &Row<'_>) -> rusqlite::Result<EventRecord> {
         summary: row.get("summary")?,
         payload: payload_json.and_then(|raw| serde_json::from_str(&raw).ok()),
         created_at: row.get("created_at")?,
+        replay_order: row.get("replay_order")?,
     })
 }
 
@@ -812,6 +925,7 @@ fn row_to_task_event(row: &Row<'_>) -> rusqlite::Result<TaskEventRecord> {
         summary: row.get("summary")?,
         payload: payload_json.and_then(|raw| serde_json::from_str(&raw).ok()),
         created_at: row.get("created_at")?,
+        replay_order: row.get("replay_order")?,
     })
 }
 
@@ -845,6 +959,7 @@ fn row_to_transition(row: &Row<'_>) -> rusqlite::Result<RuntimeTransitionRecord>
         summary: row.get("summary")?,
         payload: payload_json.and_then(|raw| serde_json::from_str(&raw).ok()),
         created_at: row.get("created_at")?,
+        replay_order: row.get("replay_order")?,
     })
 }
 
@@ -892,6 +1007,8 @@ mod tests {
     use super::*;
     use crate::storage;
     use serde_json::json;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use tempfile::TempDir;
 
     #[test]
@@ -1062,6 +1179,17 @@ mod tests {
             .expect_err("conflict");
         assert!(conflict.is_conflict());
 
+        let same_owner_conflict = leases
+            .acquire(LeaseInsert {
+                scope: "project".to_string(),
+                target_id: "root".to_string(),
+                owner: "manager".to_string(),
+                ttl_seconds: 60,
+                metadata: BTreeMap::new(),
+            })
+            .expect_err("same owner conflict");
+        assert!(same_owner_conflict.is_conflict());
+
         let renewed = leases
             .renew(&lease.id, "manager", 120)
             .expect("renew lease");
@@ -1074,6 +1202,50 @@ mod tests {
             .active_conflict("project", "root", None)
             .expect("active conflict");
         assert!(active.is_none());
+    }
+
+    #[test]
+    fn repository_serializes_concurrent_lease_acquisition() {
+        let project = TempDir::new().expect("temp dir");
+        let manager_storage = storage::connect(project.path(), None).expect("manager storage");
+        let worker_storage = storage::connect(project.path(), None).expect("worker storage");
+        let barrier = Arc::new(Barrier::new(2));
+        let handles = [("manager", manager_storage), ("worker", worker_storage)]
+            .into_iter()
+            .map(|(owner, storage)| {
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    storage
+                        .repository()
+                        .leases()
+                        .acquire(LeaseInsert {
+                            scope: "project".to_string(),
+                            target_id: "root".to_string(),
+                            owner: owner.to_string(),
+                            ttl_seconds: 60,
+                            metadata: BTreeMap::new(),
+                        })
+                        .map(|lease| lease.owner)
+                        .map_err(|error| error.to_string())
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("thread"))
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+
+        let storage = storage::connect(project.path(), None).expect("storage");
+        let active = storage
+            .repository()
+            .leases()
+            .list(Some("project"), Some("root"), Some("active"), false, 10)
+            .expect("active leases");
+        assert_eq!(active.len(), 1);
     }
 
     #[test]

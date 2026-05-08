@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 10;
+pub const SCHEMA_VERSION: i32 = 11;
 
 pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -117,6 +117,17 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_events_task_id
             ON events(task_id);
 
+        CREATE TABLE IF NOT EXISTS runtime_stream (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            source_key TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(source, source_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_runtime_stream_source_key
+            ON runtime_stream(source, source_key);
+
         CREATE TABLE IF NOT EXISTS runtime_transitions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             domain TEXT NOT NULL,
@@ -198,6 +209,33 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
             ON worker_assignments(task_id)
             WHERE status IN ('prepared', 'running');
         "#,
+    )?;
+    transaction.execute(
+        r#"
+        INSERT OR IGNORE INTO runtime_stream(source, source_key, created_at)
+        SELECT 'event', CAST(id AS TEXT), created_at
+        FROM events
+        ORDER BY created_at ASC, id ASC
+        "#,
+        [],
+    )?;
+    transaction.execute(
+        r#"
+        INSERT OR IGNORE INTO runtime_stream(source, source_key, created_at)
+        SELECT 'transition', CAST(id AS TEXT), created_at
+        FROM runtime_transitions
+        ORDER BY created_at ASC, id ASC
+        "#,
+        [],
+    )?;
+    transaction.execute(
+        r#"
+        INSERT OR IGNORE INTO runtime_stream(source, source_key, created_at)
+        SELECT 'task', task_id || ':' || sequence, created_at
+        FROM task_events
+        ORDER BY created_at ASC, task_id ASC, sequence ASC
+        "#,
+        [],
     )?;
     add_column_if_missing(
         &transaction,
