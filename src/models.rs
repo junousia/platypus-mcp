@@ -964,6 +964,18 @@ pub struct EventRecord {
     pub created_at: String,
 }
 
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct RuntimeTransitionRecord {
+    pub cursor: String,
+    pub domain: String,
+    pub entity_id: String,
+    pub transition_type: String,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Value>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct EventsReplayData {
     pub root: String,

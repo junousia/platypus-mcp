@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 8;
+pub const SCHEMA_VERSION: i32 = 9;
 
 pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -116,6 +116,19 @@ pub fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_events_task_id
             ON events(task_id);
+
+        CREATE TABLE IF NOT EXISTS runtime_transitions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            transition_type TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            payload_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_runtime_transitions_domain_entity
+            ON runtime_transitions(domain, entity_id, id);
 
         CREATE TABLE IF NOT EXISTS evidence (
             id TEXT PRIMARY KEY,

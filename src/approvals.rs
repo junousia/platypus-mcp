@@ -326,9 +326,16 @@ mod tests {
             },
         );
         let events = replayed.data.expect("events").events;
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0].event_type, "approval_requested");
-        assert_eq!(events[1].event_type, "approval_responded");
+        assert_eq!(events.len(), 4);
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == "approval_requested"));
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == "approval_responded"));
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == "approval_approved"));
     }
 
     #[test]

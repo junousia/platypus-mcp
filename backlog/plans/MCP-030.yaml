@@ -1,0 +1,80 @@
+item_id: MCP-030
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: Core runtime mutations should append typed transitions with stable names before or alongside current-state updates.
+- id: R2
+  text: Transition recording and current-state updates must stay transactionally consistent for migrated domains.
+- id: R3
+  text: Existing inspection and replay tools must expose enough transition history to explain task and approval state.
+design:
+  summary: Add a runtime transition store backed by SQLite, record typed transitions for task and approval lifecycle mutations, and surface those transitions through bounded event replay.
+  owned_surfaces:
+  - src/storage
+  - src/tasks.rs
+  - src/approvals.rs
+  - src/events.rs
+  - src/models.rs
+  - docs/storage.md
+  - tests
+  notes: Start with tasks and approvals as the first two domains. Do not migrate findings, evidence, or worker assignments in this item.
+tasks:
+- id: MCP-030-T01
+  title: Add runtime transition storage
+  goal: Add a durable append-only transition table, typed insert/record structs, and repository APIs.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/storage
+  - src/models.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Runtime transitions include sequence/cursor, domain, entity id, transition type, summary, payload, and timestamp.
+  - Transition writes are append-only.
+  - Tests cover recording and listing transitions.
+  notes: null
+- id: MCP-030-T02
+  title: Record task and approval lifecycle transitions
+  goal: Record stable transitions for task creation/running/finish and approval request/respond paths.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on:
+  - MCP-030-T01
+  owned_surfaces:
+  - src/storage
+  - src/tasks.rs
+  - src/approvals.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Task creation records a task-created transition.
+  - Task running and terminal updates record lifecycle transitions only when the state update succeeds.
+  - Approval creation and response record approval transitions only when the approval mutation succeeds.
+  - Duplicate or invalid mutations do not append successful transitions.
+  notes: null
+- id: MCP-030-T03
+  title: Replay transitions and document the model
+  goal: Include runtime transitions in replay output and document how transitions relate to current-state views.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-030-T02
+  owned_surfaces:
+  - src/events.rs
+  - docs/storage.md
+  - tests
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - events_replay can return transition records with bounded output.
+  - Task-specific replay includes task transitions.
+  - Documentation explains append-only transitions and derived views.
+  notes: null

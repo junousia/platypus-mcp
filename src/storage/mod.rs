@@ -16,7 +16,10 @@ pub use repository::{
     ApprovalInsert, ApprovalRepository, EventInsert, EventRepository, Repository, TaskEventInsert,
     TaskInsert, TaskRepository,
 };
-pub use traits::{ApprovalStore, EventStore, RepositoryError, RepositoryResult, TaskStore};
+pub use traits::{
+    ApprovalStore, EventStore, RepositoryError, RepositoryResult, TaskStore, TransitionInsert,
+    TransitionStore,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Storage {
@@ -209,6 +212,7 @@ mod tests {
             "metadata",
             "tasks",
             "task_events",
+            "runtime_transitions",
             "findings",
             "worker_assignments",
         ] {

@@ -1,5 +1,8 @@
 use super::repository::{ApprovalInsert, EventInsert, TaskEventInsert, TaskInsert};
-use crate::models::{ApprovalRecord, EventRecord, TaskEventRecord, TaskRecord};
+use crate::models::{
+    ApprovalRecord, EventRecord, RuntimeTransitionRecord, TaskEventRecord, TaskRecord,
+};
+use serde_json::Value;
 use std::{
     error::Error,
     fmt::{self, Display, Formatter},
@@ -91,6 +94,25 @@ pub trait EventStore {
         task_id: Option<&str>,
         limit: usize,
     ) -> RepositoryResult<Vec<EventRecord>>;
+}
+
+#[derive(Debug, Clone)]
+pub struct TransitionInsert {
+    pub domain: String,
+    pub entity_id: String,
+    pub transition_type: String,
+    pub summary: String,
+    pub payload: Option<Value>,
+}
+
+pub trait TransitionStore {
+    fn record(&self, transition: TransitionInsert) -> RepositoryResult<RuntimeTransitionRecord>;
+    fn list(
+        &self,
+        domain: Option<&str>,
+        entity_id: Option<&str>,
+        limit: usize,
+    ) -> RepositoryResult<Vec<RuntimeTransitionRecord>>;
 }
 
 pub trait TaskStore {

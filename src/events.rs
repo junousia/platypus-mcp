@@ -1,7 +1,7 @@
 use crate::{
     models::{ActionResult, ActionStatus, EventRecord, EventsReplayData, EventsReplayParams},
-    storage::EventStore,
     storage::{self, EventInsert},
+    storage::{EventStore, TransitionStore},
 };
 use serde_json::Value;
 use std::path::Path;
@@ -83,6 +83,21 @@ pub fn events_replay(
             }
         }
     }
+    let transition_entity = if task_id.is_some() { task_id } else { None };
+    match storage
+        .repository()
+        .transitions()
+        .list(scope, transition_entity, limit)
+    {
+        Ok(transitions) => events.extend(transitions.into_iter().map(transition_to_event)),
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not replay runtime transitions.",
+                error.to_string(),
+            )
+        }
+    }
     events.sort_by(|left, right| {
         left.created_at
             .cmp(&right.created_at)
@@ -108,6 +123,22 @@ pub fn events_replay(
         }
     } else {
         ActionResult::completed(action, format!("Replayed {returned} event(s)."), data)
+    }
+}
+
+fn transition_to_event(transition: crate::models::RuntimeTransitionRecord) -> EventRecord {
+    EventRecord {
+        cursor: transition.cursor,
+        event_type: transition.transition_type,
+        scope: transition.domain.clone(),
+        task_id: if transition.domain == "task" {
+            Some(transition.entity_id)
+        } else {
+            None
+        },
+        summary: transition.summary,
+        payload: transition.payload,
+        created_at: transition.created_at,
     }
 }
 
@@ -156,6 +187,16 @@ mod tests {
     #[test]
     fn records_and_replays_project_and_task_events() {
         let project = TempDir::new().expect("temp dir");
+        crate::tasks::create_task_record(
+            project.path(),
+            None,
+            crate::tasks::NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Do work".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
         record_event(
             project.path(),
             None,
@@ -193,19 +234,33 @@ mod tests {
         let data = replayed.data.expect("events");
 
         assert!(matches!(replayed.status, ActionStatus::Completed));
-        assert_eq!(data.returned, 2);
+        assert_eq!(data.returned, 3);
         assert!(data.events.iter().any(|event| event.scope == "approval"));
         assert!(data.events.iter().any(|event| event.scope == "task"));
+        assert!(data
+            .events
+            .iter()
+            .any(|event| event.event_type == "task_created"));
     }
 
     #[test]
     fn replay_filters_by_task_id() {
         let project = TempDir::new().expect("temp dir");
+        crate::tasks::create_task_record(
+            project.path(),
+            None,
+            crate::tasks::NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Do work".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
         record_task_event(
             project.path(),
             None,
             NewTaskEvent {
-                task_id: "task-1".to_string(),
+                task_id: "PROJ-001-T001".to_string(),
                 sequence: None,
                 event_type: "worker_started".to_string(),
                 summary: "Worker started.".to_string(),
@@ -218,14 +273,17 @@ mod tests {
             project.path(),
             EventsReplayParams {
                 root: None,
-                task_id: Some("task-1".to_string()),
+                task_id: Some("PROJ-001-T001".to_string()),
                 scope: Some("task".to_string()),
                 limit: Some(10),
             },
         );
         let data = replayed.data.expect("events");
 
-        assert_eq!(data.returned, 1);
-        assert_eq!(data.events[0].task_id.as_deref(), Some("task-1"));
+        assert_eq!(data.returned, 2);
+        assert!(data
+            .events
+            .iter()
+            .all(|event| event.task_id.as_deref() == Some("PROJ-001-T001")));
     }
 }
