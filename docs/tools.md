@@ -21,6 +21,8 @@ the Platypus guidance that matches the current activity. The guidance is
 deterministic and references the current public tool names.
 
 - Resource `platypus://guidance/workflow` / prompt `platypus-workflow`
+- Resource `platypus://guidance/spec-driven-development` / prompt
+  `platypus-spec-driven-development`
 - Resource `platypus://guidance/project-status` / prompt
   `platypus-project-status`
 - Resource `platypus://guidance/backlog-authoring` / prompt

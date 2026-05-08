@@ -150,7 +150,7 @@ impl ServerHandler for PlatypusMcp {
             .enable_prompts()
             .build();
         info.instructions = Some(
-            "Use `next_safe_action` before lifecycle mutations. Read `platypus://guidance/workflow` or get the `platypus-workflow` prompt for the recommended host workflow."
+            "Use Platypus MCP for spec-driven development: inspect first, convert goals to backlog, plan non-trivial work, dispatch through worktrees, then record evidence and integrate. Read `platypus://guidance/spec-driven-development` or get the `platypus-spec-driven-development` prompt before shaping free-form goals."
                 .to_string(),
         );
         info
