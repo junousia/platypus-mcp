@@ -34,3 +34,57 @@ MCP results.
 
 New runtime tables should first expose repository methods, then MCP tools should
 call those methods rather than embedding SQL in feature modules.
+
+## State Ownership
+
+Repository-owned declarative state stays in Git:
+
+- backlog items under `backlog/items/`
+- task plans under `backlog/plans/`
+- workflow/config files such as `platy.yaml` and `WORKFLOW.md`
+- documentation, evidence artifacts, and implementation commits
+
+Runtime-owned mutable state belongs behind the storage boundary:
+
+- task attempts and task events
+- worker assignments and execution metadata
+- approvals and responses
+- findings and dispositions
+- verification evidence records
+- future leases, client/session metadata, and distributed coordination records
+
+Backlog files should describe intent and acceptance. They should not accumulate
+runtime-only fields such as attempts, status, completion timestamps, approvals,
+or worker results.
+
+## Portable Boundary
+
+SQLite is the reference backend, not the product boundary. Feature modules
+should use typed storage traits and repository APIs instead of depending on
+SQLite table details or `rusqlite` errors directly.
+
+Current portable traits:
+
+- `ApprovalStore`: approval creation, listing, lookup, and response updates.
+- `EventStore`: project event recording and replay, including task-event
+  projection.
+- `TaskStore`: task creation, lookup, lifecycle updates, and task event replay.
+
+The traits return `RepositoryResult<T>` with a backend-neutral
+`RepositoryError`. Tool modules should handle `NotFound`, `Conflict`, and
+backend failures without matching SQLite-specific error variants. The SQLite
+repository maps its native errors into those portable categories.
+
+## Adding Runtime Repositories
+
+When adding a new runtime domain:
+
+1. Define typed insert/query records and a store trait.
+2. Implement the trait for the SQLite repository.
+3. Keep row mapping and SQL in `src/storage/` or a domain-specific store module.
+4. Make MCP feature modules validate inputs, call the store trait, and translate
+   `RepositoryError` into structured tool results.
+5. Add tests for one write path, one read path, and at least one failure path.
+
+This keeps local SQLite reliable while preserving the option to add a shared
+runtime backend later.

@@ -1,6 +1,7 @@
 mod paths;
 mod repository;
 mod schema;
+mod traits;
 
 use rusqlite::Connection;
 use std::{
@@ -15,6 +16,7 @@ pub use repository::{
     ApprovalInsert, ApprovalRepository, EventInsert, EventRepository, Repository, TaskEventInsert,
     TaskInsert, TaskRepository,
 };
+pub use traits::{ApprovalStore, EventStore, RepositoryError, RepositoryResult, TaskStore};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Storage {

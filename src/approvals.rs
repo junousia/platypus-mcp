@@ -5,8 +5,8 @@ use crate::{
         ApprovalRespondParams, ApprovalResponseData,
     },
     storage::{self, ApprovalInsert},
+    storage::{ApprovalStore, RepositoryError},
 };
-use rusqlite::OptionalExtension;
 use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 
@@ -147,18 +147,18 @@ pub fn approval_respond(
         }
     };
     let approvals = storage.repository().approvals();
-    let existing = match approvals.get(approval_id).optional() {
+    let existing = match approvals.get(approval_id) {
         Ok(existing) => existing,
+        Err(RepositoryError::NotFound) => {
+            return ActionResult::skipped(
+                action,
+                format!("Approval `{approval_id}` was not found."),
+                "List pending approvals and retry with a valid approval id.",
+            )
+        }
         Err(error) => {
             return ActionResult::failed(action, "Could not inspect approval.", error.to_string())
         }
-    };
-    let Some(existing) = existing else {
-        return ActionResult::skipped(
-            action,
-            format!("Approval `{approval_id}` was not found."),
-            "List pending approvals and retry with a valid approval id.",
-        );
     };
     if existing.status != "pending" {
         return ActionResult::skipped(

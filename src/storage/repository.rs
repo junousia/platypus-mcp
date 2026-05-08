@@ -1,3 +1,4 @@
+use super::traits::{ApprovalStore, EventStore, RepositoryError, RepositoryResult, TaskStore};
 use crate::models::{ApprovalRecord, EventRecord, TaskEventRecord, TaskRecord};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::Value;
@@ -44,11 +45,10 @@ pub struct ApprovalRepository<'connection> {
     connection: &'connection Connection,
 }
 
-impl ApprovalRepository<'_> {
-    pub fn create(&self, approval: ApprovalInsert) -> rusqlite::Result<ApprovalRecord> {
+impl ApprovalStore for ApprovalRepository<'_> {
+    fn create(&self, approval: ApprovalInsert) -> RepositoryResult<ApprovalRecord> {
         let id = self.next_id()?;
-        let metadata_json = serde_json::to_string(&approval.metadata)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
+        let metadata_json = serde_json::to_string(&approval.metadata)?;
         self.connection.execute(
             r#"
             INSERT INTO approvals(id, scope, status, title, summary, requested_by, metadata_json)
@@ -66,11 +66,7 @@ impl ApprovalRepository<'_> {
         self.get(&id)
     }
 
-    pub fn list(
-        &self,
-        status: Option<&str>,
-        limit: usize,
-    ) -> rusqlite::Result<Vec<ApprovalRecord>> {
+    fn list(&self, status: Option<&str>, limit: usize) -> RepositoryResult<Vec<ApprovalRecord>> {
         let mut statement = self.connection.prepare(
             r#"
             SELECT id, scope, status, title, summary, requested_by, response, responder, reason,
@@ -82,32 +78,36 @@ impl ApprovalRepository<'_> {
             "#,
         )?;
         let rows = statement.query_map(params![status, limit], row_to_approval)?;
-        rows.collect()
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(RepositoryError::from)
     }
 
-    pub fn get(&self, id: &str) -> rusqlite::Result<ApprovalRecord> {
-        self.connection.query_row(
-            r#"
+    fn get(&self, id: &str) -> RepositoryResult<ApprovalRecord> {
+        self.connection
+            .query_row(
+                r#"
             SELECT id, scope, status, title, summary, requested_by, response, responder, reason,
                    metadata_json, created_at, responded_at
             FROM approvals
             WHERE id = ?1
             "#,
-            [id],
-            row_to_approval,
-        )
+                [id],
+                row_to_approval,
+            )
+            .map_err(RepositoryError::from)
     }
 
-    pub fn respond(
+    fn respond(
         &self,
         approval_id: &str,
         status: &str,
         response: &str,
         responder: &str,
         reason: Option<&str>,
-    ) -> rusqlite::Result<usize> {
-        self.connection.execute(
-            r#"
+    ) -> RepositoryResult<usize> {
+        self.connection
+            .execute(
+                r#"
             UPDATE approvals
             SET status = ?2,
                 response = ?3,
@@ -116,10 +116,13 @@ impl ApprovalRepository<'_> {
                 responded_at = CURRENT_TIMESTAMP
             WHERE id = ?1 AND status = 'pending'
             "#,
-            params![approval_id, status, response, responder, reason],
-        )
+                params![approval_id, status, response, responder, reason],
+            )
+            .map_err(RepositoryError::from)
     }
+}
 
+impl ApprovalRepository<'_> {
     fn next_id(&self) -> rusqlite::Result<String> {
         let existing: i64 =
             self.connection
@@ -161,8 +164,8 @@ pub struct TaskRepository<'connection> {
     connection: &'connection Connection,
 }
 
-impl TaskRepository<'_> {
-    pub fn create(&self, task: TaskInsert) -> rusqlite::Result<TaskRecord> {
+impl TaskStore for TaskRepository<'_> {
+    fn create(&self, task: TaskInsert) -> RepositoryResult<TaskRecord> {
         let id = self.next_task_id(&task.source_item_id)?;
         self.connection.execute(
             r#"
@@ -174,7 +177,7 @@ impl TaskRepository<'_> {
         self.get(&id)
     }
 
-    pub fn record_event(&self, event: TaskEventInsert) -> rusqlite::Result<TaskEventRecord> {
+    fn record_event(&self, event: TaskEventInsert) -> RepositoryResult<TaskEventRecord> {
         let sequence = event
             .sequence
             .map(Ok)
@@ -196,13 +199,10 @@ impl TaskRepository<'_> {
             ],
         )?;
         self.get_event(&event.task_id, sequence)
+            .map_err(RepositoryError::from)
     }
 
-    pub fn list_events(
-        &self,
-        task_id: &str,
-        limit: usize,
-    ) -> rusqlite::Result<Vec<TaskEventRecord>> {
+    fn list_events(&self, task_id: &str, limit: usize) -> RepositoryResult<Vec<TaskEventRecord>> {
         let mut statement = self.connection.prepare(
             r#"
             SELECT task_id, sequence, event_type, summary, payload_json, created_at
@@ -213,49 +213,58 @@ impl TaskRepository<'_> {
             "#,
         )?;
         let rows = statement.query_map(params![task_id, limit], row_to_task_event)?;
-        rows.collect()
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(RepositoryError::from)
     }
 
-    pub fn get(&self, id: &str) -> rusqlite::Result<TaskRecord> {
-        self.connection.query_row(
-            r#"
+    fn get(&self, id: &str) -> RepositoryResult<TaskRecord> {
+        self.connection
+            .query_row(
+                r#"
             SELECT id, source_item_id, title, status, worker, claimed_by, claimed_at, started_at,
                    finished_at, workspace_path, workspace_branch, workspace_base_ref, created_at,
                    updated_at
             FROM tasks
             WHERE id = ?1
             "#,
-            [id],
-            row_to_task,
-        )
+                [id],
+                row_to_task,
+            )
+            .map_err(RepositoryError::from)
     }
 
-    pub fn mark_running(&self, task_id: &str) -> rusqlite::Result<usize> {
-        self.connection.execute(
-            r#"
+    fn mark_running(&self, task_id: &str) -> RepositoryResult<usize> {
+        self.connection
+            .execute(
+                r#"
             UPDATE tasks
             SET status = 'running',
                 started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?1 AND status IN ('claimed', 'running')
             "#,
-            [task_id],
-        )
+                [task_id],
+            )
+            .map_err(RepositoryError::from)
     }
 
-    pub fn finish(&self, task_id: &str, status: &str) -> rusqlite::Result<usize> {
-        self.connection.execute(
-            r#"
+    fn finish(&self, task_id: &str, status: &str) -> RepositoryResult<usize> {
+        self.connection
+            .execute(
+                r#"
             UPDATE tasks
             SET status = ?2,
                 finished_at = CURRENT_TIMESTAMP,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?1 AND status IN ('claimed', 'running')
             "#,
-            params![task_id, status],
-        )
+                params![task_id, status],
+            )
+            .map_err(RepositoryError::from)
     }
+}
 
+impl TaskRepository<'_> {
     fn get_event(&self, task_id: &str, sequence: i64) -> rusqlite::Result<TaskEventRecord> {
         self.connection.query_row(
             r#"
@@ -295,8 +304,8 @@ impl TaskRepository<'_> {
     }
 }
 
-impl EventRepository<'_> {
-    pub fn record(&self, event: EventInsert) -> rusqlite::Result<EventRecord> {
+impl EventStore for EventRepository<'_> {
+    fn record(&self, event: EventInsert) -> RepositoryResult<EventRecord> {
         let payload_json = event
             .payload
             .map(|payload| serde_json::to_string(&payload).unwrap_or_else(|_| "null".to_string()));
@@ -314,14 +323,15 @@ impl EventRepository<'_> {
             ],
         )?;
         self.get(self.connection.last_insert_rowid())
+            .map_err(RepositoryError::from)
     }
 
-    pub fn list(
+    fn list(
         &self,
         scope: Option<&str>,
         task_id: Option<&str>,
         limit: usize,
-    ) -> rusqlite::Result<Vec<EventRecord>> {
+    ) -> RepositoryResult<Vec<EventRecord>> {
         let mut statement = self.connection.prepare(
             r#"
             SELECT id, event_type, scope, task_id, summary, payload_json, created_at
@@ -333,14 +343,15 @@ impl EventRepository<'_> {
             "#,
         )?;
         let rows = statement.query_map(params![scope, task_id, limit], row_to_event)?;
-        rows.collect()
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(RepositoryError::from)
     }
 
-    pub fn list_task_events(
+    fn list_task_events(
         &self,
         task_id: Option<&str>,
         limit: usize,
-    ) -> rusqlite::Result<Vec<EventRecord>> {
+    ) -> RepositoryResult<Vec<EventRecord>> {
         let mut statement = self.connection.prepare(
             r#"
             SELECT task_id, sequence, event_type, summary, payload_json, created_at
@@ -364,9 +375,12 @@ impl EventRepository<'_> {
                 created_at: row.get("created_at")?,
             })
         })?;
-        rows.collect()
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(RepositoryError::from)
     }
+}
 
+impl EventRepository<'_> {
     fn get(&self, id: i64) -> rusqlite::Result<EventRecord> {
         self.connection.query_row(
             r#"
@@ -577,5 +591,51 @@ mod tests {
             .list_events(&task.id, 10)
             .expect("list task events");
         assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn repository_returns_backend_neutral_not_found_errors() {
+        let project = TempDir::new().expect("temp dir");
+        let storage = storage::connect(project.path(), None).expect("storage");
+        let repository = storage.repository();
+
+        let task_error = repository
+            .tasks()
+            .get("missing-task")
+            .expect_err("missing task");
+        let approval_error = repository
+            .approvals()
+            .get("APR-404")
+            .expect_err("missing approval");
+
+        assert_eq!(task_error, RepositoryError::NotFound);
+        assert!(approval_error.is_not_found());
+    }
+
+    #[test]
+    fn repository_returns_backend_neutral_conflict_errors() {
+        let project = TempDir::new().expect("temp dir");
+        let storage = storage::connect(project.path(), None).expect("storage");
+        let repository = storage.repository();
+        let tasks = repository.tasks();
+
+        let task = tasks
+            .create(TaskInsert {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Build thing".to_string(),
+                worker: Some("coder".to_string()),
+            })
+            .expect("create task");
+        assert_eq!(task.id, "PROJ-001-T001");
+
+        let conflict = tasks
+            .create(TaskInsert {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Build thing again".to_string(),
+                worker: Some("coder".to_string()),
+            })
+            .expect_err("duplicate active task");
+
+        assert!(conflict.is_conflict());
     }
 }

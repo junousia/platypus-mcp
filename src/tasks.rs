@@ -5,6 +5,7 @@ use crate::{
         WorkerGuidanceData,
     },
     storage::{self, TaskEventInsert, TaskInsert},
+    storage::{RepositoryError, TaskStore},
 };
 use rusqlite::{params, OptionalExtension, Row};
 use serde_json::Value;
@@ -44,7 +45,7 @@ pub fn create_task_record(
     }) {
         Ok(task) => Ok(task),
         Err(error) => {
-            if is_unique_constraint_error(&error) {
+            if error.is_conflict() {
                 return Err(format!(
                     "active task already exists for backlog item `{source_item_id}`"
                 ));
@@ -159,7 +160,7 @@ pub fn send_worker_guidance(
     let tasks = storage.repository().tasks();
     let task = match tasks.get(&task_id) {
         Ok(task) => task,
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
+        Err(RepositoryError::NotFound) => {
             return ActionResult::skipped(
                 action,
                 format!("Task `{task_id}` was not found."),
@@ -234,7 +235,7 @@ pub fn inspect_task(
                 task,
             },
         ),
-        Err(rusqlite::Error::QueryReturnedNoRows) => ActionResult {
+        Err(RepositoryError::NotFound) => ActionResult {
             action: action.to_string(),
             status: ActionStatus::Skipped,
             summary: format!("Task `{task_id}` was not found."),
@@ -494,14 +495,6 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
-}
-
-fn is_unique_constraint_error(error: &rusqlite::Error) -> bool {
-    matches!(
-        error,
-        rusqlite::Error::SqliteFailure(error, _)
-            if error.code == rusqlite::ErrorCode::ConstraintViolation
-    )
 }
 
 fn clean_required(field: &str, value: &str) -> Result<String, String> {
