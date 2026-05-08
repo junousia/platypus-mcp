@@ -6,22 +6,18 @@ use crate::{
         PlanningClassificationData, TaskPlanQueryParams, WorkQueueData, WorkQueueItem,
         WorkQueuePlanState,
     },
-    storage,
+    state::{sqlite::SqliteProjectState, NextSafeActionQuery, ProjectState},
 };
-use rusqlite::OptionalExtension;
 use serde_json::Value;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-};
+use std::{collections::BTreeMap, path::Path};
 
 pub fn next_safe_action(
     default_root: &Path,
     params: NextSafeActionParams,
 ) -> ActionResult<NextSafeActionData> {
     let action = "next_safe_action";
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(
                 action,
@@ -30,137 +26,24 @@ pub fn next_safe_action(
             )
         }
     };
-    let root = storage.storage.root.display().to_string();
-    let closed_item_ids = backlog::closed_item_ids(&storage.storage.root);
-
-    if let Ok(Some(assignment)) =
-        active_assignment(&storage.connection, "running", &closed_item_ids)
-    {
-        return completed(
+    match state.next_safe_action(NextSafeActionQuery::default()) {
+        Ok(snapshot) => ActionResult::completed(
             action,
-            &root,
-            "record_worker_progress",
-            format!(
-                "Worker assignment `{}` is running for task `{}`.",
-                assignment.id, assignment.task_id
-            ),
-            "Record progress while the worker is active, or complete the worker task when the result is ready.",
-            [
-                ("root", root.as_str()),
-                ("assignment_id", assignment.id.as_str()),
-                ("event_type", "worker_progress"),
-                ("summary", "Describe the worker progress."),
-            ],
-        );
-    }
-    if let Ok(Some(assignment)) =
-        active_assignment(&storage.connection, "prepared", &closed_item_ids)
-    {
-        return completed(
+            snapshot.summary.clone(),
+            NextSafeActionData {
+                root: state.root().display().to_string(),
+                recommended_tool: snapshot.recommended_tool,
+                summary: snapshot.summary,
+                reason: snapshot.reason,
+                params: snapshot.params,
+            },
+        ),
+        Err(error) => ActionResult::failed(
             action,
-            &root,
-            "start_worker_task",
-            format!(
-                "Worker assignment `{}` is prepared for task `{}`.",
-                assignment.id, assignment.task_id
-            ),
-            "Start the prepared assignment before recording progress or completion.",
-            [
-                ("root", root.as_str()),
-                ("assignment_id", assignment.id.as_str()),
-                ("worker_session", "external-worker-session"),
-                ("summary", ""),
-            ],
-        );
+            "Could not inspect next safe action.",
+            error.to_string(),
+        ),
     }
-    if let Ok(Some(task)) = queued_task(&storage.connection, &closed_item_ids) {
-        return completed(
-            action,
-            &root,
-            "prepare_worker_handoff",
-            format!("Task `{}` is queued for worker execution.", task.id),
-            "Prepare a single handoff object so the host can assign the worktree and bundle to a worker.",
-            [
-                ("root", root.as_str()),
-                ("task_id", task.id.as_str()),
-                ("worker", task.worker.as_deref().unwrap_or("")),
-                ("claimant", "external-worker"),
-            ],
-        );
-    }
-    if let Ok(Some(task)) = claimed_task(&storage.connection, &closed_item_ids) {
-        return completed(
-            action,
-            &root,
-            "prepare_worker_handoff",
-            format!(
-                "Task `{}` is already claimed and needs a worker handoff.",
-                task.id
-            ),
-            "Prepare a worker assignment for the claimed task before dispatching more backlog work.",
-            [
-                ("root", root.as_str()),
-                ("task_id", task.id.as_str()),
-                ("worker", task.worker.as_deref().unwrap_or("")),
-                ("claimant", "external-worker"),
-            ],
-        );
-    }
-    if let Ok(Some(task)) = completed_task_without_verification(&storage.connection) {
-        return completed(
-            action,
-            &root,
-            "record_verification_evidence",
-            format!("Completed task `{}` has no verification evidence.", task.id),
-            "Record verification evidence before treating the work as reconciled.",
-            [
-                ("root", root.as_str()),
-                ("source_item_id", task.source_item_id.as_str()),
-                ("source_task_id", task.id.as_str()),
-                ("summary", "Describe the verification result."),
-            ],
-        );
-    }
-    if let Ok(Some(task)) = completed_task_without_integration(&storage.connection) {
-        return completed(
-            action,
-            &root,
-            "integrate_worker_result",
-            format!("Completed task `{}` has not been integrated.", task.id),
-            "Integrate the completed verified worker result before reconciliation.",
-            [("root", root.as_str()), ("task_id", task.id.as_str())],
-        );
-    }
-
-    let backlog = backlog::list_backlog(default_root, Some(root.as_str()), Some(1));
-    if let ActionResult {
-        data: Some(BacklogListData { candidates, .. }),
-        ..
-    } = backlog
-    {
-        if let Some(candidate) = candidates.first() {
-            return completed(
-                action,
-                &root,
-                "dispatch_next_work",
-                format!("Backlog item `{}` is runnable.", candidate.item_id),
-                "Dispatch the next runnable backlog item to create a durable task.",
-                [("root", root.as_str()), ("summary", "")],
-            );
-        }
-    }
-
-    completed(
-        action,
-        &root,
-        "create_backlog_item",
-        "No queued task or runnable backlog item was found.".to_string(),
-        "Create or draft a backlog item before dispatching work.",
-        [
-            ("root", root.as_str()),
-            ("summary", "Describe the work item."),
-        ],
-    )
 }
 
 pub fn inspect_work_queue(
@@ -284,156 +167,6 @@ pub fn classify_planning_needs(
             returned,
         },
     )
-}
-
-#[derive(Debug)]
-struct AssignmentHint {
-    id: String,
-    task_id: String,
-    source_item_id: String,
-}
-
-#[derive(Debug)]
-struct TaskHint {
-    id: String,
-    source_item_id: String,
-    worker: Option<String>,
-}
-
-fn active_assignment(
-    connection: &rusqlite::Connection,
-    status: &str,
-    closed_item_ids: &BTreeSet<String>,
-) -> rusqlite::Result<Option<AssignmentHint>> {
-    let mut statement = connection.prepare(
-        r#"
-        SELECT worker_assignments.id, worker_assignments.task_id, tasks.source_item_id
-        FROM worker_assignments
-        JOIN tasks ON tasks.id = worker_assignments.task_id
-        WHERE worker_assignments.status = ?1
-        ORDER BY worker_assignments.updated_at ASC, worker_assignments.id ASC
-        "#,
-    )?;
-    let rows = statement.query_map([status], |row| {
-        Ok(AssignmentHint {
-            id: row.get("id")?,
-            task_id: row.get("task_id")?,
-            source_item_id: row.get("source_item_id")?,
-        })
-    })?;
-    for row in rows {
-        let assignment = row?;
-        if !closed_item_ids.contains(&assignment.source_item_id) {
-            return Ok(Some(assignment));
-        }
-    }
-    Ok(None)
-}
-
-fn queued_task(
-    connection: &rusqlite::Connection,
-    closed_item_ids: &BTreeSet<String>,
-) -> rusqlite::Result<Option<TaskHint>> {
-    task_with_status(connection, "queued", "created_at", closed_item_ids)
-}
-
-fn claimed_task(
-    connection: &rusqlite::Connection,
-    closed_item_ids: &BTreeSet<String>,
-) -> rusqlite::Result<Option<TaskHint>> {
-    task_with_status(connection, "claimed", "updated_at", closed_item_ids)
-}
-
-fn task_with_status(
-    connection: &rusqlite::Connection,
-    status: &str,
-    order_column: &str,
-    closed_item_ids: &BTreeSet<String>,
-) -> rusqlite::Result<Option<TaskHint>> {
-    let query = format!(
-        r#"
-        SELECT id, source_item_id, worker
-        FROM tasks
-        WHERE status = ?1
-        ORDER BY {order_column} ASC, id ASC
-        "#
-    );
-    let mut statement = connection.prepare(&query)?;
-    let rows = statement.query_map([status], row_to_task_hint)?;
-    for row in rows {
-        let task = row?;
-        if !closed_item_ids.contains(&task.source_item_id) {
-            return Ok(Some(task));
-        }
-    }
-    Ok(None)
-}
-
-fn completed_task_without_verification(
-    connection: &rusqlite::Connection,
-) -> rusqlite::Result<Option<TaskHint>> {
-    connection
-        .query_row(
-            r#"
-            SELECT tasks.id, tasks.source_item_id, tasks.worker
-            FROM tasks
-            WHERE tasks.status = 'completed'
-              AND NOT EXISTS (
-                SELECT 1 FROM evidence
-                WHERE evidence.source_task_id = tasks.id
-                  AND evidence.kind = 'verification'
-              )
-            ORDER BY tasks.finished_at ASC, tasks.id ASC
-            LIMIT 1
-            "#,
-            [],
-            row_to_task_hint,
-        )
-        .optional()
-}
-
-fn completed_task_without_integration(
-    connection: &rusqlite::Connection,
-) -> rusqlite::Result<Option<TaskHint>> {
-    connection
-        .query_row(
-            r#"
-            SELECT t.id, t.source_item_id, t.worker
-            FROM tasks t
-            WHERE t.status = 'completed'
-              AND EXISTS (
-                SELECT 1
-                FROM evidence verification
-                WHERE verification.source_task_id = t.id
-                  AND verification.kind = 'verification'
-              )
-              AND NOT EXISTS (
-                SELECT 1
-                FROM evidence integration
-                WHERE integration.source_task_id = t.id
-                  AND integration.kind = 'commit'
-              )
-            ORDER BY t.updated_at ASC, t.id ASC
-            LIMIT 1
-            "#,
-            [],
-            |row| {
-                Ok(TaskHint {
-                    id: row.get("id")?,
-                    source_item_id: row.get("source_item_id")?,
-                    worker: row.get("worker")?,
-                })
-            },
-        )
-        .optional()
-}
-
-fn row_to_task_hint(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskHint> {
-    Ok(TaskHint {
-        id: row.get("id")?,
-        source_item_id: row.get("source_item_id")?,
-        worker: row.get("worker")?,
-    })
 }
 
 fn work_queue_item(
@@ -654,31 +387,6 @@ fn recommended_queue_action(
         first.recommended_tool.clone(),
         format!("{} {}", item_id, first.reason),
         params,
-    )
-}
-
-fn completed<const N: usize>(
-    action: &str,
-    root: &str,
-    recommended_tool: &str,
-    summary: String,
-    reason: &str,
-    params: [(&str, &str); N],
-) -> ActionResult<NextSafeActionData> {
-    ActionResult::completed(
-        action,
-        summary.clone(),
-        NextSafeActionData {
-            root: root.to_string(),
-            recommended_tool: recommended_tool.to_string(),
-            summary,
-            reason: reason.to_string(),
-            params: params
-                .into_iter()
-                .filter(|(_, value)| !value.is_empty())
-                .map(|(key, value)| (key.to_string(), Value::String(value.to_string())))
-                .collect::<BTreeMap<_, _>>(),
-        },
     )
 }
 

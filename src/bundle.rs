@@ -1,8 +1,7 @@
 use crate::{
     models::{ActionResult, GenerateTaskBundleParams, TaskBundle, TaskBundleData, TaskRecord},
-    storage,
+    state::{sqlite::SqliteProjectState, ProjectState, TaskQuery, TaskSnapshot},
 };
-use rusqlite::{OptionalExtension, Row};
 use serde::Deserialize;
 use std::{
     fs,
@@ -43,16 +42,18 @@ pub fn generate_task_bundle(
             "task_id is required",
         );
     }
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(action, "Could not open task storage.", error.to_string())
         }
     };
-    let root = storage.storage.root;
-    let task = match load_task(&storage.connection, task_id) {
-        Ok(Some(task)) => task,
-        Ok(None) => {
+    let root = state.root().to_path_buf();
+    let task = match state.inspect_task(TaskQuery {
+        task_id: task_id.to_string(),
+    }) {
+        Ok(task) => task_record(task),
+        Err(crate::state::ProjectStateError::NotFound { .. }) => {
             return ActionResult::skipped(
                 action,
                 format!("Task `{task_id}` was not found."),
@@ -116,42 +117,31 @@ enum BundleMissing {
     Failed(String),
 }
 
-fn load_task(
-    connection: &rusqlite::Connection,
-    task_id: &str,
-) -> rusqlite::Result<Option<TaskRecord>> {
-    connection
-        .query_row(
-            r#"
-            SELECT id, source_item_id, title, status, worker, claimed_by, claimed_at, started_at,
-                   finished_at, workspace_path, workspace_branch, workspace_base_ref, created_at,
-                   updated_at
-            FROM tasks
-            WHERE id = ?1
-            "#,
-            [task_id],
-            row_to_task,
-        )
-        .optional()
-}
-
-fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
-    Ok(TaskRecord {
-        id: row.get("id")?,
-        source_item_id: row.get("source_item_id")?,
-        title: row.get("title")?,
-        status: row.get("status")?,
-        worker: row.get("worker")?,
-        claimed_by: row.get("claimed_by")?,
-        claimed_at: row.get("claimed_at")?,
-        started_at: row.get("started_at")?,
-        finished_at: row.get("finished_at")?,
-        workspace_path: row.get("workspace_path")?,
-        workspace_branch: row.get("workspace_branch")?,
-        workspace_base_ref: row.get("workspace_base_ref")?,
-        created_at: row.get("created_at")?,
-        updated_at: row.get("updated_at")?,
-    })
+fn task_record(task: TaskSnapshot) -> TaskRecord {
+    let (workspace_path, workspace_branch, workspace_base_ref) = match task.worker_workspace {
+        Some(workspace) => (
+            Some(workspace.path),
+            Some(workspace.branch),
+            Some(workspace.base_ref),
+        ),
+        None => (None, None, None),
+    };
+    TaskRecord {
+        id: task.id,
+        source_item_id: task.source_item_id,
+        title: task.title,
+        status: task.status,
+        worker: task.worker,
+        claimed_by: task.claimed_by,
+        claimed_at: task.claimed_at,
+        started_at: task.started_at,
+        finished_at: task.finished_at,
+        workspace_path,
+        workspace_branch,
+        workspace_base_ref,
+        created_at: task.created_at,
+        updated_at: task.updated_at,
+    }
 }
 
 fn workspace_path(root: &Path, task: &TaskRecord) -> Result<PathBuf, BundleMissing> {

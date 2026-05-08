@@ -1,7 +1,8 @@
 use crate::{
     models::{ActionResult, ActionStatus, EventRecord, EventsReplayData, EventsReplayParams},
+    state::{sqlite::SqliteProjectState, ProjectEventSnapshot, ProjectState, ReplayEventsQuery},
+    storage::EventStore,
     storage::{self, EventInsert},
-    storage::{EventStore, TransitionStore},
 };
 use serde_json::Value;
 use std::path::Path;
@@ -46,70 +47,30 @@ pub fn events_replay(
     params: EventsReplayParams,
 ) -> ActionResult<EventsReplayData> {
     let action = "events_replay";
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(action, "Could not open event storage.", error.to_string())
         }
     };
-    let scope = params
-        .scope
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let task_id = params
-        .task_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let limit = bounded_limit(params.limit);
-
-    let event_repository = storage.repository().events();
-    let mut events = match event_repository.list(scope, task_id, limit) {
-        Ok(events) => events,
+    let snapshot = match state.replay_events(ReplayEventsQuery {
+        task_id: clean_optional(params.task_id),
+        scope: clean_optional(params.scope),
+        limit: Some(bounded_limit(params.limit)),
+    }) {
+        Ok(snapshot) => snapshot,
         Err(error) => {
             return ActionResult::failed(action, "Could not replay events.", error.to_string())
         }
     };
-    if scope.is_none() || scope == Some("task") {
-        match event_repository.list_task_events(task_id, limit) {
-            Ok(task_events) => events.extend(task_events),
-            Err(error) => {
-                return ActionResult::failed(
-                    action,
-                    "Could not replay task events.",
-                    error.to_string(),
-                )
-            }
-        }
-    }
-    let transition_entity = if task_id.is_some() { task_id } else { None };
-    match storage
-        .repository()
-        .transitions()
-        .list(scope, transition_entity, limit)
-    {
-        Ok(transitions) => events.extend(transitions.into_iter().map(transition_to_event)),
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not replay runtime transitions.",
-                error.to_string(),
-            )
-        }
-    }
-    events.sort_by(|left, right| {
-        left.replay_order
-            .cmp(&right.replay_order)
-            .then_with(|| left.created_at.cmp(&right.created_at))
-            .then_with(|| left.cursor.cmp(&right.cursor))
-    });
-    if events.len() > limit {
-        events.truncate(limit);
-    }
+    let events = snapshot
+        .events
+        .into_iter()
+        .map(event_record)
+        .collect::<Vec<_>>();
     let returned = events.len();
     let data = EventsReplayData {
-        root: storage.storage.root.display().to_string(),
+        root: state.root().display().to_string(),
         events,
         returned,
     };
@@ -127,20 +88,18 @@ pub fn events_replay(
     }
 }
 
-fn transition_to_event(transition: crate::models::RuntimeTransitionRecord) -> EventRecord {
+fn event_record(event: ProjectEventSnapshot) -> EventRecord {
     EventRecord {
-        cursor: transition.cursor,
-        event_type: transition.transition_type,
-        scope: transition.domain.clone(),
-        task_id: if transition.domain == "task" {
-            Some(transition.entity_id)
-        } else {
-            None
-        },
-        summary: transition.summary,
-        payload: transition.payload,
-        created_at: transition.created_at,
-        replay_order: transition.replay_order,
+        cursor: event.cursor,
+        event_type: event.event_type,
+        scope: event.scope,
+        task_id: event.task_id,
+        summary: event.summary,
+        payload: event
+            .payload
+            .map(|payload| Value::Object(payload.into_iter().collect())),
+        created_at: event.created_at,
+        replay_order: event.sequence,
     }
 }
 
@@ -254,6 +213,7 @@ mod tests {
             .position(|event| event.event_type == "worker_started")
             .expect("worker_started event");
         assert!(task_created < worker_started);
+        assert!(data.events[worker_started].payload.is_none());
     }
 
     #[test]
