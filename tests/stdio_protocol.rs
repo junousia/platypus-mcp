@@ -93,6 +93,82 @@ async fn stdio_server_calls_structured_ping_tool() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn tool_cli_invokes_read_only_mcp_tool() -> anyhow::Result<()> {
+    let project = assignment_project_fixture();
+    let output = Command::new(server_binary())
+        .args([
+            "tool",
+            "--root",
+            project.path().to_string_lossy().as_ref(),
+            "inspect_work_queue",
+            r#"{"limit":5,"require_task_plan":false}"#,
+        ])
+        .output()
+        .await?;
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(response["action"], "inspect_work_queue");
+    assert_eq!(response["status"], "completed");
+    assert_eq!(
+        response["data"]["items"][0]["candidate"]["item_id"],
+        "PROJ-001"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_cli_invokes_mutating_mcp_tool_and_exits_nonzero_on_failed_result(
+) -> anyhow::Result<()> {
+    let project = TempDir::new().expect("temp dir");
+    let initialized = Command::new(server_binary())
+        .args([
+            "tool",
+            "init_project",
+            &serde_json::json!({
+                "root": project.path(),
+                "project_name": "CLI Smoke"
+            })
+            .to_string(),
+        ])
+        .output()
+        .await?;
+
+    assert!(
+        initialized.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&initialized.stdout),
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+    let response: Value = serde_json::from_slice(&initialized.stdout)?;
+    assert_eq!(response["action"], "init_project");
+    assert_eq!(response["status"], "completed");
+    assert!(project.path().join("platy.yaml").is_file());
+
+    let failed = Command::new(server_binary())
+        .args([
+            "tool",
+            "validate_backlog",
+            &serde_json::json!({ "root": project.path().join("missing") }).to_string(),
+        ])
+        .output()
+        .await?;
+
+    assert!(!failed.status.success());
+    let response: Value = serde_json::from_slice(&failed.stdout)?;
+    assert_eq!(response["action"], "validate_backlog");
+    assert_eq!(response["status"], "failed");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Result<()> {
     let client = start_client(None).await?;
 
