@@ -76,6 +76,9 @@ tooling and intended product direction.
   worker boundary.
 - External intake adapters for GitHub, Linear, Jira, GitLab, and custom
   plugin-backed sources, all mapping into local executable backlog snapshots.
+- The next implementation step after GitHub issue import is an approved
+  external report draft/send boundary: first draft provider-neutral report
+  payloads locally, then send comments/statuses only through explicit approval.
 - Optional richer storage abstraction if SQL scattering becomes a maintenance
   risk.
 - A second runtime backend only after the storage capability probe demonstrates

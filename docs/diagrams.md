@@ -269,6 +269,28 @@ flowchart TB
     Governance --> Runtime
 ```
 
+## External Intake And Reporting
+
+External systems can seed or receive context, but the local backlog snapshot is
+the executable contract. Provider writes should be explicit, reviewable actions
+with approval and audit metadata.
+
+```mermaid
+flowchart LR
+    tracker["External tracker<br/>GitHub, Linear, Jira"]
+    host["MCP host<br/>approved provider access"]
+    import["import or draft<br/>provider-neutral records"]
+    backlog["local backlog snapshot<br/>backlog/items"]
+    runtime["runtime execution<br/>tasks, worktrees, evidence"]
+    report["approved report draft<br/>summary, PR, verification"]
+    approval{"approval policy"}
+    writeback["provider write-back<br/>comment, label, status"]
+
+    tracker --> host --> import --> backlog --> runtime --> report --> approval
+    approval -->|approved| writeback --> tracker
+    approval -->|denied or unavailable| backlog
+```
+
 ## Reconciliation Perspective
 
 Reconciliation is the product guardrail. It decides whether the project state

@@ -1,0 +1,73 @@
+item_id: MCP-036
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Documentation defines import-only, mirror, bidirectional sync, and external-source modes with tradeoffs.
+- id: R2
+  text: The recommended first product mode is import-only with explicit approved reporting actions.
+- id: R3
+  text: The docs specify safe automation, approval requirements, plugin concerns, credentials, redaction, rate limits, provider failures, and conflict handling.
+- id: R4
+  text: Diagrams and roadmap show how external intake, local execution, and external reporting fit together.
+design:
+  summary: Document external reporting and sync policy options while keeping local backlog snapshots as the executable contract and deferring provider write-back to explicit approved tools.
+  owned_surfaces:
+  - docs/roadmap.md
+  - docs/tools.md
+  - docs/diagrams.md
+  - README.md
+  notes: Do not implement live provider calls in this item. The output is policy and roadmap guidance.
+tasks:
+- id: MCP-036-T01
+  title: Define external sync policy modes
+  goal: Document import-only, mirror, bidirectional sync, and external-source modes with their operational tradeoffs.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - docs/tools.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Import-only is named as the recommended first product mode.
+  - Mirror, bidirectional sync, and external-source modes are described as later/higher-risk modes.
+  - Local backlog snapshots remain the execution contract.
+  notes: null
+- id: MCP-036-T02
+  title: Document reporting safety rules
+  goal: Capture approval, security, plugin, provider failure, and conflict-handling rules for future external reporting tools.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-036-T01
+  owned_surfaces:
+  - docs/tools.md
+  - README.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Safe automation and approval-required actions are separated.
+  - Credentials, redaction, rate limits, and provider failures have explicit rules.
+  - Plugin-backed integrations must map through stable provider-neutral records.
+  notes: null
+- id: MCP-036-T03
+  title: Add external reporting diagram and roadmap step
+  goal: Show the external intake/reporting loop and name the next implementation step after GitHub issue import.
+  requirement_refs:
+  - R4
+  depends_on:
+  - MCP-036-T02
+  owned_surfaces:
+  - docs/diagrams.md
+  - docs/roadmap.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Diagrams show external intake to local execution to approved reporting.
+  - Roadmap lists the next implementation step after GitHub issue import.
+  notes: null

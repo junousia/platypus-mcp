@@ -111,6 +111,51 @@ External intake adapters should map provider-specific records into the same
 draft shape before creating local backlog items. The local backlog item remains
 the stable executable snapshot.
 
+#### External Reporting And Sync Policy
+
+Platypus should treat external trackers as integration surfaces, not hidden
+runtime state. Supported policy modes:
+
+- **Import-only:** external records are copied into local backlog snapshots.
+  Execution, closure, evidence, and findings stay local. This is the
+  recommended first product mode and is what `import_github_issues` implements.
+- **Import plus explicit reporting:** local execution remains canonical, but a
+  future approved tool may post a summary, PR link, verification result, or
+  follow-up finding back to the external record.
+- **Mirror:** selected local state is reflected into external fields or labels.
+  This needs drift detection and conflict handling before it is safe.
+- **Bidirectional sync:** external edits can update local backlog snapshots.
+  This is high-risk and requires provider-specific merge policy, audit, and
+  user approval.
+- **External-source mode:** the tracker is treated as the source of backlog
+  truth. This is intentionally not the default because it makes local Git
+  history and MCP runtime state harder to reason about.
+
+Safe automation:
+
+- read/import host-approved external records
+- draft local backlog snapshots
+- detect duplicate external refs and source-hash drift
+- draft external report payloads without sending them
+
+Approval-required actions:
+
+- posting issue comments, PR links, labels, statuses, or closure updates
+- mutating external issue fields
+- resolving conflicts where external and local state disagree
+- enabling bidirectional sync or external-source mode
+
+Security rules for future provider tools:
+
+- credentials stay in the MCP host or an approved secret store, never in backlog
+  frontmatter, task plans, evidence, events, or Git commits
+- tool output must redact tokens, cookies, private headers, and provider error
+  payloads that may contain secrets
+- provider rate limits and outages return structured skipped/failed results
+  with retry guidance
+- plugin-backed providers must map through the provider-neutral external record
+  and external ref schemas before creating or updating local backlog items
+
 ### Task Plans
 
 - `draft_task_plan`: draft a strict plan for one backlog item without writing

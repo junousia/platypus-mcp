@@ -88,6 +88,11 @@ ordering, lease semantics, conflict behavior, recovery paths, and reconciliation
 rules documented in [docs/storage.md](docs/storage.md). Local SQLite support
 remains a first-class mode even if shared coordination is added later.
 
+External trackers are integration surfaces, not the hidden source of execution
+truth. Platypus imports approved external records into local backlog snapshots;
+future reporting back to GitHub, Linear, Jira, or other systems should happen
+through explicit approved tools and provider-neutral payloads.
+
 ## Verify
 
 ```bash
