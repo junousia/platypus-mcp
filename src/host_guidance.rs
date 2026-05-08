@@ -26,9 +26,12 @@ model turns, and external worker execution.
 2. Ask `next_safe_action` before advancing lifecycle state.
 3. Shape work with `draft_backlog_items`, `create_backlog_item`,
    `validate_backlog`, and `list_backlog`.
-4. Dispatch only through `dispatch_next_work`, then prepare the worker with
+4. For non-trivial work, use `draft_task_plan`, `write_task_plan`,
+   `validate_task_plan`, `inspect_task_plan`, and `list_task_plans` to create a
+   committed executable plan.
+5. Dispatch only through `dispatch_next_work`, then prepare the worker with
    `prepare_worker_handoff`.
-5. Start, track, complete, verify, integrate, and reconcile with
+6. Start, track, complete, verify, integrate, and reconcile with
    `start_worker_task`, `record_worker_progress`, `complete_worker_task`,
    `record_verification_evidence`, `integrate_worker_result`, and
    `reconcile_project`.
@@ -68,6 +71,10 @@ state, or blocked/done fields. Closure is derived from Git trailers such as
 
 There is no manual `backlog/index.md`; hosts should compute queue state through
 `list_backlog`, `inspect_status`, and `next_safe_action`.
+
+For non-trivial items, use `draft_task_plan` and `write_task_plan` to create
+`backlog/plans/<ITEM>.yaml`. Plan YAML is strict and reviewable, but still not
+runtime state.
 "#;
 
 const WORKER_HANDOFF_TEXT: &str = r#"# Worker Handoff Guidance

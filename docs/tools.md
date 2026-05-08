@@ -35,15 +35,17 @@ deterministic and references the current public tool names.
    `inspect_status`, `inspect_workflow_config`.
 2. Shape backlog: `draft_backlog_items`, `create_backlog_item`,
    `validate_backlog`, `list_backlog`.
-3. Dispatch work: `next_safe_action`, `dispatch_next_work`,
+3. Plan non-trivial work: `draft_task_plan`, `write_task_plan`,
+   `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
+4. Dispatch work: `next_safe_action`, `dispatch_next_work`,
    `prepare_worker_handoff`.
-4. Run worker externally: pass the generated bundle/worktree to Codex, Claude,
+5. Run worker externally: pass the generated bundle/worktree to Codex, Claude,
    or another harness.
-5. Record worker activity: `start_worker_task`, `record_worker_progress`,
+6. Record worker activity: `start_worker_task`, `record_worker_progress`,
    `complete_worker_task`.
-6. Inspect and verify: `inspect_worktree_changes`,
+7. Inspect and verify: `inspect_worktree_changes`,
    `record_verification_evidence`, `record_finding`, `validate_findings`.
-7. Integrate and clean up: `integrate_worker_result`, `reconcile_project`,
+8. Integrate and clean up: `integrate_worker_result`, `reconcile_project`,
    `worktree_cleanup`.
 
 ```mermaid
@@ -78,6 +80,21 @@ flowchart LR
 - `create_backlog_item`: write one structured backlog item.
 - `validate_backlog`: validate backlog item and epic files.
 - `list_backlog`: list runnable backlog candidates.
+
+### Task Plans
+
+- `draft_task_plan`: draft a strict plan for one backlog item without writing
+  it.
+- `write_task_plan`: write one reviewable plan to `backlog/plans/<ITEM>.yaml`.
+- `validate_task_plan`: validate strict plan YAML, task IDs, dependencies,
+  requirement references, owned surfaces, verification, and acceptance.
+- `inspect_task_plan`: read one committed task plan.
+- `list_task_plans`: list committed task plans.
+
+Task plan YAML is planned work only. It must not contain runtime status,
+completion commits, attempts, evidence, or worker diary fields. Runtime state
+belongs in `.platy/platypus.sqlite3`, evidence records, task events, and Git
+trailers.
 
 ### Task And Workspace Lifecycle
 

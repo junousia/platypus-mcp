@@ -6,6 +6,7 @@ pub(super) const VALID_TYPES: &[&str] = &["foundation", "feature", "safety", "ux
 pub(super) const REQUIRED_SECTIONS: &[&str] = &["Goal", "Implementation Contract", "Acceptance"];
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub(super) struct BacklogItemFrontmatter {
     pub id: String,
     pub title: String,
@@ -22,6 +23,7 @@ pub(super) struct BacklogItemFrontmatter {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct EpicFrontmatter {
     pub id: String,
     pub title: String,

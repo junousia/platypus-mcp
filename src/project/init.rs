@@ -31,6 +31,7 @@ pub fn init_project(
     for directory in [
         "backlog",
         "backlog/items",
+        "backlog/plans",
         "backlog/epics",
         "backlog/templates",
     ] {
@@ -134,6 +135,7 @@ fn scaffold_files(project_name: &str) -> Vec<(&'static str, String)> {
         ("backlog/README.md", backlog_readme()),
         ("backlog/epics/general.md", general_epic()),
         ("backlog/templates/item.md", item_template()),
+        ("backlog/templates/plan.yaml", plan_template()),
         ("backlog/templates/epic.md", epic_template()),
     ]
 }
@@ -151,7 +153,7 @@ fn workflow_doc() -> String {
 }
 
 fn backlog_readme() -> String {
-    "# Backlog\n\nStructured Platypus backlog items live in `backlog/items/`.\nUse `list_backlog` and `next_safe_action` to compute the current queue from item metadata and Git closure trailers.\n".to_string()
+    "# Backlog\n\nStructured Platypus backlog items live in `backlog/items/`.\nReviewable task plans for non-trivial items live in `backlog/plans/`.\nUse `list_backlog` and `next_safe_action` to compute the current queue from item metadata and Git closure trailers.\n".to_string()
 }
 
 fn general_epic() -> String {
@@ -160,6 +162,10 @@ fn general_epic() -> String {
 
 fn item_template() -> String {
     "---\nid: PROJ-000\ntitle: Item title\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nsuggested_worker: coder\nowned_surfaces: []\n---\n\n# PROJ-000 Item title\n\n## Goal\n\nDescribe the goal.\n\n## Implementation Contract\n\nDescribe the expected implementation boundaries.\n\n## Acceptance\n\n- Describe a verifiable acceptance criterion.\n".to_string()
+}
+
+fn plan_template() -> String {
+    "item_id: PROJ-000\nversion: 1\nmode: standard\nrequirements:\n  - id: R1\n    text: Describe a required outcome.\ndesign:\n  summary: Describe the implementation approach.\n  owned_surfaces:\n    - src/example.rs\n  notes: null\ntasks:\n  - id: PROJ-000-T01\n    title: Implement the first task\n    goal: Deliver one executable implementation slice.\n    requirement_refs:\n      - R1\n    depends_on: []\n    owned_surfaces:\n      - src/example.rs\n    suggested_worker: coder\n    verification:\n      - make check\n    acceptance:\n      - The task is complete and verified.\n    notes: null\n".to_string()
 }
 
 fn epic_template() -> String {
@@ -201,8 +207,10 @@ mod tests {
         assert!(config.contains("workflow:"));
         assert!(config.contains("merge_style: merge_commit"));
         assert!(temp.path().join("backlog/items").is_dir());
+        assert!(temp.path().join("backlog/plans").is_dir());
         assert!(!temp.path().join("backlog/index.md").exists());
         assert!(temp.path().join("backlog/epics/general.md").is_file());
+        assert!(temp.path().join("backlog/templates/plan.yaml").is_file());
     }
 
     #[test]

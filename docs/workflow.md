@@ -61,6 +61,19 @@ Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime
 status, task attempts, PR metadata, or closure state.
 
+## Task Planning
+
+For non-trivial items, create a committed task plan before dispatch. Use
+`draft_task_plan` to produce a starting point, `write_task_plan` to persist it
+under `backlog/plans/<ITEM>.yaml`, and `validate_task_plan` before treating it
+as executable.
+
+Task plans are strict YAML artifacts. They may contain requirements, a design
+summary, owned surfaces, verification commands, and executable planned tasks.
+They must not contain runtime fields such as status, completed_at, commit,
+attempts, result, evidence, or worker diary comments. Use `inspect_task_plan`
+and `list_task_plans` to review committed plans.
+
 ## Dispatch And Worker Handoff
 
 1. Call `next_safe_action`.

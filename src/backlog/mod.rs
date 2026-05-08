@@ -3,12 +3,16 @@ mod create;
 mod draft;
 mod filesystem;
 mod parse;
+mod plan;
 mod status;
 mod types;
 mod validate;
 
 pub use create::create_backlog_item;
 pub use draft::draft_backlog_items;
+pub use plan::{
+    draft_task_plan, inspect_task_plan, list_task_plans, validate_task_plan, write_task_plan,
+};
 pub use status::{inspect_status, list_backlog};
 pub use validate::validate_backlog;
 
@@ -17,7 +21,10 @@ pub(crate) use closure::closed_item_ids;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{ActionStatus, CreateBacklogItemParams, DraftBacklogItemsParams};
+    use crate::models::{
+        ActionStatus, CreateBacklogItemParams, DraftBacklogItemsParams, TaskPlanQueryParams,
+        WriteTaskPlanParams,
+    };
     use std::{fs, path::Path, process::Command};
     use tempfile::TempDir;
 
@@ -36,6 +43,25 @@ mod tests {
         let data = listed.data.unwrap();
         assert_eq!(data.candidates.len(), 1);
         assert_eq!(data.candidates[0].item_id, "PROJ-001");
+    }
+
+    #[test]
+    fn validate_backlog_rejects_unknown_frontmatter_fields() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "First task", "P1", &[]);
+        let path = temp.path().join("backlog/items/PROJ-001.md");
+        let mut text = fs::read_to_string(&path).expect("item");
+        text = text.replacen("owned_surfaces: []", "owned_surfaces: []\nstatus: done", 1);
+        fs::write(path, text).expect("item");
+
+        let validation = validate_backlog(temp.path(), Some(root_arg(temp.path()).as_str()), true);
+
+        assert!(matches!(validation.status, ActionStatus::Failed));
+        assert!(validation
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("unknown field `status`"));
     }
 
     #[test]
@@ -119,6 +145,181 @@ mod tests {
 
         assert!(matches!(result.status, ActionStatus::Completed));
         assert_eq!(result.data.unwrap().drafts.len(), 3);
+    }
+
+    #[test]
+    fn drafts_writes_and_validates_strict_task_plan() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);
+
+        let drafted = draft_task_plan(
+            temp.path(),
+            crate::models::DraftTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+            },
+        );
+        assert!(matches!(drafted.status, ActionStatus::Completed));
+        let plan = drafted.data.unwrap().plan;
+        assert_eq!(plan.tasks[0].id, "PROJ-001-T01");
+
+        let written = write_task_plan(
+            temp.path(),
+            WriteTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                plan,
+                overwrite: None,
+            },
+        );
+        assert!(matches!(written.status, ActionStatus::Completed));
+
+        let validation = validate_task_plan(
+            temp.path(),
+            TaskPlanQueryParams {
+                root: Some(root_arg(temp.path())),
+                item_id: Some("PROJ-001".to_string()),
+                include_errors: Some(true),
+            },
+        );
+        assert!(matches!(validation.status, ActionStatus::Completed));
+        assert!(validation.data.unwrap().ok);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_task_plan_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);
+        fs::create_dir_all(temp.path().join("backlog/plans")).expect("plans dir");
+        let outside = TempDir::new().expect("outside dir");
+        symlink(
+            outside.path().join("PROJ-001.yaml"),
+            temp.path().join("backlog/plans/PROJ-001.yaml"),
+        )
+        .expect("symlink");
+
+        let plan = draft_task_plan(
+            temp.path(),
+            crate::models::DraftTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+            },
+        )
+        .data
+        .expect("draft")
+        .plan;
+
+        let result = write_task_plan(
+            temp.path(),
+            WriteTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                plan,
+                overwrite: Some(true),
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result.error.unwrap().contains("is a symlink"));
+    }
+
+    #[test]
+    fn validates_task_plan_semantics_and_rejects_unknown_yaml_fields() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);
+        fs::create_dir_all(temp.path().join("backlog/plans")).expect("plans dir");
+        fs::write(
+            temp.path().join("backlog/plans/PROJ-001.yaml"),
+            r#"item_id: PROJ-001
+version: 1
+mode: standard
+status: done
+requirements:
+  - id: R1
+    text: Requirement.
+design:
+  summary: Design.
+tasks:
+  - id: PROJ-001-T02
+    title: Invalid dependency
+    goal: Exercise validation.
+    requirement_refs:
+      - R2
+    depends_on:
+      - PROJ-001-T99
+    owned_surfaces: []
+    suggested_worker: coder
+    verification: []
+    acceptance: []
+"#,
+        )
+        .expect("plan");
+
+        let validation = validate_task_plan(
+            temp.path(),
+            TaskPlanQueryParams {
+                root: Some(root_arg(temp.path())),
+                item_id: Some("PROJ-001".to_string()),
+                include_errors: Some(true),
+            },
+        );
+        assert!(matches!(validation.status, ActionStatus::Failed));
+        let error = validation.error.unwrap();
+        assert!(
+            error.contains("unknown field `status`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn validates_task_plan_dependencies_requirements_and_required_fields() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);
+        fs::create_dir_all(temp.path().join("backlog/plans")).expect("plans dir");
+        fs::write(
+            temp.path().join("backlog/plans/PROJ-001.yaml"),
+            r#"item_id: PROJ-001
+version: 1
+mode: standard
+requirements:
+  - id: R1
+    text: Requirement.
+design:
+  summary: Design.
+tasks:
+  - id: PROJ-001-T02
+    title: Invalid dependency
+    goal: Exercise validation.
+    requirement_refs:
+      - R2
+    depends_on:
+      - PROJ-001-T99
+    owned_surfaces: []
+    suggested_worker: coder
+    verification: []
+    acceptance: []
+"#,
+        )
+        .expect("plan");
+
+        let validation = validate_task_plan(
+            temp.path(),
+            TaskPlanQueryParams {
+                root: Some(root_arg(temp.path())),
+                item_id: Some("PROJ-001".to_string()),
+                include_errors: Some(true),
+            },
+        );
+        assert!(matches!(validation.status, ActionStatus::Failed));
+        let error = validation.error.unwrap();
+        assert!(error.contains("unknown requirement_ref `R2`"));
+        assert!(error.contains("unknown dependency `PROJ-001-T99`"));
+        assert!(error.contains("owned_surfaces must not be empty"));
+        assert!(error.contains("verification must not be empty"));
+        assert!(error.contains("acceptance must not be empty"));
     }
 
     fn project_fixture() -> TempDir {

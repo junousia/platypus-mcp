@@ -6,9 +6,9 @@ use crate::{
         ApprovalListParams, ApprovalRespondParams, ApprovalResponseData, ClaimNextTaskParams,
         CompleteWorkerExecutionParams, ConfigureAgentProfileParams, CreateBacklogItemParams,
         CreatedBacklogItemData, DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData,
-        DraftBacklogItemsParams, EventsReplayData, EventsReplayParams, EvidenceListData,
-        EvidenceRecordData, FindingDispositionData, FindingListData, FindingRecordData,
-        FindingValidationData, GenerateTaskBundleParams, InitProjectParams,
+        DraftBacklogItemsParams, DraftTaskPlanParams, EventsReplayData, EventsReplayParams,
+        EvidenceListData, EvidenceRecordData, FindingDispositionData, FindingListData,
+        FindingRecordData, FindingValidationData, GenerateTaskBundleParams, InitProjectParams,
         InspectTaskEventsParams, InspectTaskParams, InspectWorkerAssignmentParams,
         IntegrateWorkerResultParams, LimitParams, ListEvidenceParams, ListFindingsParams,
         NextSafeActionData, NextSafeActionParams, PingData, PingParams,
@@ -16,11 +16,13 @@ use crate::{
         ReconciliationData, RecordEvidenceParams, RecordFindingParams,
         RecordVerificationEvidenceParams, RecordWorkerEventParams, RootParams, RunnerPrepareParams,
         RunnerReportData, SendWorkerGuidanceParams, StartWorkerExecutionParams, TaskBundleData,
-        TaskEventListData, TaskRecordData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams, WorkerAssignmentData, WorkerAssignmentEventData,
-        WorkerGuidanceData, WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams,
-        WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams, WorktreeData,
-        WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams,
+        TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams,
+        TaskPlanValidationData, TaskPlanWriteData, TaskRecordData, UpdateFindingDispositionParams,
+        ValidateBacklogParams, ValidateFindingsParams, WorkerAssignmentData,
+        WorkerAssignmentEventData, WorkerGuidanceData, WorkerResultIntegrationData,
+        WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData, WorktreeCleanupParams,
+        WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffParams,
+        WorktreeStatusParams, WriteTaskPlanParams,
     },
     project, reconcile, runner, tasks, workspace,
 };
@@ -361,6 +363,101 @@ impl PlatypusMcp {
         Parameters(params): Parameters<CreateBacklogItemParams>,
     ) -> Json<ActionResult<CreatedBacklogItemData>> {
         Json(backlog::create_backlog_item(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Draft Task Plan",
+        description = "Draft a strict task plan for one backlog item without writing it.",
+        annotations(
+            title = "Draft Task Plan",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn draft_task_plan(
+        &self,
+        Parameters(params): Parameters<DraftTaskPlanParams>,
+    ) -> Json<ActionResult<TaskPlanData>> {
+        Json(backlog::draft_task_plan(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Inspect Task Plan",
+        description = "Read one committed task plan from backlog/plans.",
+        annotations(
+            title = "Inspect Task Plan",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn inspect_task_plan(
+        &self,
+        Parameters(params): Parameters<TaskPlanItemParams>,
+    ) -> Json<ActionResult<TaskPlanData>> {
+        Json(backlog::inspect_task_plan(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "List Task Plans",
+        description = "List committed task plans under backlog/plans.",
+        annotations(
+            title = "List Task Plans",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn list_task_plans(
+        &self,
+        Parameters(params): Parameters<TaskPlanQueryParams>,
+    ) -> Json<ActionResult<TaskPlanListData>> {
+        Json(backlog::list_task_plans(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Validate Task Plan",
+        description = "Validate strict task plan YAML under backlog/plans.",
+        annotations(
+            title = "Validate Task Plan",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn validate_task_plan(
+        &self,
+        Parameters(params): Parameters<TaskPlanQueryParams>,
+    ) -> Json<ActionResult<TaskPlanValidationData>> {
+        Json(backlog::validate_task_plan(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Write Task Plan",
+        description = "Write one strict task plan to backlog/plans.",
+        annotations(
+            title = "Write Task Plan",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn write_task_plan(
+        &self,
+        Parameters(params): Parameters<WriteTaskPlanParams>,
+    ) -> Json<ActionResult<TaskPlanWriteData>> {
+        Json(backlog::write_task_plan(&self.default_root, params))
     }
 
     #[tool(
@@ -1105,6 +1202,11 @@ mod tests {
             "init_project",
             "draft_backlog_items",
             "create_backlog_item",
+            "draft_task_plan",
+            "inspect_task_plan",
+            "list_task_plans",
+            "validate_task_plan",
+            "write_task_plan",
             "dispatch_next_work",
             "inspect_task",
             "claim_next_task",
@@ -1153,6 +1255,7 @@ mod tests {
         let mutating_tools = BTreeSet::from([
             "init_project",
             "create_backlog_item",
+            "write_task_plan",
             "dispatch_next_work",
             "claim_next_task",
             "worktree_create",

@@ -72,6 +72,33 @@ pub struct CreateBacklogItemParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct TaskPlanQueryParams {
+    pub root: Option<String>,
+    pub item_id: Option<String>,
+    pub include_errors: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TaskPlanItemParams {
+    pub root: Option<String>,
+    pub item_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DraftTaskPlanParams {
+    pub root: Option<String>,
+    pub item_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WriteTaskPlanParams {
+    pub root: Option<String>,
+    pub item_id: String,
+    pub plan: TaskPlanFile,
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct InspectTaskEventsParams {
     pub root: Option<String>,
     pub task_id: String,
@@ -516,6 +543,98 @@ pub struct CreatedBacklogItemData {
     pub item_id: String,
     pub path: String,
     pub created: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TaskPlanListData {
+    pub root: String,
+    pub plans: Vec<TaskPlanSummary>,
+    pub returned: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TaskPlanSummary {
+    pub item_id: String,
+    pub path: String,
+    pub mode: Option<String>,
+    pub task_count: usize,
+    pub requirement_count: usize,
+    pub valid: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TaskPlanData {
+    pub root: String,
+    pub item_id: String,
+    pub path: Option<String>,
+    pub plan: TaskPlanFile,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TaskPlanWriteData {
+    pub root: String,
+    pub item_id: String,
+    pub path: String,
+    pub created: bool,
+    pub overwritten: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TaskPlanValidationData {
+    pub root: String,
+    pub ok: bool,
+    pub plan_count: usize,
+    pub task_count: usize,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskPlanFile {
+    pub item_id: String,
+    pub version: u32,
+    pub mode: String,
+    #[serde(default)]
+    pub requirements: Vec<TaskPlanRequirement>,
+    pub design: TaskPlanDesign,
+    #[serde(default)]
+    pub tasks: Vec<PlannedTask>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskPlanRequirement {
+    pub id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskPlanDesign {
+    pub summary: String,
+    #[serde(default)]
+    pub owned_surfaces: Vec<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlannedTask {
+    pub id: String,
+    pub title: String,
+    pub goal: String,
+    #[serde(default)]
+    pub requirement_refs: Vec<String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub owned_surfaces: Vec<String>,
+    pub suggested_worker: Option<String>,
+    #[serde(default)]
+    pub verification: Vec<String>,
+    #[serde(default)]
+    pub acceptance: Vec<String>,
+    pub notes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
