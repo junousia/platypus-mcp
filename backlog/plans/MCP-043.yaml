@@ -1,0 +1,54 @@
+item_id: MCP-043
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Define a backend-independent ProjectState trait and command/result types for Platypus runtime state.
+- id: R2
+  text: Keep public state APIs domain-shaped and free of rusqlite, SQL, table, row, or CRUD terminology.
+- id: R3
+  text: Document atomicity expectations for lifecycle operations without changing current runtime behavior.
+design:
+  summary: Add a compile-only state module that introduces the target ProjectState contract as typed Rust APIs. This is a boundary definition slice only; existing MCP tools continue using the current SQLite repositories until later migration items.
+  owned_surfaces:
+  - src/state
+  - src/lib.rs
+  - src/models.rs
+  - docs/storage.md
+  - tests
+  notes: Do not move existing storage behavior in this item. Prefer minimal exported types and docs that future migration items can implement against.
+tasks:
+- id: MCP-043-T01
+  title: Define ProjectState boundary types
+  goal: Create the state module with ProjectState, backend capability, command, snapshot, and error/result types covering lifecycle, inspection, approvals, evidence, findings, replay, and reconciliation at a high level.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/state
+  - src/lib.rs
+  - src/models.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - ProjectState and related public state types compile without depending on rusqlite or SQL-shaped APIs.
+  - The trait groups methods by Platypus behavior rather than table CRUD.
+  notes: null
+- id: MCP-043-T02
+  title: Document atomic state contract
+  goal: Update storage documentation with the names and atomicity expectations of the new ProjectState methods introduced by this item.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-043-T01
+  owned_surfaces:
+  - docs/storage.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - docs/storage.md describes which ProjectState methods are atomic by contract.
+  - The documentation states that this item does not migrate runtime behavior yet.
+  notes: null
