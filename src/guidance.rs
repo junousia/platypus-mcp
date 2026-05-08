@@ -10,7 +10,10 @@ use crate::{
 };
 use rusqlite::OptionalExtension;
 use serde_json::Value;
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 pub fn next_safe_action(
     default_root: &Path,
@@ -28,8 +31,11 @@ pub fn next_safe_action(
         }
     };
     let root = storage.storage.root.display().to_string();
+    let closed_item_ids = backlog::closed_item_ids(&storage.storage.root);
 
-    if let Ok(Some(assignment)) = active_assignment(&storage.connection, "running") {
+    if let Ok(Some(assignment)) =
+        active_assignment(&storage.connection, "running", &closed_item_ids)
+    {
         return completed(
             action,
             &root,
@@ -47,7 +53,9 @@ pub fn next_safe_action(
             ],
         );
     }
-    if let Ok(Some(assignment)) = active_assignment(&storage.connection, "prepared") {
+    if let Ok(Some(assignment)) =
+        active_assignment(&storage.connection, "prepared", &closed_item_ids)
+    {
         return completed(
             action,
             &root,
@@ -65,7 +73,7 @@ pub fn next_safe_action(
             ],
         );
     }
-    if let Ok(Some(task)) = queued_task(&storage.connection) {
+    if let Ok(Some(task)) = queued_task(&storage.connection, &closed_item_ids) {
         return completed(
             action,
             &root,
@@ -80,7 +88,7 @@ pub fn next_safe_action(
             ],
         );
     }
-    if let Ok(Some(task)) = claimed_task(&storage.connection) {
+    if let Ok(Some(task)) = claimed_task(&storage.connection, &closed_item_ids) {
         return completed(
             action,
             &root,
@@ -282,6 +290,7 @@ pub fn classify_planning_needs(
 struct AssignmentHint {
     id: String,
     task_id: String,
+    source_item_id: String,
 }
 
 #[derive(Debug)]
@@ -294,57 +303,70 @@ struct TaskHint {
 fn active_assignment(
     connection: &rusqlite::Connection,
     status: &str,
+    closed_item_ids: &BTreeSet<String>,
 ) -> rusqlite::Result<Option<AssignmentHint>> {
-    connection
-        .query_row(
-            r#"
-            SELECT id, task_id
-            FROM worker_assignments
-            WHERE status = ?1
-            ORDER BY updated_at ASC, id ASC
-            LIMIT 1
-            "#,
-            [status],
-            |row| {
-                Ok(AssignmentHint {
-                    id: row.get("id")?,
-                    task_id: row.get("task_id")?,
-                })
-            },
-        )
-        .optional()
+    let mut statement = connection.prepare(
+        r#"
+        SELECT worker_assignments.id, worker_assignments.task_id, tasks.source_item_id
+        FROM worker_assignments
+        JOIN tasks ON tasks.id = worker_assignments.task_id
+        WHERE worker_assignments.status = ?1
+        ORDER BY worker_assignments.updated_at ASC, worker_assignments.id ASC
+        "#,
+    )?;
+    let rows = statement.query_map([status], |row| {
+        Ok(AssignmentHint {
+            id: row.get("id")?,
+            task_id: row.get("task_id")?,
+            source_item_id: row.get("source_item_id")?,
+        })
+    })?;
+    for row in rows {
+        let assignment = row?;
+        if !closed_item_ids.contains(&assignment.source_item_id) {
+            return Ok(Some(assignment));
+        }
+    }
+    Ok(None)
 }
 
-fn queued_task(connection: &rusqlite::Connection) -> rusqlite::Result<Option<TaskHint>> {
-    connection
-        .query_row(
-            r#"
-            SELECT id, source_item_id, worker
-            FROM tasks
-            WHERE status = 'queued'
-            ORDER BY created_at ASC, id ASC
-            LIMIT 1
-            "#,
-            [],
-            row_to_task_hint,
-        )
-        .optional()
+fn queued_task(
+    connection: &rusqlite::Connection,
+    closed_item_ids: &BTreeSet<String>,
+) -> rusqlite::Result<Option<TaskHint>> {
+    task_with_status(connection, "queued", "created_at", closed_item_ids)
 }
 
-fn claimed_task(connection: &rusqlite::Connection) -> rusqlite::Result<Option<TaskHint>> {
-    connection
-        .query_row(
-            r#"
-            SELECT id, source_item_id, worker
-            FROM tasks
-            WHERE status = 'claimed'
-            ORDER BY updated_at ASC, id ASC
-            LIMIT 1
-            "#,
-            [],
-            row_to_task_hint,
-        )
-        .optional()
+fn claimed_task(
+    connection: &rusqlite::Connection,
+    closed_item_ids: &BTreeSet<String>,
+) -> rusqlite::Result<Option<TaskHint>> {
+    task_with_status(connection, "claimed", "updated_at", closed_item_ids)
+}
+
+fn task_with_status(
+    connection: &rusqlite::Connection,
+    status: &str,
+    order_column: &str,
+    closed_item_ids: &BTreeSet<String>,
+) -> rusqlite::Result<Option<TaskHint>> {
+    let query = format!(
+        r#"
+        SELECT id, source_item_id, worker
+        FROM tasks
+        WHERE status = ?1
+        ORDER BY {order_column} ASC, id ASC
+        "#
+    );
+    let mut statement = connection.prepare(&query)?;
+    let rows = statement.query_map([status], row_to_task_hint)?;
+    for row in rows {
+        let task = row?;
+        if !closed_item_ids.contains(&task.source_item_id) {
+            return Ok(Some(task));
+        }
+    }
+    Ok(None)
 }
 
 fn completed_task_without_verification(
@@ -672,7 +694,7 @@ fn map_params<const N: usize>(params: [(&str, &str); N]) -> BTreeMap<String, Val
 mod tests {
     use super::*;
     use crate::tasks::{create_task_record, NewTask};
-    use std::fs;
+    use std::{fs, process::Command};
     use tempfile::TempDir;
 
     #[test]
@@ -725,6 +747,30 @@ mod tests {
         assert_eq!(data.recommended_tool, "prepare_worker_handoff");
         assert_eq!(data.params["task_id"], "PROJ-001-T001");
         assert!(data.summary.contains("already claimed"));
+    }
+
+    #[test]
+    fn skips_active_tasks_for_closed_backlog_items() {
+        let project = backlog_project();
+        init_git_with_closed_item(project.path(), "PROJ-001");
+        write_item(project.path(), "PROJ-001", "Closed item");
+        write_item(project.path(), "PROJ-002", "Open item");
+        create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Stale queued task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+
+        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
+        let data = result.data.expect("next action");
+
+        assert_eq!(data.recommended_tool, "dispatch_next_work");
+        assert!(data.summary.contains("PROJ-002"));
     }
 
     #[test]
@@ -884,6 +930,37 @@ area: general
         )
         .expect("epic");
         project
+    }
+
+    fn init_git_with_closed_item(root: &Path, item_id: &str) {
+        git(root, &["init"]);
+        git(root, &["config", "user.name", "Platypus Test"]);
+        git(root, &["config", "user.email", "platypus@example.invalid"]);
+        fs::write(root.join("README.md"), "# Test\n").expect("readme");
+        git(root, &["add", "README.md"]);
+        git(
+            root,
+            &[
+                "commit",
+                "-m",
+                &format!("Close item\n\nPlatypus-Closes: {item_id}\nPlatypus-Verification: test"),
+            ],
+        );
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("git command");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn write_item(root: &Path, id: &str, title: &str) {
