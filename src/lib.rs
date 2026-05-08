@@ -1,6 +1,7 @@
 pub mod approvals;
 pub mod assignments;
 pub mod backlog;
+pub mod bootstrap;
 pub mod bundle;
 pub mod cli;
 pub mod config;

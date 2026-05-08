@@ -126,6 +126,22 @@ Run the installed stdio server:
 platypus-mcp
 ```
 
+Configure an MCP host to use the installed server:
+
+```bash
+platypus-mcp bootstrap codex
+platypus-mcp bootstrap claude
+platypus-mcp bootstrap opencode
+platypus-mcp bootstrap pi
+```
+
+Inspect before writing or check an existing setup:
+
+```bash
+platypus-mcp bootstrap codex --dry-run
+platypus-mcp bootstrap codex --check
+```
+
 During local development:
 
 ```bash
@@ -164,6 +180,15 @@ PLATYPUS_MCP_ROOT=/path/to/project cargo run
 ## Client Configuration
 
 Use stdio while the tool contract stabilizes.
+
+Prefer the bootstrap command for supported hosts:
+
+```bash
+platypus-mcp bootstrap codex
+platypus-mcp bootstrap claude
+platypus-mcp bootstrap opencode
+platypus-mcp bootstrap pi
+```
 
 Codex-style configuration:
 
