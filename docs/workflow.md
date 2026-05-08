@@ -71,6 +71,22 @@ the executable snapshot for planning and dispatch. Each reference records a
 provider, kind, stable id, and either a URL or locator, with optional import
 timestamp and source hash.
 
+## External Reporting
+
+External trackers are never mutated implicitly. When a backlog item carries an
+external reference, use:
+
+1. `draft_external_report` to create a provider-neutral report from local
+   backlog, task, and evidence state.
+2. `request_external_report_approval` to make the intended external mutation
+   explicit and durable.
+3. Have the MCP host or approved provider plugin send the report after approval.
+4. `record_external_report_dispatch` to record the send result, outbound
+   reference, provider error if any, and external-report evidence.
+
+This keeps provider credentials outside Platypus state while preserving an
+auditable local record of what was approved and reported.
+
 ## Task Planning
 
 Use `classify_planning_needs` or `inspect_work_queue` to determine whether an

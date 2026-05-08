@@ -16,7 +16,8 @@ Use `inspect_work_queue` to choose executable backlog work and
 full planning. Use `next_safe_action` as the host-facing guide for the next safe
 lifecycle tool call.
 The preferred workflow is documented in [docs/workflow.md](docs/workflow.md),
-and the full tool surface is documented in [docs/tools.md](docs/tools.md).
+client setup is documented in [docs/install.md](docs/install.md), and the full
+tool surface is documented in [docs/tools.md](docs/tools.md).
 
 Near-term work now focuses on tightening integration evidence, reconciliation,
 full lifecycle smoke coverage, and MCP host guidance. That roadmap is
@@ -55,6 +56,7 @@ and recoverable.
   [docs/storage.md](docs/storage.md)
 - `docs/diagrams.md`: repository-level Mermaid diagrams from multiple
   perspectives
+- `docs/install.md`: local build, smoke-test, Codex, and Claude configuration
 - `docs/workflow.md`: current MCP host workflow
 - `docs/roadmap.md`: product direction and near-term roadmap
 
@@ -120,7 +122,9 @@ make runner
 Invoke one MCP tool through the stdio contract for local smoke testing:
 
 ```bash
-cargo run -- tool --root "$PWD" inspect_work_queue '{"limit":5}'
+make smoke
+make smoke-queue
+make smoke-storage
 ```
 
 Inspect the current workflow integration policy:

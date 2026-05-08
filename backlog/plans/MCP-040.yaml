@@ -1,0 +1,54 @@
+item_id: MCP-040
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Users can configure Codex and Claude stdio MCP usage without hard-coded developer paths.
+- id: R2
+  text: The repository exposes simple smoke-test commands for binary and tool verification.
+- id: R3
+  text: Makefile help remains categorized and documents the new install/smoke targets.
+design:
+  summary: Add installation/client configuration docs and lightweight Makefile smoke helpers for the current stdio MCP workflow.
+  owned_surfaces:
+  - README.md
+  - docs/install.md
+  - docs/tools.md
+  - Makefile
+  - .codex
+  notes: Do not add curl installers or package publishing in this item.
+tasks:
+- id: MCP-040-T01
+  title: Add install and client configuration docs
+  goal: Document local development, cargo/path-based usage, Codex, Claude, and PLATYPUS_MCP_ROOT.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - README.md
+  - docs/install.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Docs use placeholders instead of developer-specific absolute paths.
+  - Codex and Claude examples use stdio MCP config.
+  notes: null
+- id: MCP-040-T02
+  title: Add smoke targets
+  goal: Add Makefile targets for local binary and MCP tool smoke testing.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-040-T01
+  owned_surfaces:
+  - Makefile
+  - docs/tools.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - make help lists the new smoke targets.
+  - A smoke target calls a real MCP tool through the binary.
+  notes: null

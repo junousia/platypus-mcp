@@ -1,0 +1,76 @@
+item_id: MCP-038
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: External report dispatch is approval-gated and fails closed when approval context is missing.
+- id: R2
+  text: Host-provided provider send results are recorded durably without storing credentials.
+- id: R3
+  text: Approved, denied, pending, failed, and retryable provider outcomes are represented explicitly.
+design:
+  summary: Add an approval request tool for report drafts and a separate dispatch-result recording tool that consumes approved report approvals and stores provider-neutral events/evidence.
+  owned_surfaces:
+  - src/integrations
+  - src/approvals.rs
+  - src/events.rs
+  - src/models.rs
+  - src/server.rs
+  - docs/tools.md
+  - tests/stdio_protocol.rs
+  notes: Do not implement provider network clients. The MCP host or plugin sends to providers after approval.
+tasks:
+- id: MCP-038-T01
+  title: Add report approval request tool
+  goal: Persist a durable approval request for a drafted external report.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - src/integrations
+  - src/models.rs
+  - src/server.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - The approval scope identifies external report dispatch.
+  - Approval metadata includes a stable report key and redacted report details.
+  notes: null
+- id: MCP-038-T02
+  title: Record approved report dispatch results
+  goal: Consume an approved report approval and persist host-provided send outcomes.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-038-T01
+  owned_surfaces:
+  - src/integrations
+  - src/events.rs
+  - src/models.rs
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Approved dispatch records event and evidence.
+  - Pending, denied, missing, and mismatched approvals do not record dispatch success.
+  - Failed provider results are persisted with retry guidance and without secrets.
+  notes: null
+- id: MCP-038-T03
+  title: Document approved report dispatch
+  goal: Document where provider clients live and how approvals gate external mutations.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-038-T02
+  owned_surfaces:
+  - docs/tools.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Docs state provider writes are performed by hosts/plugins, not hidden core behavior.
+  notes: null

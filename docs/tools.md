@@ -90,6 +90,14 @@ The helper exits non-zero when the MCP tool returns a failed structured result
 or when the protocol call itself fails. It is intended for local smoke testing
 and scripts; MCP hosts should still call tools through MCP directly.
 
+The Makefile wraps the most common smoke checks:
+
+```bash
+make smoke
+make smoke-queue
+make smoke-storage
+```
+
 ### Backlog
 
 - `draft_backlog_items`: draft deterministic candidate backlog items from a
@@ -99,6 +107,12 @@ and scripts; MCP hosts should still call tools through MCP directly.
 - `import_github_issues`: import host-provided GitHub issue records as local
   backlog snapshots. The first implementation does not call GitHub directly;
   the MCP host supplies issue JSON from its approved GitHub integration.
+- `draft_external_report`: draft a provider-neutral external report payload
+  from local backlog, task, and evidence state without contacting a provider.
+- `request_external_report_approval`: create a durable approval request for a
+  drafted external report.
+- `record_external_report_dispatch`: record the approved host/plugin provider
+  dispatch result, including safe evidence and redacted metadata.
 - `create_backlog_item`: write one structured backlog item.
 - `validate_backlog`: validate backlog item and epic files.
 - `list_backlog`: list runnable backlog candidates.
@@ -209,6 +223,8 @@ trailers.
 - `approval_list` / `approval_respond`: inspect and resolve durable approval
   requests.
 - `events_replay`: replay bounded project/task/approval/worker events.
+- `storage_capability_probe`: run the documented storage backend contract probe
+  against an isolated in-memory backend.
 - `inspect_task_events`: replay task-scoped events.
 - `record_evidence` / `record_verification_evidence`: persist audit evidence.
 - `list_evidence`: inspect evidence records.

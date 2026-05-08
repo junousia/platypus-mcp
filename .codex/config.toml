@@ -26,6 +26,21 @@ approval_mode = "approve"
 [mcp_servers."platypus".tools.draft_backlog_items]
 approval_mode = "approve"
 
+[mcp_servers."platypus".tools.draft_external_backlog_items]
+approval_mode = "approve"
+
+[mcp_servers."platypus".tools.import_github_issues]
+approval_mode = "approve"
+
+[mcp_servers."platypus".tools.draft_external_report]
+approval_mode = "approve"
+
+[mcp_servers."platypus".tools.request_external_report_approval]
+approval_mode = "approve"
+
+[mcp_servers."platypus".tools.record_external_report_dispatch]
+approval_mode = "approve"
+
 [mcp_servers."platypus".tools.create_backlog_item]
 approval_mode = "approve"
 
@@ -111,6 +126,9 @@ approval_mode = "approve"
 approval_mode = "approve"
 
 [mcp_servers."platypus".tools.events_replay]
+approval_mode = "approve"
+
+[mcp_servers."platypus".tools.storage_capability_probe]
 approval_mode = "approve"
 
 [mcp_servers."platypus".tools.record_evidence]

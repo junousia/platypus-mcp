@@ -180,6 +180,11 @@ existing repository traits:
 5. Run a migration check twice and verify repeatability.
 6. Reconcile a project snapshot using only trait-level data.
 
+The current probe is exposed as `storage_capability_probe`. It resolves the
+project root for identity reporting, then runs the backend checks against an
+isolated in-memory SQLite database so the diagnostic does not mutate project
+runtime state.
+
 Passing this checklist is the first implementation step toward shared runtime
 storage. It keeps local-first SQLite support intact while preventing any future
 backend from weakening the MCP contract.
