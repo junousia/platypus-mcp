@@ -12,6 +12,7 @@ categories = ["command-line-utilities", "development-tools"]
 exclude = [
     ".agents/",
     ".codex/",
+    ".github/",
     ".platy/",
     "/AGENTS.md",
     "/WORKFLOW.md",
