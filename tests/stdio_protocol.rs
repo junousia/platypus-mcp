@@ -190,6 +190,7 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
         .collect();
 
     assert!(resource_uris.contains(&"platypus://guidance/workflow"));
+    assert!(resource_uris.contains(&"platypus://guidance/spec-driven-development"));
     assert!(resource_uris.contains(&"platypus://guidance/project-status"));
     assert!(resource_uris.contains(&"platypus://guidance/backlog-authoring"));
     assert!(resource_uris.contains(&"platypus://guidance/worker-handoff"));
@@ -210,6 +211,17 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("reconcile_project"));
     assert!(text.contains("verification evidence"));
 
+    let spec = client
+        .read_resource(ReadResourceRequestParams {
+            meta: None,
+            uri: "platypus://guidance/spec-driven-development".to_string(),
+        })
+        .await?;
+    let text = resource_text(&spec.contents[0]);
+    assert!(text.contains("coding host"));
+    assert!(text.contains("draft_backlog_items"));
+    assert!(text.contains("write_task_plan"));
+
     client.cancel().await?;
     Ok(())
 }
@@ -222,6 +234,7 @@ async fn stdio_server_lists_and_returns_host_guidance_prompts() -> anyhow::Resul
     let prompt_names: Vec<&str> = prompts.iter().map(|prompt| prompt.name.as_str()).collect();
 
     assert!(prompt_names.contains(&"platypus-workflow"));
+    assert!(prompt_names.contains(&"platypus-spec-driven-development"));
     assert!(prompt_names.contains(&"platypus-project-status"));
     assert!(prompt_names.contains(&"platypus-backlog-authoring"));
     assert!(prompt_names.contains(&"platypus-worker-handoff"));
@@ -241,6 +254,18 @@ async fn stdio_server_lists_and_returns_host_guidance_prompts() -> anyhow::Resul
     assert!(text.contains("record_verification_evidence"));
     assert!(text.contains("integrate_worker_result"));
     assert!(text.contains("Platypus-Closes"));
+
+    let prompt = client
+        .get_prompt(GetPromptRequestParams {
+            meta: None,
+            name: "platypus-spec-driven-development".to_string(),
+            arguments: None,
+        })
+        .await?;
+    let text = prompt_text(&prompt.messages[0]);
+    assert!(text.contains("controlled loop"));
+    assert!(text.contains("validate_backlog"));
+    assert!(text.contains("reconcile_project"));
 
     client.cancel().await?;
     Ok(())

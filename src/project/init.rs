@@ -130,6 +130,7 @@ fn scaffold_entry(
 
 fn scaffold_files(project_name: &str) -> Vec<(&'static str, String)> {
     vec![
+        ("AGENTS.md", agents_doc()),
         ("platy.yaml", project_config(project_name)),
         ("WORKFLOW.md", workflow_doc()),
         ("backlog/README.md", backlog_readme()),
@@ -148,12 +149,98 @@ fn project_config(project_name: &str) -> String {
 }
 
 fn workflow_doc() -> String {
-    "# Workflow\n\nUse Platypus MCP tools to inspect, shape, validate, and execute project work.\n"
-        .to_string()
+    r#"# Workflow
+
+This project uses Platypus MCP for spec-driven development. Free-form goals
+should become structured backlog items, non-trivial backlog items should become
+reviewable task plans, and implementation should run through isolated task
+worktrees before integration.
+
+## Operating Loop
+
+1. Inspect setup with `doctor_snapshot`, `inspect_status`, and
+   `next_safe_action`.
+2. Turn goals into declarative backlog items with `draft_backlog_items`,
+   `create_backlog_item`, and `validate_backlog`.
+3. Inspect the queue with `inspect_work_queue` and
+   `classify_planning_needs`.
+4. For standard or full work, create a strict task plan with
+   `draft_task_plan`, `write_task_plan`, and `validate_task_plan`.
+5. Dispatch and prepare work with `dispatch_next_work` and
+   `prepare_worker_handoff`.
+6. Run implementation in the assigned worktree, not in the manager workspace.
+7. Record progress, verification evidence, findings, and final result before
+   integrating.
+8. Use `integrate_worker_result` and `reconcile_project` to close the loop.
+
+## State Rules
+
+- Backlog items describe intent, constraints, dependencies, owned surfaces, and
+  acceptance criteria.
+- Task plans describe requirements, design, and executable task slices.
+- Runtime state belongs in Platypus state, task events, evidence, findings, and
+  Git trailers, not in backlog markdown or task-plan YAML.
+- When uncertain, inspect before mutating and return structured recovery
+  guidance to the user.
+"#
+    .to_string()
 }
 
 fn backlog_readme() -> String {
-    "# Backlog\n\nStructured Platypus backlog items live in `backlog/items/`.\nReviewable task plans for non-trivial items live in `backlog/plans/`.\nUse `list_backlog` and `next_safe_action` to compute the current queue from item metadata and Git closure trailers.\n".to_string()
+    r#"# Backlog
+
+Structured Platypus backlog items live in `backlog/items/`.
+Reviewable task plans for non-trivial items live in `backlog/plans/`.
+
+Use the Platypus MCP tools to keep planning reproducible:
+
+- `draft_backlog_items` turns a product goal into candidate work.
+- `create_backlog_item` writes accepted backlog items.
+- `validate_backlog` checks item and epic schema.
+- `inspect_work_queue` shows runnable items and task-plan requirements.
+- `draft_task_plan`, `write_task_plan`, and `validate_task_plan` make
+  non-trivial work executable.
+- `next_safe_action` computes the next lifecycle step from current state.
+
+Do not manually maintain queue indexes or runtime status in markdown. Queue
+state is computed from backlog metadata, task-plan readiness, Platypus runtime
+state, and Git closure trailers.
+"#
+    .to_string()
+}
+
+fn agents_doc() -> String {
+    r#"# Agent Instructions
+
+This repository uses Platypus MCP as its spec-driven development control
+surface. When the MCP server is available, prefer Platypus tools over ad hoc
+file edits or informal task tracking.
+
+## Default Flow
+
+1. Inspect first: `doctor_snapshot`, `inspect_status`, and `next_safe_action`.
+2. Convert user goals into backlog candidates with `draft_backlog_items`.
+3. Persist approved work with `create_backlog_item` and validate with
+   `validate_backlog`.
+4. Use `inspect_work_queue` and `classify_planning_needs` before dispatch.
+5. For standard or full work, create and validate `backlog/plans/<ITEM>.yaml`
+   with `draft_task_plan`, `write_task_plan`, and `validate_task_plan`.
+6. Dispatch through `dispatch_next_work` and prepare worker context with
+   `prepare_worker_handoff`.
+7. Implement inside the assigned worktree, record progress and evidence, then
+   integrate through Platypus.
+
+## Rules
+
+- Keep backlog items declarative; do not add runtime status, task attempts, PR
+  metadata, or closure fields.
+- Keep task plans focused on requirements, design, and executable task slices;
+  do not store implementation diary or completion state in plan YAML.
+- Use `record_finding` for limitations and required follow-up work.
+- Use `record_verification_evidence` before claiming verified completion.
+- Use `reconcile_project` when state is unclear.
+"#
+    .to_string()
 }
 
 fn general_epic() -> String {
@@ -203,9 +290,21 @@ mod tests {
         let data = result.data.expect("data");
         assert_eq!(data.skipped, 0);
         assert!(temp.path().join("platy.yaml").is_file());
+        assert!(temp.path().join("AGENTS.md").is_file());
         let config = fs::read_to_string(temp.path().join("platy.yaml")).expect("config");
         assert!(config.contains("workflow:"));
         assert!(config.contains("merge_style: merge_commit"));
+        let agents = fs::read_to_string(temp.path().join("AGENTS.md")).expect("agents");
+        assert!(agents.contains("spec-driven development"));
+        assert!(agents.contains("next_safe_action"));
+        assert!(agents.contains("draft_task_plan"));
+        let workflow = fs::read_to_string(temp.path().join("WORKFLOW.md")).expect("workflow");
+        assert!(workflow.contains("spec-driven development"));
+        assert!(workflow.contains("dispatch_next_work"));
+        let backlog_readme =
+            fs::read_to_string(temp.path().join("backlog/README.md")).expect("backlog readme");
+        assert!(backlog_readme.contains("inspect_work_queue"));
+        assert!(backlog_readme.contains("task-plan requirements"));
         assert!(temp.path().join("backlog/items").is_dir());
         assert!(temp.path().join("backlog/plans").is_dir());
         assert!(!temp.path().join("backlog/index.md").exists());

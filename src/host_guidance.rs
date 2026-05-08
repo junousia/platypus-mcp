@@ -10,6 +10,7 @@ pub struct GuidanceEntry {
 }
 
 pub const WORKFLOW_URI: &str = "platypus://guidance/workflow";
+pub const SPEC_DRIVEN_URI: &str = "platypus://guidance/spec-driven-development";
 pub const PROJECT_STATUS_URI: &str = "platypus://guidance/project-status";
 pub const BACKLOG_AUTHORING_URI: &str = "platypus://guidance/backlog-authoring";
 pub const WORKER_HANDOFF_URI: &str = "platypus://guidance/worker-handoff";
@@ -41,6 +42,36 @@ model turns, and external worker execution.
 Safety gates: keep runtime state in `.platy/platypus.sqlite3`, keep backlog
 markdown declarative, operate workers in task worktrees, and do not bypass
 verification evidence before integration.
+"#;
+
+const SPEC_DRIVEN_TEXT: &str = r#"# Spec-Driven Development Guidance
+
+Platypus should make structured development the easy path for any MCP-enabled
+coding host. When the user gives a goal such as "build a web app", do not jump
+straight to broad edits. Convert the goal into a controlled loop:
+
+1. Inspect the project with `doctor_snapshot`, `inspect_status`, and
+   `next_safe_action`.
+2. Draft a small backlog set with `draft_backlog_items`. Keep items
+   independently reviewable and executable.
+3. Persist only accepted items with `create_backlog_item`; then run
+   `validate_backlog`.
+4. Use `inspect_work_queue` and `classify_planning_needs` to determine whether
+   the next item is direct, standard, or full.
+5. For standard or full items, create a strict task plan with
+   `draft_task_plan`, `write_task_plan`, and `validate_task_plan`.
+6. Dispatch with `dispatch_next_work`, prepare handoff with
+   `prepare_worker_handoff`, and run implementation in the assigned worktree.
+7. Record progress, verification evidence, findings, and completion through
+   Platypus tools.
+8. Integrate with `integrate_worker_result`, then reconcile with
+   `reconcile_project`.
+
+The host should present this as natural assistance, not as a manual ceremony:
+explain what is being structured, ask for approval only when choices matter,
+and use tool results as the source of truth. Backlog markdown and task-plan
+YAML are planning artifacts only; runtime state belongs in Platypus state,
+events, evidence, findings, and Git trailers.
 "#;
 
 const PROJECT_STATUS_TEXT: &str = r#"# Project Status Guidance
@@ -145,6 +176,13 @@ pub const GUIDANCE: &[GuidanceEntry] = &[
         title: "Platypus Workflow",
         description: "Recommended host workflow and safety gates.",
         text: WORKFLOW_TEXT,
+    },
+    GuidanceEntry {
+        name: "platypus-spec-driven-development",
+        uri: SPEC_DRIVEN_URI,
+        title: "Spec-Driven Development",
+        description: "How hosts turn free-form goals into controlled Platypus work.",
+        text: SPEC_DRIVEN_TEXT,
     },
     GuidanceEntry {
         name: "platypus-project-status",

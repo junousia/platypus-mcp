@@ -18,6 +18,8 @@ that fits their UI.
 Resources:
 
 - `platypus://guidance/workflow`: end-to-end host workflow and safety gates.
+- `platypus://guidance/spec-driven-development`: goal intake, backlog
+  shaping, task planning, dispatch, evidence, and integration loop.
 - `platypus://guidance/project-status`: project inspection and setup blockers.
 - `platypus://guidance/backlog-authoring`: declarative backlog authoring rules.
 - `platypus://guidance/worker-handoff`: worker dispatch, handoff, progress, and
@@ -26,9 +28,9 @@ Resources:
 - `platypus://guidance/recovery`: inspection and recovery commands.
 
 Equivalent prompts are available as `platypus-workflow`,
-`platypus-project-status`, `platypus-backlog-authoring`,
-`platypus-worker-handoff`, `platypus-integration-review`, and
-`platypus-recovery`.
+`platypus-spec-driven-development`, `platypus-project-status`,
+`platypus-backlog-authoring`, `platypus-worker-handoff`,
+`platypus-integration-review`, and `platypus-recovery`.
 
 ## Principles
 
@@ -50,6 +52,10 @@ Equivalent prompts are available as `platypus-workflow`,
    and recovery guidance.
 3. Configure manager and worker profiles with `configure_agent_profile`.
 4. Inspect workflow policy with `inspect_workflow_config`.
+
+`init_project` also installs project-local agent and workflow guidance. That is
+intentional: once an MCP host enters an initialized directory, normal goal
+requests should naturally flow through Platypus instead of ad hoc edits.
 
 ## Backlog Shaping
 
