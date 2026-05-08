@@ -72,6 +72,52 @@ pub(super) fn claim_task_for_assignment(
     Ok(ClaimOutcome::Claimed(claimed))
 }
 
+pub(super) fn record_handoff_failure_and_release(
+    connection: &mut rusqlite::Connection,
+    task_id: &str,
+    claimant: &str,
+    stage: &str,
+    detail: &str,
+) -> Result<TaskRecord, String> {
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    insert_task_event(
+        &transaction,
+        task_id,
+        "worker_assignment_failed",
+        &format!("Worker handoff failed while {stage}."),
+        Some(json!({
+            "claimant": claimant,
+            "stage": stage,
+            "detail": detail
+        })),
+    )
+    .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            r#"
+            UPDATE tasks
+            SET status = 'queued',
+                claimed_by = NULL,
+                claimed_at = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?1
+              AND status = 'claimed'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM worker_assignments
+                  WHERE task_id = ?1 AND status IN ('prepared', 'running')
+              )
+            "#,
+            params![task_id],
+        )
+        .map_err(|error| error.to_string())?;
+    let task = select_task(&transaction, task_id).map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(task)
+}
+
 pub(super) fn insert_task_event(
     connection: &rusqlite::Connection,
     task_id: &str,

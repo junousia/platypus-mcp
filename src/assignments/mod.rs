@@ -18,7 +18,8 @@ mod store;
 mod validation;
 
 use store::{
-    claim_task_for_assignment, insert_assignment, insert_task_event, load_assignment, ClaimOutcome,
+    claim_task_for_assignment, insert_assignment, insert_task_event, load_assignment,
+    record_handoff_failure_and_release, ClaimOutcome,
 };
 use validation::{
     clean_changed_files, clean_event_type, clean_optional, clean_required, clean_terminal_status,
@@ -102,11 +103,19 @@ pub fn prepare_worker_assignment(
             ..
         } => data,
         ActionResult { error, summary, .. } => {
+            record_handoff_failure(
+                default_root,
+                &root_string,
+                &task.id,
+                &claimant,
+                "creating the worktree",
+                &error.clone().unwrap_or_else(|| summary.clone()),
+            );
             return ActionResult::failed(
                 action,
                 "Could not prepare task worktree.",
                 error.unwrap_or(summary),
-            )
+            );
         }
     };
 
@@ -124,22 +133,38 @@ pub fn prepare_worker_assignment(
             ..
         } => bundle,
         ActionResult { error, summary, .. } => {
+            record_handoff_failure(
+                default_root,
+                &root_string,
+                &task.id,
+                &claimant,
+                "generating the worker bundle",
+                &error.clone().unwrap_or_else(|| summary.clone()),
+            );
             return ActionResult::failed(
                 action,
                 "Could not generate assignment bundle.",
                 error.unwrap_or(summary),
-            )
+            );
         }
     };
 
     let storage = match storage::connect(default_root, Some(root_string.as_str())) {
         Ok(storage) => storage,
         Err(error) => {
+            record_handoff_failure(
+                default_root,
+                &root_string,
+                &task.id,
+                &claimant,
+                "reopening assignment storage",
+                &error.to_string(),
+            );
             return ActionResult::failed(
                 action,
                 "Could not reopen assignment storage.",
                 error.to_string(),
-            )
+            );
         }
     };
     let assignment = match insert_assignment(
@@ -151,7 +176,16 @@ pub fn prepare_worker_assignment(
     ) {
         Ok(assignment) => assignment,
         Err(error) => {
-            return ActionResult::failed(action, "Could not persist worker assignment.", error)
+            drop(storage);
+            record_handoff_failure(
+                default_root,
+                &root_string,
+                &task.id,
+                &claimant,
+                "persisting the worker assignment",
+                &error,
+            );
+            return ActionResult::failed(action, "Could not persist worker assignment.", error);
         }
     };
     if let Err(error) = tasks::record_task_event(
@@ -180,6 +214,25 @@ pub fn prepare_worker_assignment(
             assignment,
         },
     )
+}
+
+fn record_handoff_failure(
+    default_root: &Path,
+    root: &str,
+    task_id: &str,
+    claimant: &str,
+    stage: &str,
+    detail: &str,
+) {
+    if let Ok(mut storage) = storage::connect(default_root, Some(root)) {
+        let _ = record_handoff_failure_and_release(
+            &mut storage.connection,
+            task_id,
+            claimant,
+            stage,
+            detail,
+        );
+    }
 }
 
 pub fn inspect_worker_assignment(
