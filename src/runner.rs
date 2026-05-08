@@ -1,15 +1,17 @@
 use crate::{
-    bundle,
+    assignments,
     models::{
-        ActionResult, ActionStatus, ClaimNextTaskParams, GenerateTaskBundleParams,
-        RunnerPrepareParams, RunnerReportData, RunnerTaskSummary, WorktreeCreateParams,
+        ActionResult, ActionStatus, CompleteWorkerExecutionParams, PrepareWorkerAssignmentParams,
+        RecordWorkerEventParams, RunnerPrepareParams, RunnerReportData, RunnerTaskSummary,
+        StartWorkerExecutionParams,
     },
     storage,
     tasks::{self, NewTaskEvent},
-    workers::{WorkerAdapter, WorkerEvent, WorkerRequest},
-    workspace,
+    workers::{WorkerAdapter, WorkerEvent, WorkerExitStatus, WorkerRequest},
 };
 use anyhow::Result;
+use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 const DEFAULT_MAX_TASKS: usize = 1;
@@ -53,70 +55,43 @@ pub fn prepare_next(
     };
 
     for _ in 0..requested {
-        let claimed = tasks::claim_next_task(
+        let prepared = assignments::prepare_worker_assignment(
             default_root,
-            ClaimNextTaskParams {
+            PrepareWorkerAssignmentParams {
                 root: Some(root.clone()),
+                task_id: None,
                 worker: params.worker.clone(),
                 claimant: params
                     .claimant
                     .clone()
                     .or_else(|| Some("local-runner".to_string())),
+                base_ref: None,
+                verification_command: params.verification_command.clone(),
             },
         );
-        let Some(claimed_data) = claimed.data else {
-            report.stopped_reason = match claimed.status {
+        let Some(prepared_data) = prepared.data else {
+            report.stopped_reason = match prepared.status {
                 ActionStatus::Skipped => "no_queued_tasks".to_string(),
-                ActionStatus::Failed => "claim_failed".to_string(),
-                ActionStatus::Completed => "claim_missing_data".to_string(),
+                ActionStatus::Failed => "prepare_failed".to_string(),
+                ActionStatus::Completed => "prepare_missing_data".to_string(),
             };
             return finish_report(action, report);
         };
-        let task = claimed_data.task;
+        let assignment = prepared_data.assignment;
         report.claimed += 1;
         if let Err(error) = record_event(
             default_root,
             &root,
-            &task.id,
+            &assignment.task_id,
             "runner_prepare_started",
             "Runner started task preparation.",
         ) {
             return error;
         }
-
-        let worktree = workspace::worktree_create(
-            default_root,
-            WorktreeCreateParams {
-                root: Some(root.clone()),
-                task_id: task.id.clone(),
-                base_ref: None,
-            },
-        );
-        let Some(worktree_data) = worktree.data else {
-            report.stopped_reason = "worktree_failed".to_string();
-            return finish_report(action, report);
-        };
-        if matches!(worktree.status, ActionStatus::Failed) {
-            report.stopped_reason = "worktree_failed".to_string();
-            return finish_report(action, report);
-        }
-
-        let bundle = bundle::generate_task_bundle(
-            default_root,
-            GenerateTaskBundleParams {
-                root: Some(root.clone()),
-                task_id: task.id.clone(),
-                verification_command: params.verification_command.clone(),
-            },
-        );
-        let Some(bundle_data) = bundle.data else {
-            report.stopped_reason = "bundle_failed".to_string();
-            return finish_report(action, report);
-        };
         if let Err(error) = record_event(
             default_root,
             &root,
-            &task.id,
+            &assignment.task_id,
             "task_bundle_generated",
             "Generated task bundle for worker execution.",
         ) {
@@ -125,7 +100,7 @@ pub fn prepare_next(
         if let Err(error) = record_event(
             default_root,
             &root,
-            &task.id,
+            &assignment.task_id,
             "runner_prepare_stopped",
             "Runner stopped after preparing task.",
         ) {
@@ -133,11 +108,12 @@ pub fn prepare_next(
         }
         report.prepared += 1;
         report.tasks.push(RunnerTaskSummary {
-            task_id: task.id,
-            item_id: task.source_item_id,
-            status: "claimed".to_string(),
-            workspace_path: Some(worktree_data.path),
-            bundle_generated: bundle_data.bundle.task_id == worktree_data.task_id,
+            assignment_id: Some(assignment.id),
+            task_id: assignment.task_id,
+            item_id: assignment.bundle.item_id,
+            status: assignment.status,
+            workspace_path: Some(assignment.worktree_path),
+            bundle_generated: true,
         });
     }
 
@@ -150,7 +126,6 @@ pub fn run_with_adapter(
     adapter: &dyn WorkerAdapter,
 ) -> ActionResult<RunnerReportData> {
     let action = "runner_run_with_adapter";
-    let verification_command = params.verification_command.clone();
     let prepared = prepare_next(default_root, params);
     let Some(mut report) = prepared.data else {
         return ActionResult::skipped(
@@ -171,79 +146,63 @@ pub fn run_with_adapter(
     }
 
     for task_summary in &mut report.tasks {
-        let task_id = task_summary.task_id.clone();
-        let bundle = bundle::generate_task_bundle(
-            default_root,
-            GenerateTaskBundleParams {
-                root: Some(report.root.clone()),
-                task_id: task_id.clone(),
-                verification_command: verification_command.clone(),
-            },
-        );
-        let Some(bundle_data) = bundle.data else {
-            report.stopped_reason = "adapter_bundle_failed".to_string();
+        let Some(assignment_id) = task_summary.assignment_id.clone() else {
+            report.stopped_reason = "assignment_missing".to_string();
             return finish_report(action, report);
         };
-        if let Err(error) = tasks::mark_task_running(default_root, Some(&report.root), &task_id) {
-            return ActionResult::failed(action, "Could not mark task running.", error);
-        }
-        if let Err(error) = record_event_payload(
+        let started = assignments::start_worker_execution(
             default_root,
-            &report.root,
-            &task_id,
-            "worker_started",
-            &format!("Worker `{}` started.", adapter.name()),
-            Some(serde_json::json!({ "worker": adapter.name() })),
-        ) {
-            return error;
-        }
+            StartWorkerExecutionParams {
+                root: Some(report.root.clone()),
+                assignment_id: assignment_id.clone(),
+                worker_session: Some(format!("runner:{}", adapter.name())),
+            },
+        );
+        let Some(started_data) = started.data else {
+            report.stopped_reason = "adapter_start_failed".to_string();
+            return finish_report(action, report);
+        };
+        let assignment = started_data.assignment;
+        task_summary.status = assignment.status.clone();
 
         let mut emitted_events = Vec::new();
         let worker_result = adapter.run(
             WorkerRequest {
-                task_id: task_id.clone(),
-                item_id: task_summary.item_id.clone(),
-                title: bundle_data.bundle.title.clone(),
-                workspace_path: bundle_data.bundle.workspace_path.clone(),
-                brief: bundle_data.bundle.brief,
+                task_id: assignment.task_id.clone(),
+                item_id: assignment.bundle.item_id.clone(),
+                title: assignment.bundle.title.clone(),
+                workspace_path: assignment.bundle.workspace_path.clone(),
+                brief: assignment.bundle.brief.clone(),
             },
             &mut |event| emitted_events.push(event),
         );
         for event in emitted_events {
-            if let Err(error) = record_worker_event(default_root, &report.root, &task_id, event) {
+            if let Err(error) =
+                record_assignment_worker_event(default_root, &report.root, &assignment_id, event)
+            {
                 return error;
             }
         }
-        if let Err(error) = record_event_payload(
+        let verification_status = worker_result.verification_status.or_else(|| {
+            matches!(worker_result.status, WorkerExitStatus::Completed)
+                .then(|| "not_run".to_string())
+        });
+        let completed = assignments::complete_worker_execution(
             default_root,
-            &report.root,
-            &task_id,
-            "worker_result",
-            &worker_result.summary,
-            Some(serde_json::json!({
-                "worker": adapter.name(),
-                "status": worker_result.status.as_task_status(),
-                "changed_files": &worker_result.changed_files,
-                "verification_status": worker_result.verification_status.as_deref(),
-                "findings": worker_result.findings.iter().map(|finding| serde_json::json!({
-                    "title": finding.title.as_str(),
-                    "summary": finding.summary.as_str(),
-                    "severity": finding.severity.as_deref(),
-                    "required": finding.required
-                })).collect::<Vec<_>>()
-            })),
-        ) {
-            return error;
-        }
-        match tasks::finish_task(
-            default_root,
-            Some(&report.root),
-            &task_id,
-            worker_result.status.as_task_status(),
-        ) {
-            Ok(task) => task_summary.status = task.status,
-            Err(error) => return ActionResult::failed(action, "Could not finish task.", error),
-        }
+            CompleteWorkerExecutionParams {
+                root: Some(report.root.clone()),
+                assignment_id,
+                status: worker_result.status.as_task_status().to_string(),
+                summary: worker_result.summary,
+                changed_files: worker_result.changed_files,
+                verification_status,
+            },
+        );
+        let Some(completed_data) = completed.data else {
+            report.stopped_reason = "adapter_completion_failed".to_string();
+            return finish_report(action, report);
+        };
+        task_summary.status = completed_data.assignment.status;
     }
 
     report.stopped_reason = "adapter_completed".to_string();
@@ -316,20 +275,42 @@ fn record_event(
     record_event_payload(default_root, root, task_id, event_type, summary, None)
 }
 
-fn record_worker_event(
+fn record_assignment_worker_event(
     default_root: &Path,
     root: &str,
-    task_id: &str,
+    assignment_id: &str,
     event: WorkerEvent,
 ) -> Result<(), ActionResult<RunnerReportData>> {
-    record_event_payload(
+    let recorded = assignments::record_worker_event(
         default_root,
-        root,
-        task_id,
-        &event.event_type,
-        &event.summary,
-        event.payload,
-    )
+        RecordWorkerEventParams {
+            root: Some(root.to_string()),
+            assignment_id: assignment_id.to_string(),
+            event_type: event.event_type,
+            summary: event.summary,
+            payload: payload_map(event.payload),
+        },
+    );
+    match recorded.status {
+        ActionStatus::Completed => Ok(()),
+        ActionStatus::Skipped | ActionStatus::Failed => Err(ActionResult::failed(
+            "runner_run_with_adapter",
+            "Could not record worker event.",
+            recorded.error.unwrap_or(recorded.summary),
+        )),
+    }
+}
+
+fn payload_map(payload: Option<Value>) -> BTreeMap<String, Value> {
+    match payload {
+        Some(Value::Object(map)) => map.into_iter().collect(),
+        Some(value) => {
+            let mut map = Map::new();
+            map.insert("value".to_string(), value);
+            map.into_iter().collect()
+        }
+        None => BTreeMap::new(),
+    }
 }
 
 fn record_event_payload(
@@ -384,7 +365,11 @@ fn finish_report(action: &str, report: RunnerReportData) -> ActionResult<RunnerR
 mod tests {
     use super::*;
     use crate::workers::FakeWorkerAdapter;
-    use crate::{dispatch, models::RootParams, project};
+    use crate::{
+        dispatch,
+        models::{InspectWorkerAssignmentParams, RootParams},
+        project,
+    };
     use std::{fs, process::Command};
     use tempfile::TempDir;
 
@@ -410,9 +395,23 @@ mod tests {
         assert!(matches!(result.status, ActionStatus::Completed));
         assert_eq!(data.claimed, 1);
         assert_eq!(data.prepared, 1);
+        let assignment_id = data.tasks[0]
+            .assignment_id
+            .as_deref()
+            .expect("assignment id");
         assert_eq!(data.tasks[0].item_id, "PROJ-001");
         assert!(data.tasks[0].workspace_path.is_some());
         assert!(data.tasks[0].bundle_generated);
+
+        let inspected = assignments::inspect_worker_assignment(
+            project.path(),
+            InspectWorkerAssignmentParams {
+                root: None,
+                assignment_id: assignment_id.to_string(),
+            },
+        );
+        let inspected = inspected.data.expect("assignment");
+        assert_eq!(inspected.assignment.status, "prepared");
     }
 
     #[test]
@@ -462,12 +461,27 @@ mod tests {
             &FakeWorkerAdapter::completed("fake"),
         );
         let data = result.data.expect("runner data");
+        let assignment_id = data.tasks[0]
+            .assignment_id
+            .as_deref()
+            .expect("assignment id")
+            .to_string();
         let task = tasks::get_task_by_id(project.path(), None, &task_id).expect("task");
 
         assert!(matches!(result.status, ActionStatus::Completed));
         assert_eq!(data.tasks[0].status, "completed");
         assert_eq!(task.status, "completed");
         assert!(task.finished_at.is_some());
+
+        let inspected = assignments::inspect_worker_assignment(
+            project.path(),
+            InspectWorkerAssignmentParams {
+                root: None,
+                assignment_id,
+            },
+        );
+        let inspected = inspected.data.expect("assignment");
+        assert_eq!(inspected.assignment.status, "completed");
     }
 
     fn project_with_backlog() -> TempDir {
@@ -501,7 +515,7 @@ epic: general
 depends_on: []
 suggested_worker: coder
 owned_surfaces:
-- src/runner.rs
+- README.md
 ---
 
 # PROJ-001 Prepare task

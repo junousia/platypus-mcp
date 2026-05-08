@@ -165,6 +165,7 @@ pub struct RecordExternalReportDispatchParams {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[schemars(inline)]
 #[serde(deny_unknown_fields)]
 pub struct GitHubIssueRecord {
     pub number: u64,
@@ -181,6 +182,7 @@ pub struct GitHubIssueRecord {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[schemars(inline)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalWorkRecord {
     pub kind: String,
@@ -223,6 +225,7 @@ pub struct CreateBacklogItemParams {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
+#[schemars(inline)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalRef {
     pub provider: String,
@@ -235,6 +238,7 @@ pub struct ExternalRef {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[schemars(inline)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalReportDraft {
     pub report_key: String,
@@ -905,6 +909,7 @@ pub struct TaskPlanValidationData {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[schemars(inline)]
 #[serde(deny_unknown_fields)]
 pub struct TaskPlanFile {
     pub item_id: String,
@@ -918,6 +923,7 @@ pub struct TaskPlanFile {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[schemars(inline)]
 #[serde(deny_unknown_fields)]
 pub struct TaskPlanRequirement {
     pub id: String,
@@ -925,6 +931,7 @@ pub struct TaskPlanRequirement {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[schemars(inline)]
 #[serde(deny_unknown_fields)]
 pub struct TaskPlanDesign {
     pub summary: String,
@@ -934,6 +941,7 @@ pub struct TaskPlanDesign {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+#[schemars(inline)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedTask {
     pub id: String,
@@ -1173,6 +1181,7 @@ pub struct RunnerReportData {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct RunnerTaskSummary {
+    pub assignment_id: Option<String>,
     pub task_id: String,
     pub item_id: String,
     pub status: String,

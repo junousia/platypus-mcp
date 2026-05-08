@@ -80,6 +80,24 @@ pub fn next_safe_action(
             ],
         );
     }
+    if let Ok(Some(task)) = claimed_task(&storage.connection) {
+        return completed(
+            action,
+            &root,
+            "prepare_worker_handoff",
+            format!(
+                "Task `{}` is already claimed and needs a worker handoff.",
+                task.id
+            ),
+            "Prepare a worker assignment for the claimed task before dispatching more backlog work.",
+            [
+                ("root", root.as_str()),
+                ("task_id", task.id.as_str()),
+                ("worker", task.worker.as_deref().unwrap_or("")),
+                ("claimant", "external-worker"),
+            ],
+        );
+    }
     if let Ok(Some(task)) = completed_task_without_verification(&storage.connection) {
         return completed(
             action,
@@ -305,6 +323,22 @@ fn queued_task(connection: &rusqlite::Connection) -> rusqlite::Result<Option<Tas
             FROM tasks
             WHERE status = 'queued'
             ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            "#,
+            [],
+            row_to_task_hint,
+        )
+        .optional()
+}
+
+fn claimed_task(connection: &rusqlite::Connection) -> rusqlite::Result<Option<TaskHint>> {
+    connection
+        .query_row(
+            r#"
+            SELECT id, source_item_id, worker
+            FROM tasks
+            WHERE status = 'claimed'
+            ORDER BY updated_at ASC, id ASC
             LIMIT 1
             "#,
             [],
@@ -660,6 +694,37 @@ mod tests {
 
         assert_eq!(data.recommended_tool, "prepare_worker_handoff");
         assert_eq!(data.params["task_id"], "PROJ-001-T001");
+    }
+
+    #[test]
+    fn recommends_preparing_claimed_task_before_dispatching_more_backlog() {
+        let project = backlog_project();
+        write_item(project.path(), "PROJ-001", "First item");
+        create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Claimed task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        crate::tasks::claim_next_task(
+            project.path(),
+            crate::models::ClaimNextTaskParams {
+                root: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("runner-1".to_string()),
+            },
+        );
+
+        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
+        let data = result.data.expect("next action");
+
+        assert_eq!(data.recommended_tool, "prepare_worker_handoff");
+        assert_eq!(data.params["task_id"], "PROJ-001-T001");
+        assert!(data.summary.contains("already claimed"));
     }
 
     #[test]

@@ -1308,6 +1308,46 @@ async fn stdio_server_runs_worker_assignment_lifecycle() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn stdio_server_runner_prepare_next_persists_worker_assignment() -> anyhow::Result<()> {
+    let project = assignment_project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let dispatched = call_tool_json(&client, "dispatch_next_work", json!({})).await?;
+    assert_stage_status("dispatch_next_work", &dispatched, "completed");
+    let task_id = string_at(&dispatched, &["data", "task", "id"], "task id");
+
+    let prepared = call_tool_json(
+        &client,
+        "runner_prepare_next",
+        json!({
+            "worker": "coder",
+            "claimant": "runner-stdio",
+            "max_tasks": 1,
+            "verification_command": ["make", "check"]
+        }),
+    )
+    .await?;
+    assert_stage_status("runner_prepare_next", &prepared, "completed");
+    let assignment_id = prepared["data"]["tasks"][0]["assignment_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("assignment id missing: {prepared:#}"))
+        .to_string();
+
+    let inspected = call_tool_json(
+        &client,
+        "inspect_worker_assignment",
+        json!({ "assignment_id": assignment_id }),
+    )
+    .await?;
+    assert_stage_status("inspect_worker_assignment", &inspected, "completed");
+    assert_eq!(inspected["data"]["assignment"]["task_id"], task_id);
+    assert_eq!(inspected["data"]["assignment"]["status"], "prepared");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::Result<()> {
     let project = assignment_project_fixture();
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
