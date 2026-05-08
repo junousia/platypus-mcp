@@ -101,6 +101,32 @@ Read operations such as `next_safe_action`, task or assignment inspection,
 event replay, findings validation, and reconciliation should return domain
 snapshots rather than backend rows.
 
+The initial Rust boundary lives in `src/state/`. It defines `ProjectState` as a
+compile-time contract only; existing tools still use the current SQLite-backed
+runtime path until later migration items move behavior behind the trait.
+
+Current `ProjectState` atomic methods:
+
+- `dispatch_work`
+- `prepare_assignment`
+- `start_execution`
+- `append_worker_event`
+- `complete_execution`
+- `resolve_approval`
+- `acquire_lease`
+- `integrate_result`
+
+Current `ProjectState` read methods:
+
+- `describe_backend`
+- `next_safe_action`
+- `inspect_task`
+- `inspect_assignment`
+- `replay_events`
+- `list_findings`
+- `validate_findings`
+- `reconcile_project`
+
 ## Current Migration State
 
 The current codebase still contains SQL-shaped repository traits and direct
