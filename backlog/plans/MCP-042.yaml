@@ -1,0 +1,30 @@
+item_id: MCP-042
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: 'Deliver the accepted outcome for backlog item MCP-042: Define domain-shaped project state boundary.'
+design:
+  summary: Implement a focused slice for MCP-042 while keeping runtime state outside the plan file.
+  owned_surfaces:
+  - docs/storage.md
+  - docs/diagrams.md
+  - README.md
+  notes: null
+tasks:
+- id: MCP-042-T01
+  title: Implement Define domain-shaped project state boundary
+  goal: Complete the implementation contract for MCP-042.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - docs/storage.md
+  - docs/diagrams.md
+  - README.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - MCP-042 acceptance criteria are satisfied.
+  notes: null
