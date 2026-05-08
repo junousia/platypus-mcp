@@ -127,3 +127,59 @@ must preserve the same semantics:
 
 The first guarded lifecycle path is dispatch: an active project lease for
 `project/root` blocks `dispatch_next_work`.
+
+## Distributed Backend Contract
+
+Any future non-SQLite runtime backend must preserve the same public MCP
+semantics as the local reference implementation. A backend is acceptable only
+when tool callers can keep using the same request/response schemas, recovery
+guidance, event replay, and reconciliation rules.
+
+Required guarantees:
+
+- **Transactions:** each lifecycle mutation that updates current state and
+  appends audit state must commit atomically or fail without partial success.
+- **Event ordering:** project events, task events, and runtime transitions must
+  have a stable per-project replay order. Cursors must be monotonic for a given
+  project.
+- **Idempotency:** retried mutating requests need stable conflict behavior.
+  Repeating an already-applied operation should either return the existing
+  result or a structured conflict that tells the host what to inspect next.
+- **Lease semantics:** active unexpired leases must block conflicting owners
+  across all connected hosts and workers. Expiry, renewal, and release must be
+  based on backend-observed time, not one client's wall clock alone.
+- **Project identity:** every runtime record must be scoped to an explicit
+  project identity derived from the project root/config. Two repositories must
+  not share runtime records unless explicitly configured to do so.
+- **Migrations:** schema changes must be versioned, forward-only by default,
+  and safe to run repeatedly. A failed migration must leave the previous
+  version usable or clearly mark the backend unavailable.
+- **Conflict handling:** duplicate tasks, duplicate approvals, stale leases,
+  and incompatible runtime versions must return backend-neutral
+  `RepositoryError` categories instead of leaking provider-specific errors.
+- **Recovery:** the backend must support enough inspection to explain pending
+  approvals, active leases, queued/running tasks, recent events, and unfinished
+  worker handoffs after a host crash.
+
+SQLite currently satisfies these requirements for one local project by using
+local transactions and a single `.platy/platypus.sqlite3` file. Shared backends
+such as Postgres would need to satisfy the same contract with stronger
+cross-process coordination and deployment/version checks.
+
+## Backend Evaluation Checklist
+
+Before adding a second backend, implement a small capability probe behind the
+existing repository traits:
+
+1. Initialize a project-scoped runtime namespace.
+2. Create, replay, and order events from two simulated clients.
+3. Acquire a lease from one client and verify a second client receives a
+   structured conflict.
+4. Retry one mutating operation and verify deterministic idempotency or conflict
+   output.
+5. Run a migration check twice and verify repeatability.
+6. Reconcile a project snapshot using only trait-level data.
+
+Passing this checklist is the first implementation step toward shared runtime
+storage. It keeps local-first SQLite support intact while preventing any future
+backend from weakening the MCP contract.
