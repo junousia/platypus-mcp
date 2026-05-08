@@ -1,29 +1,23 @@
 use crate::{
-    bundle,
     models::{
-        ActionResult, ActionStatus, CompleteWorkerExecutionParams, GenerateTaskBundleParams,
-        InspectWorkerAssignmentParams, PrepareWorkerAssignmentParams, RecordWorkerEventParams,
-        StartWorkerExecutionParams, TaskBundleData, WorkerAssignmentData,
-        WorkerAssignmentEventData, WorktreeCreateParams,
+        ActionResult, ActionStatus, CompleteWorkerExecutionParams, InspectWorkerAssignmentParams,
+        PrepareWorkerAssignmentParams, RecordWorkerEventParams, StartWorkerExecutionParams,
+        TaskEventRecord, WorkerAssignment, WorkerAssignmentData, WorkerAssignmentEventData,
     },
-    storage,
-    tasks::{self, NewTaskEvent},
-    workspace,
+    state::{
+        sqlite::SqliteProjectState, AppendWorkerEventCommand, AssignmentLifecycleState,
+        AssignmentQuery, AssignmentSnapshot, CompleteExecutionCommand, PrepareAssignmentCommand,
+        ProjectState, ProjectStateError, StartExecutionCommand, WorkerEventSnapshot,
+    },
 };
-use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::path::Path;
 
-mod store;
-mod validation;
+pub(crate) mod store;
+pub(crate) mod validation;
 
-use store::{
-    claim_task_for_assignment, insert_assignment, insert_task_event, load_assignment,
-    record_handoff_failure_and_release, ClaimOutcome,
-};
 use validation::{
     clean_changed_files, clean_event_type, clean_optional, clean_required, clean_terminal_status,
-    validate_changed_files,
 };
 
 const DEFAULT_CLAIMANT: &str = "external-worker";
@@ -33,205 +27,61 @@ pub fn prepare_worker_assignment(
     params: PrepareWorkerAssignmentParams,
 ) -> ActionResult<WorkerAssignmentData> {
     let action = "prepare_worker_assignment";
-    let claimant = clean_optional(params.claimant.clone())
+    let claimant = clean_optional(params.claimant)
         .or_else(|| clean_optional(params.worker.clone()))
         .unwrap_or_else(|| DEFAULT_CLAIMANT.to_string());
-    let worker_filter = clean_optional(params.worker.clone());
-    let task_id = clean_optional(params.task_id.clone());
-
-    let mut storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not open assignment storage.",
-                error.to_string(),
-            )
-        }
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
+        Err(error) => return state_error(action, "Could not open project state.", error),
     };
-    let root = storage.storage.root.clone();
-    let root_string = root.display().to_string();
-
-    let task = match claim_task_for_assignment(
-        &mut storage.connection,
-        task_id.as_deref(),
-        worker_filter.as_deref(),
-        &claimant,
-    ) {
-        Ok(ClaimOutcome::Claimed(task)) => task,
-        Ok(ClaimOutcome::Existing(assignment)) => return ActionResult {
+    match state.prepare_assignment(PrepareAssignmentCommand {
+        task_id: clean_optional(params.task_id),
+        worker: clean_optional(params.worker),
+        claimant,
+        base_ref: params.base_ref,
+        verification_command: params.verification_command,
+    }) {
+        Ok(snapshot) if snapshot.reused_existing => ActionResult {
             action: action.to_string(),
             status: ActionStatus::Skipped,
             summary: format!(
                 "Task `{}` already has active assignment `{}`.",
-                assignment.task_id, assignment.id
+                snapshot.task_id, snapshot.id
             ),
             next_action: Some(
                 "Use inspect_worker_assignment, then start or complete the existing assignment."
                     .to_string(),
             ),
             data: Some(WorkerAssignmentData {
-                root: root_string,
-                assignment,
+                root: state.root().display().to_string(),
+                assignment: worker_assignment(snapshot),
             }),
             error: None,
         },
-        Ok(ClaimOutcome::NoTask) => {
-            return ActionResult::skipped(
-                action,
-                "No queued task is available for assignment.",
-                "Dispatch runnable backlog work first.",
-            )
-        }
-        Err(error) => {
-            return ActionResult::failed(action, "Could not claim task for assignment.", error)
-        }
-    };
-    drop(storage);
-
-    let worktree = match workspace::worktree_create(
-        default_root,
-        WorktreeCreateParams {
-            root: Some(root_string.clone()),
-            task_id: task.id.clone(),
-            base_ref: params.base_ref,
-        },
-    ) {
-        ActionResult {
-            status: ActionStatus::Completed | ActionStatus::Skipped,
-            data: Some(data),
-            ..
-        } => data,
-        ActionResult { error, summary, .. } => {
-            record_handoff_failure(
-                default_root,
-                &root_string,
-                &task.id,
-                &claimant,
-                "creating the worktree",
-                &error.clone().unwrap_or_else(|| summary.clone()),
-            );
-            return ActionResult::failed(
-                action,
-                "Could not prepare task worktree.",
-                error.unwrap_or(summary),
-            );
-        }
-    };
-
-    let bundle = match bundle::generate_task_bundle(
-        default_root,
-        GenerateTaskBundleParams {
-            root: Some(root_string.clone()),
-            task_id: task.id.clone(),
-            verification_command: params.verification_command,
-        },
-    ) {
-        ActionResult {
-            status: ActionStatus::Completed,
-            data: Some(TaskBundleData { bundle, .. }),
-            ..
-        } => bundle,
-        ActionResult { error, summary, .. } => {
-            record_handoff_failure(
-                default_root,
-                &root_string,
-                &task.id,
-                &claimant,
-                "generating the worker bundle",
-                &error.clone().unwrap_or_else(|| summary.clone()),
-            );
-            return ActionResult::failed(
-                action,
-                "Could not generate assignment bundle.",
-                error.unwrap_or(summary),
-            );
-        }
-    };
-
-    let storage = match storage::connect(default_root, Some(root_string.as_str())) {
-        Ok(storage) => storage,
-        Err(error) => {
-            record_handoff_failure(
-                default_root,
-                &root_string,
-                &task.id,
-                &claimant,
-                "reopening assignment storage",
-                &error.to_string(),
-            );
-            return ActionResult::failed(
-                action,
-                "Could not reopen assignment storage.",
-                error.to_string(),
-            );
-        }
-    };
-    let assignment = match insert_assignment(
-        &storage.connection,
-        &task,
-        &worktree,
-        &bundle,
-        Some(claimant.as_str()),
-    ) {
-        Ok(assignment) => assignment,
-        Err(error) => {
-            drop(storage);
-            record_handoff_failure(
-                default_root,
-                &root_string,
-                &task.id,
-                &claimant,
-                "persisting the worker assignment",
-                &error,
-            );
-            return ActionResult::failed(action, "Could not persist worker assignment.", error);
-        }
-    };
-    if let Err(error) = tasks::record_task_event(
-        default_root,
-        Some(root_string.as_str()),
-        NewTaskEvent {
-            task_id: task.id.clone(),
-            sequence: None,
-            event_type: "worker_assignment_prepared".to_string(),
-            summary: format!("Prepared worker assignment `{}`.", assignment.id),
-            payload: Some(json!({
-                "assignment_id": assignment.id,
-                "worker": assignment.worker,
-                "worktree_path": assignment.worktree_path
-            })),
-        },
-    ) {
-        return ActionResult::failed(action, "Could not record assignment event.", error);
-    }
-
-    ActionResult::completed(
-        action,
-        format!("Prepared worker assignment `{}`.", assignment.id),
-        WorkerAssignmentData {
-            root: root_string,
-            assignment,
-        },
-    )
-}
-
-fn record_handoff_failure(
-    default_root: &Path,
-    root: &str,
-    task_id: &str,
-    claimant: &str,
-    stage: &str,
-    detail: &str,
-) {
-    if let Ok(mut storage) = storage::connect(default_root, Some(root)) {
-        let _ = record_handoff_failure_and_release(
-            &mut storage.connection,
-            task_id,
-            claimant,
-            stage,
-            detail,
-        );
+        Ok(snapshot) => ActionResult::completed(
+            action,
+            format!("Prepared worker assignment `{}`.", snapshot.id),
+            WorkerAssignmentData {
+                root: state.root().display().to_string(),
+                assignment: worker_assignment(snapshot),
+            },
+        ),
+        Err(ProjectStateError::NotFound { .. }) => ActionResult::skipped(
+            action,
+            "No queued task is available for assignment.",
+            "Dispatch runnable backlog work first.",
+        ),
+        Err(error) if error.to_string().contains("worktree") => ActionResult::failed(
+            action,
+            "Could not prepare task worktree.",
+            error.to_string(),
+        ),
+        Err(error) if error.to_string().contains("bundle") => ActionResult::failed(
+            action,
+            "Could not generate assignment bundle.",
+            error.to_string(),
+        ),
+        Err(error) => state_error(action, "Could not prepare worker assignment.", error),
     }
 }
 
@@ -244,33 +94,28 @@ pub fn inspect_worker_assignment(
         Ok(id) => id,
         Err(error) => return ActionResult::failed(action, "Could not inspect assignment.", error),
     };
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not open assignment storage.",
-                error.to_string(),
-            )
-        }
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
+        Err(error) => return state_error(action, "Could not open project state.", error),
     };
-    match load_assignment(&storage.connection, &assignment_id) {
-        Ok(assignment) => ActionResult::completed(
+    match state.inspect_assignment(AssignmentQuery { assignment_id }) {
+        Ok(snapshot) => ActionResult::completed(
             action,
-            format!("Inspected worker assignment `{assignment_id}`."),
+            format!("Inspected worker assignment `{}`.", snapshot.id),
             WorkerAssignmentData {
-                root: storage.storage.root.display().to_string(),
-                assignment,
+                root: state.root().display().to_string(),
+                assignment: worker_assignment(snapshot),
             },
         ),
-        Err(rusqlite::Error::QueryReturnedNoRows) => ActionResult::skipped(
+        Err(ProjectStateError::NotFound { .. }) => ActionResult::skipped(
             action,
-            format!("Worker assignment `{assignment_id}` was not found."),
+            format!(
+                "Worker assignment `{}` was not found.",
+                params.assignment_id
+            ),
             "Prepare an assignment before inspecting it.",
         ),
-        Err(error) => {
-            ActionResult::failed(action, "Could not inspect assignment.", error.to_string())
-        }
+        Err(error) => state_error(action, "Could not inspect assignment.", error),
     }
 }
 
@@ -286,138 +131,35 @@ pub fn start_worker_execution(
         }
     };
     let worker_session = clean_optional(params.worker_session);
-    let mut storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not open assignment storage.",
-                error.to_string(),
-            )
-        }
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
+        Err(error) => return state_error(action, "Could not open project state.", error),
     };
-    let root = storage.storage.root.display().to_string();
-    let transaction = match storage.connection.transaction() {
-        Ok(transaction) => transaction,
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not begin assignment start.",
-                error.to_string(),
-            )
-        }
-    };
-    let assignment = match load_assignment(&transaction, &assignment_id) {
-        Ok(assignment) => assignment,
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            return ActionResult::skipped(
-                action,
-                format!("Worker assignment `{assignment_id}` was not found."),
-                "Prepare a worker assignment before starting execution.",
-            )
-        }
-        Err(error) => {
-            return ActionResult::failed(action, "Could not inspect assignment.", error.to_string())
-        }
-    };
-    if assignment.status != "prepared" {
-        return ActionResult::skipped(
+    match state.start_execution(StartExecutionCommand {
+        assignment_id,
+        worker_session,
+    }) {
+        Ok(snapshot) => ActionResult::completed(
+            action,
+            format!("Started worker assignment `{}`.", snapshot.id),
+            WorkerAssignmentData {
+                root: state.root().display().to_string(),
+                assignment: worker_assignment(snapshot),
+            },
+        ),
+        Err(ProjectStateError::NotFound { .. }) => ActionResult::skipped(
             action,
             format!(
-                "Worker assignment `{assignment_id}` is `{}`.",
-                assignment.status
+                "Worker assignment `{}` was not found.",
+                params.assignment_id
             ),
-            "Only prepared assignments can be started.",
-        );
-    }
-
-    let task_updated = match transaction.execute(
-        r#"
-        UPDATE tasks
-        SET status = 'running',
-            started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?1 AND status IN ('claimed', 'running')
-        "#,
-        [assignment.task_id.as_str()],
-    ) {
-        Ok(updated) => updated,
-        Err(error) => {
-            return ActionResult::failed(action, "Could not mark task running.", error.to_string())
+            "Prepare a worker assignment before starting execution.",
+        ),
+        Err(ProjectStateError::Conflict { message }) => {
+            ActionResult::skipped(action, message, "Only prepared assignments can be started.")
         }
-    };
-    if task_updated == 0 {
-        return ActionResult::failed(
-            action,
-            "Could not mark task running.",
-            format!(
-                "task `{}` must be claimed before the assignment can start",
-                assignment.task_id
-            ),
-        );
+        Err(error) => state_error(action, "Could not start worker execution.", error),
     }
-    let assignment_updated = match transaction.execute(
-        r#"
-        UPDATE worker_assignments
-        SET status = 'running',
-            worker_session = ?2,
-            started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?1 AND status = 'prepared'
-        "#,
-        params![assignment_id, worker_session],
-    ) {
-        Ok(updated) => updated,
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not persist assignment start.",
-                error.to_string(),
-            )
-        }
-    };
-    if assignment_updated == 0 {
-        return ActionResult::failed(
-            action,
-            "Could not persist assignment start.",
-            format!("assignment `{assignment_id}` was not prepared"),
-        );
-    }
-    if let Err(error) = insert_task_event(
-        &transaction,
-        &assignment.task_id,
-        "worker_started",
-        &format!("Started worker assignment `{assignment_id}`."),
-        Some(json!({
-            "assignment_id": assignment_id,
-            "worker": assignment.worker,
-            "worker_session": worker_session
-        })),
-    ) {
-        return ActionResult::failed(
-            action,
-            "Could not record worker start event.",
-            error.to_string(),
-        );
-    }
-    let assignment = match load_assignment(&transaction, &params.assignment_id) {
-        Ok(assignment) => assignment,
-        Err(error) => {
-            return ActionResult::failed(action, "Could not reload assignment.", error.to_string())
-        }
-    };
-    if let Err(error) = transaction.commit() {
-        return ActionResult::failed(
-            action,
-            "Could not commit assignment start.",
-            error.to_string(),
-        );
-    }
-    ActionResult::completed(
-        action,
-        format!("Started worker assignment `{}`.", assignment.id),
-        WorkerAssignmentData { root, assignment },
-    )
 }
 
 pub fn record_worker_event(
@@ -437,74 +179,38 @@ pub fn record_worker_event(
         Ok(summary) => summary,
         Err(error) => return ActionResult::failed(action, "Could not record worker event.", error),
     };
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not open assignment storage.",
-                error.to_string(),
-            )
-        }
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
+        Err(error) => return state_error(action, "Could not open project state.", error),
     };
-    let root = storage.storage.root.display().to_string();
-    let assignment = match load_assignment(&storage.connection, &assignment_id) {
-        Ok(assignment) => assignment,
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            return ActionResult::skipped(
-                action,
-                format!("Worker assignment `{assignment_id}` was not found."),
-                "Prepare and start an assignment before recording worker events.",
-            )
-        }
-        Err(error) => {
-            return ActionResult::failed(action, "Could not inspect assignment.", error.to_string())
-        }
-    };
-    if assignment.status != "running" {
-        return ActionResult::skipped(
+    match state.append_worker_event(AppendWorkerEventCommand {
+        assignment_id: assignment_id.clone(),
+        event_type,
+        summary,
+        payload: params.payload,
+    }) {
+        Ok(snapshot) => ActionResult::completed(
             action,
-            format!(
-                "Worker assignment `{assignment_id}` is `{}`.",
-                assignment.status
-            ),
+            format!("Recorded worker event for assignment `{assignment_id}`."),
+            WorkerAssignmentEventData {
+                root: state.root().display().to_string(),
+                assignment_id,
+                task_id: snapshot.task_id.clone(),
+                event: task_event_record(snapshot),
+            },
+        ),
+        Err(ProjectStateError::NotFound { .. }) => ActionResult::skipped(
+            action,
+            format!("Worker assignment `{assignment_id}` was not found."),
+            "Prepare and start an assignment before recording worker events.",
+        ),
+        Err(ProjectStateError::Conflict { message }) => ActionResult::skipped(
+            action,
+            message,
             "Record worker progress only after start_worker_execution.",
-        );
+        ),
+        Err(error) => state_error(action, "Could not record worker event.", error),
     }
-    let payload = if params.payload.is_empty() {
-        json!({ "assignment_id": assignment_id })
-    } else {
-        json!({
-            "assignment_id": assignment_id,
-            "payload": Value::Object(params.payload.into_iter().collect())
-        })
-    };
-    let event = match tasks::record_task_event(
-        default_root,
-        Some(root.as_str()),
-        NewTaskEvent {
-            task_id: assignment.task_id.clone(),
-            sequence: None,
-            event_type,
-            summary: summary.clone(),
-            payload: Some(payload),
-        },
-    ) {
-        Ok(event) => event,
-        Err(error) => {
-            return ActionResult::failed(action, "Could not persist worker event.", error)
-        }
-    };
-    ActionResult::completed(
-        action,
-        format!("Recorded worker event for assignment `{assignment_id}`."),
-        WorkerAssignmentEventData {
-            root,
-            assignment_id,
-            task_id: assignment.task_id,
-            event,
-        },
-    )
 }
 
 pub fn complete_worker_execution(
@@ -544,167 +250,46 @@ pub fn complete_worker_execution(
             "verification_status is required when status is completed; use passed, failed, skipped, or not_run",
         );
     }
-    let mut storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not open assignment storage.",
-                error.to_string(),
-            )
-        }
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
+        Err(error) => return state_error(action, "Could not open project state.", error),
     };
-    let root = storage.storage.root.display().to_string();
-    let transaction = match storage.connection.transaction() {
-        Ok(transaction) => transaction,
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not begin assignment completion.",
-                error.to_string(),
-            )
-        }
-    };
-    let assignment = match load_assignment(&transaction, &assignment_id) {
-        Ok(assignment) => assignment,
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
+    let snapshot = match state.complete_execution(CompleteExecutionCommand {
+        assignment_id: assignment_id.clone(),
+        status: status.clone(),
+        summary,
+        changed_files,
+        verification_status: verification_status.clone(),
+    }) {
+        Ok(snapshot) => snapshot,
+        Err(ProjectStateError::NotFound { .. }) => {
             return ActionResult::skipped(
                 action,
                 format!("Worker assignment `{assignment_id}` was not found."),
                 "Prepare and start an assignment before completing execution.",
             )
         }
-        Err(error) => {
-            return ActionResult::failed(action, "Could not inspect assignment.", error.to_string())
-        }
-    };
-    if assignment.status != "running" {
-        return ActionResult::skipped(
-            action,
-            format!(
-                "Worker assignment `{assignment_id}` is `{}`.",
-                assignment.status
-            ),
-            "Only running assignments can be completed.",
-        );
-    }
-    if let Err(error) = validate_changed_files(&assignment.bundle.owned_surfaces, &changed_files) {
-        return ActionResult::failed(action, "Worker result touched unowned files.", error);
-    }
-    let changed_files_json = match serde_json::to_string(&changed_files) {
-        Ok(json) => json,
-        Err(error) => {
-            return ActionResult::failed(
+        Err(ProjectStateError::Conflict { message }) => {
+            return ActionResult::skipped(
                 action,
-                "Could not encode result files.",
-                error.to_string(),
+                message,
+                "Only running assignments can be completed.",
             )
         }
-    };
-    let new_assignment_status = match status.as_str() {
-        "completed" => "completed",
-        "failed" => "failed",
-        "cancelled" => "cancelled",
-        _ => unreachable!("status validated"),
-    };
-    let assignment_updated = match transaction.execute(
-        r#"
-        UPDATE worker_assignments
-        SET status = ?2,
-            completed_at = CURRENT_TIMESTAMP,
-            result_status = ?3,
-            summary = ?4,
-            changed_files_json = ?5,
-            verification_status = ?6,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?1 AND status = 'running'
-        "#,
-        params![
-            assignment_id,
-            new_assignment_status,
-            status,
-            summary,
-            changed_files_json,
-            verification_status
-        ],
-    ) {
-        Ok(updated) => updated,
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not persist assignment completion.",
-                error.to_string(),
-            )
+        Err(ProjectStateError::InvalidCommand { message })
+            if message.contains("outside owned surfaces") =>
+        {
+            return ActionResult::failed(action, "Worker result touched unowned files.", message)
         }
+        Err(error) => return state_error(action, "Could not complete worker execution.", error),
     };
-    if assignment_updated == 0 {
-        return ActionResult::failed(
-            action,
-            "Could not persist assignment completion.",
-            format!("assignment `{assignment_id}` was not running"),
-        );
-    }
-    if let Err(error) = insert_task_event(
-        &transaction,
-        &assignment.task_id,
-        "worker_result",
-        &format!("Worker assignment `{assignment_id}` finished with `{status}`."),
-        Some(json!({
-            "assignment_id": assignment_id,
-            "status": status,
-            "summary": summary,
-            "changed_files": changed_files,
-            "verification_status": verification_status
-        })),
-    ) {
-        return ActionResult::failed(
-            action,
-            "Could not record worker result event.",
-            error.to_string(),
-        );
-    }
-    let task_updated = match transaction.execute(
-        r#"
-        UPDATE tasks
-        SET status = ?2,
-            finished_at = CURRENT_TIMESTAMP,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?1 AND status IN ('claimed', 'running')
-        "#,
-        params![assignment.task_id, status],
-    ) {
-        Ok(updated) => updated,
-        Err(error) => {
-            return ActionResult::failed(action, "Could not finish task.", error.to_string())
-        }
-    };
-    if task_updated == 0 {
-        return ActionResult::failed(
-            action,
-            "Could not finish task.",
-            format!(
-                "task `{}` must be claimed or running before completion",
-                assignment.task_id
-            ),
-        );
-    }
-    let assignment = match load_assignment(&transaction, &params.assignment_id) {
-        Ok(assignment) => assignment,
-        Err(error) => {
-            return ActionResult::failed(action, "Could not reload assignment.", error.to_string())
-        }
-    };
-    if let Err(error) = transaction.commit() {
-        return ActionResult::failed(
-            action,
-            "Could not commit assignment completion.",
-            error.to_string(),
-        );
-    }
     let mut result = ActionResult::completed(
         action,
-        format!("Completed worker assignment `{}`.", assignment.id),
-        WorkerAssignmentData { root, assignment },
+        format!("Completed worker assignment `{}`.", snapshot.id),
+        WorkerAssignmentData {
+            root: state.root().display().to_string(),
+            assignment: worker_assignment(snapshot),
+        },
     );
     if status == "completed" && verification_status.as_deref() != Some("passed") {
         result.next_action = Some(
@@ -713,6 +298,57 @@ pub fn complete_worker_execution(
         );
     }
     result
+}
+
+fn state_error<T: schemars::JsonSchema + serde::Serialize>(
+    action: &str,
+    summary: &str,
+    error: ProjectStateError,
+) -> ActionResult<T> {
+    ActionResult::failed(action, summary, error.to_string())
+}
+
+fn worker_assignment(snapshot: AssignmentSnapshot) -> WorkerAssignment {
+    WorkerAssignment {
+        id: snapshot.id,
+        task_id: snapshot.task_id,
+        worker: snapshot.worker,
+        status: assignment_status(&snapshot.state).to_string(),
+        assigned_by: snapshot.assigned_by,
+        worktree_path: snapshot.worktree_path,
+        bundle: snapshot.bundle,
+        worker_session: snapshot.worker_session,
+        started_at: snapshot.started_at,
+        completed_at: snapshot.completed_at,
+        result_status: snapshot.result_status,
+        summary: snapshot.summary,
+        changed_files: snapshot.changed_files,
+        verification_status: snapshot.verification_status,
+        created_at: snapshot.created_at,
+        updated_at: snapshot.updated_at,
+    }
+}
+
+fn assignment_status(state: &AssignmentLifecycleState) -> &'static str {
+    match state {
+        AssignmentLifecycleState::Prepared => "prepared",
+        AssignmentLifecycleState::Running => "running",
+        AssignmentLifecycleState::Completed => "completed",
+        AssignmentLifecycleState::Failed => "failed",
+        AssignmentLifecycleState::Cancelled => "cancelled",
+    }
+}
+
+fn task_event_record(snapshot: WorkerEventSnapshot) -> TaskEventRecord {
+    TaskEventRecord {
+        task_id: snapshot.task_id,
+        sequence: snapshot.sequence,
+        event_type: snapshot.event_type,
+        summary: snapshot.summary,
+        payload: Some(Value::Object(snapshot.payload.into_iter().collect())),
+        created_at: snapshot.created_at,
+        replay_order: 0,
+    }
 }
 
 #[cfg(test)]

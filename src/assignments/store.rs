@@ -2,13 +2,13 @@ use crate::models::{TaskBundle, TaskEventRecord, TaskRecord, WorkerAssignment, W
 use rusqlite::{params, OptionalExtension, Row};
 use serde_json::{json, Value};
 
-pub(super) enum ClaimOutcome {
+pub(crate) enum ClaimOutcome {
     Claimed(TaskRecord),
     Existing(WorkerAssignment),
     NoTask,
 }
 
-pub(super) fn claim_task_for_assignment(
+pub(crate) fn claim_task_for_assignment(
     connection: &mut rusqlite::Connection,
     task_id: Option<&str>,
     worker: Option<&str>,
@@ -72,7 +72,7 @@ pub(super) fn claim_task_for_assignment(
     Ok(ClaimOutcome::Claimed(claimed))
 }
 
-pub(super) fn record_handoff_failure_and_release(
+pub(crate) fn record_handoff_failure_and_release(
     connection: &mut rusqlite::Connection,
     task_id: &str,
     claimant: &str,
@@ -118,7 +118,7 @@ pub(super) fn record_handoff_failure_and_release(
     Ok(task)
 }
 
-pub(super) fn insert_task_event(
+pub(crate) fn insert_task_event(
     connection: &rusqlite::Connection,
     task_id: &str,
     event_type: &str,
@@ -146,7 +146,7 @@ pub(super) fn insert_task_event(
     )
 }
 
-pub(super) fn insert_assignment(
+pub(crate) fn insert_assignment(
     connection: &rusqlite::Connection,
     task: &TaskRecord,
     worktree: &WorktreeData,
@@ -176,7 +176,7 @@ pub(super) fn insert_assignment(
     load_assignment(connection, &id).map_err(|error| error.to_string())
 }
 
-pub(super) fn load_assignment(
+pub(crate) fn load_assignment(
     connection: &rusqlite::Connection,
     assignment_id: &str,
 ) -> rusqlite::Result<WorkerAssignment> {

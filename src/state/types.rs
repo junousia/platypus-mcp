@@ -1,3 +1,4 @@
+use crate::models::{ExternalRef, TaskBundle};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -30,12 +31,15 @@ pub struct DispatchWorkOutcome {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct BacklogCandidateSnapshot {
+    pub source: String,
     pub item_id: String,
     pub title: String,
     pub priority: String,
     pub area: String,
     pub item_type: String,
     pub suggested_worker: Option<String>,
+    pub owned_surfaces: Vec<String>,
+    pub external_refs: Vec<ExternalRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -43,9 +47,13 @@ pub struct TaskSnapshot {
     pub id: String,
     pub source_item_id: String,
     pub title: String,
+    pub status: String,
     pub state: TaskLifecycleState,
     pub worker: Option<String>,
     pub claimed_by: Option<String>,
+    pub claimed_at: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
     pub worker_workspace: Option<WorkerWorkspaceSnapshot>,
     pub created_at: String,
     pub updated_at: String,
@@ -75,13 +83,19 @@ pub struct AssignmentSnapshot {
     pub task_id: String,
     pub worker: Option<String>,
     pub state: AssignmentLifecycleState,
+    pub reused_existing: bool,
     pub assigned_by: Option<String>,
     pub worker_session: Option<String>,
     pub worktree_path: String,
+    pub bundle: TaskBundle,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
     pub result_status: Option<String>,
     pub summary: Option<String>,
     pub changed_files: Vec<String>,
     pub verification_status: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]

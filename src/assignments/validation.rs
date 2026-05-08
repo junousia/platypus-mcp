@@ -1,6 +1,6 @@
 use std::path::{Component, PathBuf};
 
-pub(super) fn clean_required(field: &str, value: &str) -> Result<String, String> {
+pub(crate) fn clean_required(field: &str, value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         Err(format!("{field} is required"))
@@ -9,7 +9,7 @@ pub(super) fn clean_required(field: &str, value: &str) -> Result<String, String>
     }
 }
 
-pub(super) fn clean_optional(value: Option<String>) -> Option<String> {
+pub(crate) fn clean_optional(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -20,7 +20,7 @@ pub(super) fn clean_optional(value: Option<String>) -> Option<String> {
     })
 }
 
-pub(super) fn clean_event_type(value: &str) -> Result<String, String> {
+pub(crate) fn clean_event_type(value: &str) -> Result<String, String> {
     let value = clean_required("event_type", value)?;
     if value.len() > 80 {
         return Err("event_type must be at most 80 characters".to_string());
@@ -36,14 +36,14 @@ pub(super) fn clean_event_type(value: &str) -> Result<String, String> {
     Ok(value)
 }
 
-pub(super) fn clean_terminal_status(value: &str) -> Result<String, String> {
+pub(crate) fn clean_terminal_status(value: &str) -> Result<String, String> {
     match value.trim() {
         "completed" | "failed" | "cancelled" => Ok(value.trim().to_string()),
         _ => Err("status must be completed, failed, or cancelled".to_string()),
     }
 }
 
-pub(super) fn clean_changed_files(files: Vec<String>) -> Result<Vec<String>, String> {
+pub(crate) fn clean_changed_files(files: Vec<String>) -> Result<Vec<String>, String> {
     files
         .into_iter()
         .map(|file| clean_relative_path("changed_files", &file))
@@ -51,7 +51,7 @@ pub(super) fn clean_changed_files(files: Vec<String>) -> Result<Vec<String>, Str
         .collect()
 }
 
-pub(super) fn validate_changed_files(
+pub(crate) fn validate_changed_files(
     owned_surfaces: &[String],
     changed_files: &[String],
 ) -> Result<(), String> {
