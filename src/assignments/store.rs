@@ -278,6 +278,7 @@ fn row_to_task_event(row: &Row<'_>) -> rusqlite::Result<TaskEventRecord> {
         summary: row.get("summary")?,
         payload,
         created_at: row.get("created_at")?,
+        replay_order: 0,
     })
 }
 

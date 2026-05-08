@@ -213,6 +213,7 @@ mod tests {
             "tasks",
             "task_events",
             "runtime_transitions",
+            "runtime_stream",
             "leases",
             "findings",
             "worker_assignments",

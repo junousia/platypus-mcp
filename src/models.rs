@@ -937,6 +937,9 @@ pub struct TaskEventRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
     pub created_at: String,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub replay_order: i64,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -1129,6 +1132,9 @@ pub struct EventRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
     pub created_at: String,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub replay_order: i64,
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]
@@ -1141,6 +1147,9 @@ pub struct RuntimeTransitionRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
     pub created_at: String,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub replay_order: i64,
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]
