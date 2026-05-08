@@ -50,6 +50,7 @@ Runtime-owned mutable state belongs behind the storage boundary:
 - worker assignments and execution metadata
 - approvals and responses
 - runtime transitions for lifecycle/state changes
+- leases for project/task ownership and coordination
 - findings and dispositions
 - verification evidence records
 - future leases, client/session metadata, and distributed coordination records
@@ -71,6 +72,8 @@ Current portable traits:
   projection.
 - `TaskStore`: task creation, lookup, lifecycle updates, and task event replay.
 - `TransitionStore`: append-only runtime transition recording and replay.
+- `LeaseStore`: project and task lease acquisition, renewal, release, and
+  active-conflict inspection.
 
 The traits return `RepositoryResult<T>` with a backend-neutral
 `RepositoryError`. Tool modules should handle `NotFound`, `Conflict`, and
@@ -108,3 +111,19 @@ When adding a new runtime domain:
 
 This keeps local SQLite reliable while preserving the option to add a shared
 runtime backend later.
+
+## Leases
+
+Leases model temporary ownership for project-level and task-level operations.
+They include scope, target id, owner, status, timestamps, expiry, and metadata.
+Local SQLite enforces the first coordination path, and future shared backends
+must preserve the same semantics:
+
+- active unexpired leases block conflicting owners
+- expired or released leases do not block work
+- renew and release require the current owner
+- lifecycle tools return structured recovery guidance when a lease blocks an
+  operation
+
+The first guarded lifecycle path is dispatch: an active project lease for
+`project/root` blocks `dispatch_next_work`.

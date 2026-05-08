@@ -10,6 +10,7 @@ pub mod evidence;
 pub mod findings;
 pub mod guidance;
 pub mod host_guidance;
+pub mod leases;
 pub mod models;
 pub mod project;
 pub mod reconcile;

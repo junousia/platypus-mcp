@@ -1,0 +1,75 @@
+item_id: MCP-031
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: Project and task operations can acquire, renew, inspect, and release durable leases.
+- id: R2
+  text: Active unexpired leases block conflicting lifecycle mutations with structured recovery guidance.
+- id: R3
+  text: Lease state is visible through typed MCP tools and event replay.
+design:
+  summary: Add a SQLite-backed lease repository and MCP tools for acquire/list/renew/release, then enforce project lease blocking in dispatch as the first lifecycle guard.
+  owned_surfaces:
+  - src/storage
+  - src/models.rs
+  - src/server.rs
+  - src/dispatch.rs
+  - tests
+  notes: Start with explicit project and task leases. Integration and cleanup guards may build on the same store in a later slice if this item grows too large.
+tasks:
+- id: MCP-031-T01
+  title: Add lease storage and models
+  goal: Add durable lease records with scope, target, owner, status, expiry, and metadata.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - src/storage
+  - src/models.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Leases can be acquired, listed, renewed, and released through storage APIs.
+  - Active lease lookup ignores released and expired leases.
+  - Tests cover acquire, conflict, renew, release, and expiry filtering.
+  notes: null
+- id: MCP-031-T02
+  title: Expose lease MCP tools
+  goal: Add typed MCP tools for lease acquisition, inspection, renewal, and release.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on:
+  - MCP-031-T01
+  owned_surfaces:
+  - src/models.rs
+  - src/server.rs
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Tool listing includes lease tools with structured schemas.
+  - Lease tool failures are structured and include next action.
+  - Lease changes emit replayable project events or transitions.
+  notes: null
+- id: MCP-031-T03
+  title: Guard dispatch with project leases
+  goal: Block dispatch when another owner holds an active project lease.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-031-T02
+  owned_surfaces:
+  - src/dispatch.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Dispatch proceeds when no project lease exists.
+  - Dispatch is skipped or failed with recovery guidance when an active project lease exists.
+  - Expired or released leases do not block dispatch.
+  notes: null

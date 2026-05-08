@@ -17,8 +17,8 @@ pub use repository::{
     TaskInsert, TaskRepository,
 };
 pub use traits::{
-    ApprovalStore, EventStore, RepositoryError, RepositoryResult, TaskStore, TransitionInsert,
-    TransitionStore,
+    ApprovalStore, EventStore, LeaseInsert, LeaseStore, RepositoryError, RepositoryResult,
+    TaskStore, TransitionInsert, TransitionStore,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,6 +213,7 @@ mod tests {
             "tasks",
             "task_events",
             "runtime_transitions",
+            "leases",
             "findings",
             "worker_assignments",
         ] {

@@ -57,6 +57,10 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"runner_prepare_next"));
     assert!(tool_names.contains(&"approval_list"));
     assert!(tool_names.contains(&"approval_respond"));
+    assert!(tool_names.contains(&"acquire_lease"));
+    assert!(tool_names.contains(&"list_leases"));
+    assert!(tool_names.contains(&"renew_lease"));
+    assert!(tool_names.contains(&"release_lease"));
     assert!(tool_names.contains(&"events_replay"));
     assert!(tool_names.contains(&"record_evidence"));
     assert!(tool_names.contains(&"record_verification_evidence"));
@@ -635,6 +639,76 @@ async fn stdio_server_dispatches_next_work_without_running_worker() -> anyhow::R
 
     assert_eq!(events["status"], "completed");
     assert_eq!(events["data"]["events"][0]["event_type"], "task_queued");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_blocks_dispatch_with_active_project_lease() -> anyhow::Result<()> {
+    let project = dispatch_project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let lease = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "acquire_lease".into(),
+            arguments: Some(json_args(json!({
+                "scope": "project",
+                "target_id": "root",
+                "owner": "manager",
+                "ttl_seconds": 60
+            }))),
+            task: None,
+        })
+        .await?;
+    let lease = lease.structured_content.expect("lease content");
+    assert_eq!(lease["status"], "completed");
+    let lease_id = lease["data"]["lease"]["id"].as_str().expect("lease id");
+
+    let blocked = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "dispatch_next_work".into(),
+            arguments: Some(JsonObject::new()),
+            task: None,
+        })
+        .await?;
+    let blocked = blocked.structured_content.expect("dispatch content");
+    assert_eq!(blocked["status"], "skipped");
+    assert!(blocked["summary"]
+        .as_str()
+        .expect("summary")
+        .contains("leased by `manager`"));
+
+    let released = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "release_lease".into(),
+            arguments: Some(json_args(json!({
+                "lease_id": lease_id,
+                "owner": "manager"
+            }))),
+            task: None,
+        })
+        .await?;
+    assert_eq!(
+        released.structured_content.expect("release")["status"],
+        "completed"
+    );
+
+    let dispatched = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "dispatch_next_work".into(),
+            arguments: Some(JsonObject::new()),
+            task: None,
+        })
+        .await?;
+    assert_eq!(
+        dispatched.structured_content.expect("dispatch")["status"],
+        "completed"
+    );
 
     client.cancel().await?;
     Ok(())

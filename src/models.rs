@@ -46,6 +46,42 @@ pub struct LimitParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct AcquireLeaseParams {
+    pub root: Option<String>,
+    pub scope: String,
+    pub target_id: String,
+    pub owner: String,
+    pub ttl_seconds: Option<u64>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListLeasesParams {
+    pub root: Option<String>,
+    pub scope: Option<String>,
+    pub target_id: Option<String>,
+    pub status: Option<String>,
+    pub include_expired: Option<bool>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RenewLeaseParams {
+    pub root: Option<String>,
+    pub lease_id: String,
+    pub owner: String,
+    pub ttl_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReleaseLeaseParams {
+    pub root: Option<String>,
+    pub lease_id: String,
+    pub owner: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ValidateBacklogParams {
     pub root: Option<String>,
     pub include_errors: Option<bool>,
@@ -974,6 +1010,33 @@ pub struct RuntimeTransitionRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
     pub created_at: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct LeaseRecord {
+    pub id: String,
+    pub scope: String,
+    pub target_id: String,
+    pub owner: String,
+    pub status: String,
+    pub metadata: BTreeMap<String, Value>,
+    pub acquired_at: String,
+    pub renewed_at: Option<String>,
+    pub released_at: Option<String>,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct LeaseRecordData {
+    pub root: String,
+    pub lease: LeaseRecord,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct LeaseListData {
+    pub root: String,
+    pub leases: Vec<LeaseRecord>,
+    pub returned: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
