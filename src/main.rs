@@ -4,11 +4,11 @@ use anyhow::Result;
 async fn main() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.first().map(String::as_str) == Some("runner") {
-        return platypus_mcp_rs::runner::run_cli(&args[1..]);
+        return platypus_mcp::runner::run_cli(&args[1..]);
     }
     if args.first().map(String::as_str) == Some("tool") {
-        let code = platypus_mcp_rs::cli::run_tool_cli(&args[1..]).await?;
+        let code = platypus_mcp::cli::run_tool_cli(&args[1..]).await?;
         std::process::exit(code);
     }
-    platypus_mcp_rs::serve_stdio().await
+    platypus_mcp::serve_stdio().await
 }

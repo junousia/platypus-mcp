@@ -15,6 +15,18 @@ Build and verify the server from the repository root:
 make check
 ```
 
+Install the released crate:
+
+```bash
+cargo install platypus-mcp
+```
+
+The installed binary is:
+
+```bash
+platypus-mcp
+```
+
 Smoke-test the stdio tool contract against the current directory:
 
 ```bash
@@ -35,13 +47,22 @@ Use the server name `platypus` so tool calls are easy to recognize.
 
 ```toml
 [mcp_servers.platypus]
-command = "cargo"
-args = ["run", "--manifest-path", "/path/to/platypus-mcp-rs/Cargo.toml", "--quiet"]
+command = "platypus-mcp"
+args = []
 env = { PLATYPUS_MCP_ROOT = "/path/to/project" }
 ```
 
 For development inside this repository, `.codex/config.toml` contains a
 project-local configuration that runs the checked-out source directly.
+
+Source checkout configuration:
+
+```toml
+[mcp_servers.platypus]
+command = "cargo"
+args = ["run", "--manifest-path", "/path/to/platypus-mcp/Cargo.toml", "--quiet"]
+env = { PLATYPUS_MCP_ROOT = "/path/to/project" }
+```
 
 ## Claude
 
@@ -51,13 +72,8 @@ Claude uses the same stdio command shape:
 {
   "mcpServers": {
     "platypus": {
-      "command": "cargo",
-      "args": [
-        "run",
-        "--manifest-path",
-        "/path/to/platypus-mcp-rs/Cargo.toml",
-        "--quiet"
-      ],
+      "command": "platypus-mcp",
+      "args": [],
       "env": {
         "PLATYPUS_MCP_ROOT": "/path/to/project"
       }

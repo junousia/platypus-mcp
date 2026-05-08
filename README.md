@@ -114,6 +114,20 @@ make help
 
 ## Run
 
+Install the released crate:
+
+```bash
+cargo install platypus-mcp
+```
+
+Run the installed stdio server:
+
+```bash
+platypus-mcp
+```
+
+During local development:
+
 ```bash
 make run
 ```
@@ -155,8 +169,17 @@ Codex-style configuration:
 
 ```toml
 [mcp_servers.platypus]
+command = "platypus-mcp"
+args = []
+env = { PLATYPUS_MCP_ROOT = "/path/to/project" }
+```
+
+For source checkouts, use:
+
+```toml
+[mcp_servers.platypus]
 command = "cargo"
-args = ["run", "--manifest-path", "/path/to/platypus-mcp-rs/Cargo.toml"]
+args = ["run", "--manifest-path", "/path/to/platypus-mcp/Cargo.toml", "--quiet"]
 env = { PLATYPUS_MCP_ROOT = "/path/to/project" }
 ```
 
@@ -166,8 +189,8 @@ Claude-style configuration:
 {
   "mcpServers": {
     "platypus": {
-      "command": "cargo",
-      "args": ["run", "--manifest-path", "/path/to/platypus-mcp-rs/Cargo.toml"],
+      "command": "platypus-mcp",
+      "args": [],
       "env": {
         "PLATYPUS_MCP_ROOT": "/path/to/project"
       }
