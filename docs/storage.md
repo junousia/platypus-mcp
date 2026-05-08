@@ -1,39 +1,123 @@
 # Storage Boundary
 
-Platypus MCP keeps SQLite as the local durable store and uses `rusqlite` behind
-a repository boundary in `src/storage/`.
+Platypus MCP uses a domain-shaped project state boundary. MCP tools and product
+logic should depend on Platypus operations such as dispatching work, preparing a
+worker assignment, completing execution, replaying events, and reconciling a
+project. They should not depend on SQL, database connections, table-shaped
+repositories, or row-level query concepts.
+
+SQLite is the local-first reference backend. It is not the product boundary.
 
 ## Decision
 
-Use typed repository modules before adopting a full ORM.
+Use a `ProjectState` boundary built around Platypus domain commands and
+snapshots. Backend implementations own persistence, indexing, locking,
+transactions, migrations, and event ordering internally.
 
-This keeps the project close to SQLite semantics while removing scattered
-handwritten SQL from MCP feature modules. The repository layer owns row mapping,
-query shape, and write/update operations. Feature modules should validate tool
-inputs, call repository methods, and translate repository errors into structured
-MCP results.
+The public storage interface should be implementation independent. It should
+not look like a SQL repository interface hidden behind traits. Product code
+should call operations such as:
+
+- `dispatch_next_work`
+- `prepare_worker_assignment`
+- `start_worker_execution`
+- `record_worker_event`
+- `complete_worker_execution`
+- `next_safe_action`
+- `record_verification_evidence`
+- `record_finding`
+- `reconcile_project`
+
+Those methods are domain operations with backend-neutral command and result
+types. A backend may implement them with SQLite transactions, an in-memory
+state machine, a remote service, an event log, or a future shared database, but
+callers must not need to know which representation is used.
 
 ## Alternatives Considered
 
+- SQL-shaped repository traits: useful as an intermediate migration step, but
+  they leak table and query structure into product logic and make non-SQL
+  backends mimic SQLite.
 - SQLx: strong typed query support, but async-first and heavier than the current
-  local SQLite stdio server needs.
+  local SQLite stdio server needs. It still keeps the public model close to SQL
+  unless hidden behind domain operations.
 - Diesel: mature and strongly typed, but schema management and generated query
-  code would add complexity before the tool contract stabilizes.
-- SeaORM: broad ORM feature set, but too much framework for a small local
-  project state database.
+  code would add complexity without solving the domain-boundary problem.
+- SeaORM: broad ORM feature set, but too much framework for the current local
+  state database and still SQL-model oriented.
 - Raw rusqlite everywhere: simple initially, but grows hard to audit as tools
   share records, events, approvals, findings, worktrees, and evidence.
 
-## Current Boundary
+## Target Boundary
 
-- `storage::Repository` creates typed sub-repositories.
-- `storage::ApprovalRepository` owns approval reads, creation, and response
-  updates.
-- `storage::EventRepository` owns durable control event writes and event replay
-  reads, including task-event replay projection.
+The intended architecture is:
 
-New runtime tables should first expose repository methods, then MCP tools should
-call those methods rather than embedding SQL in feature modules.
+```text
+MCP tool
+  -> domain service
+    -> ProjectState trait
+      -> backend implementation
+```
+
+`ProjectState` is responsible for preserving product invariants:
+
+- one active task per backlog item
+- claim and worker assignment happen atomically
+- worker start, progress, and completion are ordered and recoverable
+- event replay order is stable
+- approvals and leases fail closed
+- evidence and findings attach to the right backlog item or task
+- reconciliation can explain unfinished, unverified, or unintegrated work
+
+The MCP layer should validate request shape, call one domain operation, and
+translate the result into the standard `ActionResult` envelope. It should not
+assemble storage mutations manually.
+
+## Atomic Domain Operations
+
+These operations must be atomic by contract. A backend may use SQL
+transactions, compare-and-swap updates, append-only event commits, or service
+transactions internally, but callers see one all-or-nothing operation.
+
+- **Dispatch work:** choose the next runnable backlog item and create a queued
+  task without creating duplicates.
+- **Prepare assignment:** claim a queued or claimed task, create or record the
+  worktree, generate the bundle, persist the assignment, and record the audit
+  events.
+- **Start execution:** move an assignment and task into the running state and
+  attach the worker session.
+- **Record worker event:** append a bounded, ordered progress/tool/result event
+  for a running assignment.
+- **Complete execution:** persist worker result metadata, finish the task, and
+  append result events consistently.
+- **Resolve approval:** move a pending approval to an approved or denied state
+  once, with responder metadata.
+- **Acquire lease:** grant ownership only when no conflicting active lease
+  exists.
+- **Integrate result:** update integration evidence and task/project audit state
+  consistently with the Git operation.
+
+Read operations such as `next_safe_action`, task or assignment inspection,
+event replay, findings validation, and reconciliation should return domain
+snapshots rather than backend rows.
+
+## Current Migration State
+
+The current codebase still contains SQL-shaped repository traits and direct
+SQLite use in some product modules. They are migration scaffolding, not the
+final boundary. New product logic should not add new direct SQL or new
+table-shaped public stores.
+
+The migration path is:
+
+1. Define `ProjectState` domain commands, snapshots, and errors.
+2. Implement `SqliteProjectState` while preserving current behavior.
+3. Move task and assignment lifecycle tools behind `ProjectState`.
+4. Move guidance, inspection, evidence, findings, reconciliation, and workspace
+   metadata behind `ProjectState`.
+5. Add a memory backend and contract tests shared by every backend.
+6. Add a guard that blocks `rusqlite` and SQL query construction outside the
+   SQLite backend implementation.
 
 ## State Ownership
 
@@ -59,26 +143,42 @@ Backlog files should describe intent and acceptance. They should not accumulate
 runtime-only fields such as attempts, status, completion timestamps, approvals,
 or worker results.
 
-## Portable Boundary
+## Backend Independence Rules
 
-SQLite is the reference backend, not the product boundary. Feature modules
-should use typed storage traits and repository APIs instead of depending on
-SQLite table details or `rusqlite` errors directly.
+The public boundary must avoid SQL-like terms and behavior. Public traits,
+command names, and result names should not expose:
 
-Current portable traits:
+- connections, transactions, rows, tables, or query builders
+- `insert`, `update`, `select`, or `where` as product concepts
+- SQLite error variants or provider-specific database errors
+- schema version details except through backend capability and migration
+  diagnostics
+- storage paths except as safe project metadata or backend configuration
 
-- `ApprovalStore`: approval creation, listing, lookup, and response updates.
-- `EventStore`: project event recording and replay, including task-event
-  projection.
-- `TaskStore`: task creation, lookup, lifecycle updates, and task event replay.
-- `TransitionStore`: append-only runtime transition recording and replay.
-- `LeaseStore`: project and task lease acquisition, renewal, release, and
-  active-conflict inspection.
+The allowed implementation-specific area is the backend module, currently the
+SQLite implementation. During migration the legacy `src/storage/` module may
+still contain SQLite code. The desired end state is that `rusqlite`,
+`query_row`, `prepare`, and raw SQL strings appear only in SQLite backend
+modules and their focused tests.
 
-The traits return `RepositoryResult<T>` with a backend-neutral
-`RepositoryError`. Tool modules should handle `NotFound`, `Conflict`, and
-backend failures without matching SQLite-specific error variants. The SQLite
-repository maps its native errors into those portable categories.
+## Backend Capabilities
+
+Backends should report capabilities explicitly. This avoids pretending every
+backend has identical deployment or coordination properties.
+
+Useful capability categories:
+
+- durable state
+- transactional lifecycle operations
+- stable event replay cursors
+- lease/conflict enforcement
+- migration support
+- shared multi-host coordination
+- external sync/reporting support
+- offline/local-only operation
+
+Core MCP tools should require the capabilities they need and return structured
+recovery guidance when a configured backend cannot support a requested action.
 
 ## Append-Only Transitions
 
@@ -98,19 +198,19 @@ transition records. `events_replay` includes runtime transitions alongside
 project and task events so a host can explain how an entity reached its current
 state without reading hidden storage tables directly.
 
-## Adding Runtime Repositories
+## Adding Runtime Behavior
 
 When adding a new runtime domain:
 
-1. Define typed insert/query records and a store trait.
-2. Implement the trait for the SQLite repository.
-3. Keep row mapping and SQL in `src/storage/` or a domain-specific store module.
-4. Make MCP feature modules validate inputs, call the store trait, and translate
-   `RepositoryError` into structured tool results.
-5. Add tests for one write path, one read path, and at least one failure path.
-
-This keeps local SQLite reliable while preserving the option to add a shared
-runtime backend later.
+1. Define the domain operation and snapshot shape in the `ProjectState`
+   boundary.
+2. Decide whether the operation is atomic by contract.
+3. Implement it in each supported backend or mark the missing capability
+   explicitly.
+4. Keep backend-specific persistence details private to the backend module.
+5. Add contract tests that run against every backend implementation.
+6. Add MCP tool tests for structured success, skipped, failed, and recovery
+   paths.
 
 ## Leases
 
@@ -166,10 +266,28 @@ local transactions and a single `.platy/platypus.sqlite3` file. Shared backends
 such as Postgres would need to satisfy the same contract with stronger
 cross-process coordination and deployment/version checks.
 
+## Plugin-Friendly Backend Shape
+
+The first implementation can be compile-time registered backends. Dynamic
+plugins are not required yet. The boundary should still be shaped so a future
+backend provider can implement Platypus operations without copying the SQLite
+schema.
+
+```text
+BackendFactory
+  name
+  validate_config
+  describe_capabilities
+  open_project -> ProjectState
+```
+
+This keeps a future Postgres, Git-backed, remote, or hosted backend focused on
+Platypus semantics instead of table compatibility.
+
 ## Backend Evaluation Checklist
 
-Before adding a second backend, implement a small capability probe behind the
-existing repository traits:
+Before adding a second backend, run a capability probe through the
+implementation-independent state boundary:
 
 1. Initialize a project-scoped runtime namespace.
 2. Create, replay, and order events from two simulated clients.
@@ -178,7 +296,7 @@ existing repository traits:
 4. Retry one mutating operation and verify deterministic idempotency or conflict
    output.
 5. Run a migration check twice and verify repeatability.
-6. Reconcile a project snapshot using only trait-level data.
+6. Reconcile a project snapshot using only `ProjectState` snapshots.
 
 The current probe is exposed as `storage_capability_probe`. It resolves the
 project root for identity reporting, then runs the backend checks against an

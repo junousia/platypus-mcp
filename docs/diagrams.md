@@ -168,21 +168,23 @@ erDiagram
 
 ## Runtime Backend Modes
 
-Local SQLite mode is the reference implementation. It is optimized for one
-repository on one workstation while preserving the same repository trait
-boundary that a shared backend must satisfy.
+Local SQLite mode is the reference implementation. Product code should target
+the domain-shaped `ProjectState` boundary, while SQLite owns schema, SQL,
+transactions, row mapping, and migrations internally.
 
 ```mermaid
 flowchart LR
     host["MCP host"]
     server["Platypus MCP server"]
-    sqlite[".platy/platypus.sqlite3<br/>local runtime state"]
+    state["ProjectState<br/>domain operations"]
+    sqlite["SqliteProjectState<br/>.platy/platypus.sqlite3"]
     repo["project repository"]
     git["Git history"]
     worker["worker harness"]
 
     host -->|stdio MCP| server
-    server -->|transactions| sqlite
+    server -->|dispatch, assign, complete, replay| state
+    state -->|private SQL and transactions| sqlite
     server -->|backlog, plans, worktrees| repo
     server -->|trailers and branches| git
     host -->|bundle| worker
@@ -190,8 +192,9 @@ flowchart LR
 ```
 
 A future shared backend keeps the MCP tool contract stable while moving
-runtime coordination behind the repository traits. Repository files and Git
-history remain the source of executable intent and integration proof.
+runtime coordination behind another `ProjectState` implementation. Repository
+files and Git history remain the source of executable intent and integration
+proof.
 
 ```mermaid
 flowchart LR
@@ -199,7 +202,9 @@ flowchart LR
     hostB["Host B"]
     serverA["Platypus MCP server A"]
     serverB["Platypus MCP server B"]
-    shared["shared runtime backend<br/>events, tasks, approvals, leases"]
+    stateA["ProjectState A"]
+    stateB["ProjectState B"]
+    shared["shared backend<br/>events, tasks, approvals, leases"]
     repo["project repository"]
     git["Git history"]
     workerA["worker A"]
@@ -207,8 +212,10 @@ flowchart LR
 
     hostA --> serverA
     hostB --> serverB
-    serverA --> shared
-    serverB --> shared
+    serverA --> stateA
+    serverB --> stateB
+    stateA --> shared
+    stateB --> shared
     shared -->|ordered replay and leases| serverA
     shared -->|ordered replay and leases| serverB
     serverA --> repo
@@ -220,6 +227,35 @@ flowchart LR
     workerA --> serverA
     workerB --> serverB
 ```
+
+## ProjectState Boundary
+
+The public storage boundary is domain-shaped. MCP tools call Platypus
+operations; backends decide how to persist and coordinate those operations.
+
+```mermaid
+flowchart TB
+    tool["MCP tool handler"]
+    service["Domain service"]
+    state["ProjectState trait"]
+    sqlite["SqliteProjectState"]
+    memory["MemoryProjectState<br/>tests"]
+    future["Future backend<br/>Postgres, remote, or event log"]
+
+    tool -->|validate request and format ActionResult| service
+    service -->|domain command| state
+    state --> sqlite
+    state --> memory
+    state --> future
+
+    sqlite -->|private| sql["SQL, migrations, rows"]
+    memory -->|private| mem["in-memory snapshots"]
+    future -->|private| remote["backend-specific protocol"]
+```
+
+The boundary must not expose SQL-like concepts such as tables, rows, query
+builders, or database transactions. Atomic operations are part of the
+`ProjectState` contract.
 
 ## Tool Responsibility Map
 
