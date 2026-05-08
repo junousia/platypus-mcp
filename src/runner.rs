@@ -10,12 +10,35 @@ use crate::{
     workers::{WorkerAdapter, WorkerEvent, WorkerExitStatus, WorkerRequest},
 };
 use anyhow::Result;
+use clap::{Args, Parser};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
 
 const DEFAULT_MAX_TASKS: usize = 1;
 const MAX_TASKS: usize = 10;
+
+#[derive(Debug, Clone, Args)]
+pub struct RunnerCli {
+    /// Project root containing Platypus state.
+    #[arg(long)]
+    pub root: Option<String>,
+    /// Worker name to assign prepared tasks to.
+    #[arg(long)]
+    pub worker: Option<String>,
+    /// Claimant name recorded for task ownership.
+    #[arg(long)]
+    pub claimant: Option<String>,
+    /// Maximum number of tasks to prepare.
+    #[arg(long)]
+    pub max_tasks: Option<usize>,
+    /// Inspect without claiming or preparing tasks.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Verification command to record for the worker handoff.
+    #[arg(long = "verify")]
+    pub verification_command: Vec<String>,
+}
 
 pub fn prepare_next(
     default_root: &Path,
@@ -210,59 +233,35 @@ pub fn run_with_adapter(
 }
 
 pub fn run_cli(args: &[String]) -> Result<()> {
-    let params = parse_args(args)?;
+    let cli = RunnerCliParser::try_parse_from(
+        std::iter::once("runner").chain(args.iter().map(String::as_str)),
+    )?;
+    run_command(cli.command)
+}
+
+pub fn run_command(command: RunnerCli) -> Result<()> {
+    run_params(RunnerPrepareParams {
+        root: command.root,
+        worker: command.worker,
+        claimant: command.claimant,
+        max_tasks: command.max_tasks,
+        dry_run: Some(command.dry_run).filter(|value| *value),
+        verification_command: command.verification_command,
+    })
+}
+
+fn run_params(params: RunnerPrepareParams) -> Result<()> {
     let root = params.root.clone().unwrap_or_else(|| ".".to_string());
     let result = prepare_next(Path::new(&root), params);
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
 }
 
-fn parse_args(args: &[String]) -> Result<RunnerPrepareParams> {
-    let mut params = RunnerPrepareParams {
-        root: None,
-        worker: None,
-        claimant: None,
-        max_tasks: None,
-        dry_run: None,
-        verification_command: Vec::new(),
-    };
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--root" => {
-                index += 1;
-                params.root = Some(required_arg(args, index, "--root")?.to_string());
-            }
-            "--worker" => {
-                index += 1;
-                params.worker = Some(required_arg(args, index, "--worker")?.to_string());
-            }
-            "--claimant" => {
-                index += 1;
-                params.claimant = Some(required_arg(args, index, "--claimant")?.to_string());
-            }
-            "--max-tasks" => {
-                index += 1;
-                params.max_tasks = Some(required_arg(args, index, "--max-tasks")?.parse()?);
-            }
-            "--dry-run" => params.dry_run = Some(true),
-            "--verify" => {
-                index += 1;
-                params
-                    .verification_command
-                    .push(required_arg(args, index, "--verify")?.to_string());
-            }
-            unknown => anyhow::bail!("unknown runner option `{unknown}`"),
-        }
-        index += 1;
-    }
-    Ok(params)
-}
-
-fn required_arg<'a>(args: &'a [String], index: usize, name: &str) -> Result<&'a str> {
-    args.get(index)
-        .map(String::as_str)
-        .ok_or_else(|| anyhow::anyhow!("{name} requires a value"))
+#[derive(Debug, Parser)]
+#[command(name = "runner")]
+struct RunnerCliParser {
+    #[command(flatten)]
+    command: RunnerCli,
 }
 
 fn record_event(

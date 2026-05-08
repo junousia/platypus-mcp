@@ -8,10 +8,19 @@ mod types;
 use anyhow::{Context, Result};
 use std::{env, fs, path::PathBuf};
 
+pub use types::BootstrapCommand;
 use types::{BootstrapInvocation, BootstrapMode, Host, ServerConfig, SERVER_LAUNCHER, SERVER_NAME};
 
 pub fn run_cli(args: &[String]) -> Result<i32> {
     let invocation = BootstrapInvocation::parse(args)?;
+    run_invocation(invocation)
+}
+
+pub fn run_command(command: BootstrapCommand) -> Result<i32> {
+    run_invocation(types::invocation_from_command(command))
+}
+
+fn run_invocation(invocation: BootstrapInvocation) -> Result<i32> {
     if invocation.list_hosts {
         print_hosts();
         return Ok(0);
@@ -54,7 +63,7 @@ struct BootstrapPlan {
 
 impl BootstrapPlan {
     fn for_invocation(invocation: &BootstrapInvocation) -> Result<Self> {
-        let host = invocation.host.expect("host is required");
+        let host = invocation.host;
         let root = invocation.root.clone().unwrap_or(env::current_dir()?);
         let path = match invocation.config.clone() {
             Some(path) => path,

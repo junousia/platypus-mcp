@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
+use clap::{Args, Parser};
 use rmcp::{
     model::{CallToolRequestParams, JsonObject},
     transport::TokioChildProcess,
@@ -7,8 +8,41 @@ use rmcp::{
 use serde_json::Value;
 use tokio::process::Command;
 
+#[derive(Debug, Clone, Args)]
+pub struct ToolCli {
+    /// Project root to bind the MCP server to.
+    #[arg(long)]
+    pub root: Option<String>,
+    /// MCP tool name to invoke.
+    pub name: String,
+    /// JSON object passed as tool arguments.
+    #[arg(default_value = "{}")]
+    pub arguments: String,
+}
+
 pub async fn run_tool_cli(args: &[String]) -> Result<i32> {
-    let invocation = ToolInvocation::parse(args)?;
+    let cli = ToolCliParser::try_parse_from(
+        std::iter::once("tool").chain(args.iter().map(String::as_str)),
+    )?;
+    run_tool_command(cli.command).await
+}
+
+pub async fn run_tool_command(command: ToolCli) -> Result<i32> {
+    let mut arguments = parse_json_object(&command.arguments)?;
+    if let Some(root) = command.root.as_deref() {
+        arguments
+            .entry("root".to_string())
+            .or_insert_with(|| Value::String(root.to_string()));
+    }
+    run_invocation(ToolInvocation {
+        name: command.name,
+        arguments,
+        root: command.root,
+    })
+    .await
+}
+
+async fn run_invocation(invocation: ToolInvocation) -> Result<i32> {
     let mut command = Command::new(std::env::current_exe().context("current executable")?);
     if let Some(root) = invocation.root.as_deref() {
         command.env("PLATYPUS_MCP_ROOT", root);
@@ -53,52 +87,11 @@ struct ToolInvocation {
     root: Option<String>,
 }
 
-impl ToolInvocation {
-    fn parse(args: &[String]) -> Result<Self> {
-        let mut root = None;
-        let mut positional = Vec::new();
-        let mut index = 0;
-        while index < args.len() {
-            let arg = &args[index];
-            if arg == "--root" {
-                index += 1;
-                root = Some(
-                    args.get(index)
-                        .ok_or_else(|| anyhow!("--root requires a value"))?
-                        .to_string(),
-                );
-            } else if let Some(value) = arg.strip_prefix("--root=") {
-                if value.is_empty() {
-                    bail!("--root requires a value");
-                }
-                root = Some(value.to_string());
-            } else {
-                positional.push(arg.to_string());
-            }
-            index += 1;
-        }
-
-        if positional.is_empty() {
-            bail!("usage: platypus-mcp tool [--root <path>] <tool-name> [json-object]");
-        }
-        if positional.len() > 2 {
-            bail!("usage: platypus-mcp tool [--root <path>] <tool-name> [json-object]");
-        }
-
-        let name = positional[0].clone();
-        let argument_text = positional.get(1).map(String::as_str).unwrap_or("{}");
-        let mut arguments = parse_json_object(argument_text)?;
-        if let Some(root) = root.as_deref() {
-            arguments
-                .entry("root".to_string())
-                .or_insert_with(|| Value::String(root.to_string()));
-        }
-        Ok(Self {
-            name,
-            arguments,
-            root,
-        })
-    }
+#[derive(Debug, Parser)]
+#[command(name = "tool")]
+struct ToolCliParser {
+    #[command(flatten)]
+    command: ToolCli,
 }
 
 fn parse_json_object(value: &str) -> Result<JsonObject> {

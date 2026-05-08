@@ -1,18 +1,42 @@
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if args.first().map(String::as_str) == Some("runner") {
-        return platypus_mcp::runner::run_cli(&args[1..]);
+    match Cli::parse().command {
+        Some(Command::Runner(command)) => platypus_mcp::runner::run_command(command),
+        Some(Command::Bootstrap { command }) => {
+            let code = platypus_mcp::bootstrap::run_command(command)?;
+            std::process::exit(code);
+        }
+        Some(Command::Tool(command)) => {
+            let code = platypus_mcp::cli::run_tool_command(command).await?;
+            std::process::exit(code);
+        }
+        None => platypus_mcp::serve_stdio().await,
     }
-    if args.first().map(String::as_str) == Some("bootstrap") {
-        let code = platypus_mcp::bootstrap::run_cli(&args[1..])?;
-        std::process::exit(code);
-    }
-    if args.first().map(String::as_str) == Some("tool") {
-        let code = platypus_mcp::cli::run_tool_cli(&args[1..]).await?;
-        std::process::exit(code);
-    }
-    platypus_mcp::serve_stdio().await
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "platypus-mcp",
+    about = "Local-first MCP server for deterministic Platypus project orchestration",
+    version
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Configure an MCP host to launch Platypus MCP.
+    Bootstrap {
+        #[command(subcommand)]
+        command: platypus_mcp::bootstrap::BootstrapCommand,
+    },
+    /// Invoke one MCP tool through the stdio contract.
+    Tool(platypus_mcp::cli::ToolCli),
+    /// Prepare queued work with the local runner.
+    Runner(platypus_mcp::runner::RunnerCli),
 }
