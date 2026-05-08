@@ -1,4 +1,5 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -18,7 +19,7 @@ pub(super) enum Scope {
     Global,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(super) enum Host {
     Codex,
     Claude,
@@ -27,16 +28,6 @@ pub(super) enum Host {
 }
 
 impl Host {
-    pub(super) fn parse(value: &str) -> Result<Self> {
-        match value {
-            "codex" => Ok(Self::Codex),
-            "claude" | "claude-code" => Ok(Self::Claude),
-            "opencode" => Ok(Self::Opencode),
-            "pi" => Ok(Self::Pi),
-            other => bail!("unknown host `{other}`; use one of: codex, claude, opencode, pi"),
-        }
-    }
-
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Codex => "Codex",
@@ -49,7 +40,7 @@ impl Host {
 
 #[derive(Debug, Clone)]
 pub(super) struct BootstrapInvocation {
-    pub(super) host: Option<Host>,
+    pub(super) host: Host,
     pub(super) scope: Scope,
     pub(super) config: Option<PathBuf>,
     pub(super) root: Option<PathBuf>,
@@ -60,95 +51,105 @@ pub(super) struct BootstrapInvocation {
 
 impl BootstrapInvocation {
     pub(super) fn parse(args: &[String]) -> Result<Self> {
-        let mut host = None;
-        let mut scope = Scope::Project;
-        let mut config = None;
-        let mut root = None;
-        let mut mode = BootstrapMode::Apply;
-        let mut force = false;
-        let mut list_hosts = false;
+        let cli = BootstrapCli::try_parse_from(
+            std::iter::once("bootstrap").chain(args.iter().map(String::as_str)),
+        )?;
+        Ok(invocation_from_command(cli.command))
+    }
+}
 
-        let mut index = 0;
-        while index < args.len() {
-            let arg = &args[index];
-            match arg.as_str() {
-                "hosts" | "list" => list_hosts = true,
-                "--project" => scope = Scope::Project,
-                "--global" | "--user" => scope = Scope::Global,
-                "--dry-run" => mode = BootstrapMode::DryRun,
-                "--check" => mode = BootstrapMode::Check,
-                "--force" => force = true,
-                "--config" => {
-                    index += 1;
-                    config = Some(value_path(args.get(index), "--config")?);
-                }
-                "--root" | "--project-root" => {
-                    index += 1;
-                    root = Some(value_path(args.get(index), arg)?);
-                }
-                _ if arg.starts_with("--config=") => {
-                    config = Some(PathBuf::from(non_empty_value(arg, "--config=")?));
-                }
-                _ if arg.starts_with("--root=") => {
-                    root = Some(PathBuf::from(non_empty_value(arg, "--root=")?));
-                }
-                _ if arg.starts_with("--project-root=") => {
-                    root = Some(PathBuf::from(non_empty_value(arg, "--project-root=")?));
-                }
-                _ if arg.starts_with("--scope=") => {
-                    scope = parse_scope(non_empty_value(arg, "--scope=")?)?;
-                }
-                _ if arg.starts_with('-') => bail!("unknown bootstrap option `{arg}`"),
-                _ => {
-                    if host.is_some() {
-                        bail!("{}", usage());
-                    }
-                    host = Some(Host::parse(arg)?);
-                }
-            }
-            index += 1;
-        }
+#[derive(Debug, Parser)]
+#[command(
+    name = "bootstrap",
+    about = "Configure an MCP host to launch Platypus MCP"
+)]
+struct BootstrapCli {
+    #[command(subcommand)]
+    command: BootstrapCommand,
+}
 
-        if !list_hosts && host.is_none() {
-            bail!("{}", usage());
-        }
+#[derive(Debug, Subcommand)]
+pub enum BootstrapCommand {
+    /// List supported MCP hosts.
+    #[command(alias = "list")]
+    Hosts,
+    /// Configure Codex CLI TOML MCP config.
+    Codex(HostOptions),
+    /// Configure Claude Code project MCP config.
+    #[command(alias = "claude-code")]
+    Claude(HostOptions),
+    /// Configure OpenCode JSON MCP config.
+    Opencode(HostOptions),
+    /// Configure Pi shared MCP config.
+    Pi(HostOptions),
+}
 
-        Ok(Self {
+#[derive(Debug, Clone, Args)]
+pub struct HostOptions {
+    /// Write project-local host configuration.
+    #[arg(long, conflicts_with = "global")]
+    project: bool,
+    /// Write user/global host configuration where supported.
+    #[arg(long, alias = "user", conflicts_with = "project")]
+    global: bool,
+    /// Explicit config file path to write or inspect.
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Bind Platypus MCP tools to this project root.
+    #[arg(long, alias = "project-root")]
+    root: Option<PathBuf>,
+    /// Print the planned configuration without writing it.
+    #[arg(long, conflicts_with = "check")]
+    dry_run: bool,
+    /// Return success only when the host is already configured.
+    #[arg(long, conflicts_with = "dry_run")]
+    check: bool,
+    /// Replace an existing platypus server entry even if it is not recognized.
+    #[arg(long)]
+    force: bool,
+}
+
+impl HostOptions {
+    pub(super) fn into_invocation(self, host: Host) -> BootstrapInvocation {
+        let scope = if self.global {
+            Scope::Global
+        } else {
+            Scope::Project
+        };
+        let mode = if self.check {
+            BootstrapMode::Check
+        } else if self.dry_run {
+            BootstrapMode::DryRun
+        } else {
+            BootstrapMode::Apply
+        };
+        BootstrapInvocation {
             host,
             scope,
-            config,
-            root,
+            config: self.config,
+            root: self.root,
             mode,
-            force,
-            list_hosts,
-        })
+            force: self.force,
+            list_hosts: false,
+        }
     }
 }
 
-fn usage() -> &'static str {
-    "usage: platypus-mcp bootstrap <host> [--project|--global] [--config <path>] [--root <path>] [--dry-run|--check] [--force]"
-}
-
-fn value_path(value: Option<&String>, flag: &str) -> Result<PathBuf> {
-    value
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("{flag} requires a value"))
-}
-
-fn non_empty_value<'a>(arg: &'a str, prefix: &str) -> Result<&'a str> {
-    let value = arg.trim_start_matches(prefix);
-    if value.is_empty() {
-        bail!("{prefix} requires a value");
-    }
-    Ok(value)
-}
-
-fn parse_scope(value: &str) -> Result<Scope> {
-    match value {
-        "project" => Ok(Scope::Project),
-        "global" | "user" => Ok(Scope::Global),
-        other => bail!("unknown scope `{other}`; use project or global"),
+pub(super) fn invocation_from_command(command: BootstrapCommand) -> BootstrapInvocation {
+    match command {
+        BootstrapCommand::Hosts => BootstrapInvocation {
+            host: Host::Codex,
+            scope: Scope::Project,
+            config: None,
+            root: None,
+            mode: BootstrapMode::Apply,
+            force: false,
+            list_hosts: true,
+        },
+        BootstrapCommand::Codex(options) => options.into_invocation(Host::Codex),
+        BootstrapCommand::Claude(options) => options.into_invocation(Host::Claude),
+        BootstrapCommand::Opencode(options) => options.into_invocation(Host::Opencode),
+        BootstrapCommand::Pi(options) => options.into_invocation(Host::Pi),
     }
 }
 

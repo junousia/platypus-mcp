@@ -23,6 +23,7 @@ exclude = [
 
 [dependencies]
 anyhow = "1.0"
+clap = { version = "4.6.1", features = ["derive"] }
 rmcp = { version = "0.16.0", features = ["client", "server", "transport-child-process", "transport-io"] }
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 schemars = "1.1.0"
