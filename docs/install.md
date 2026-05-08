@@ -27,6 +27,24 @@ The installed binary is:
 platypus-mcp
 ```
 
+Configure an MCP host:
+
+```bash
+platypus-mcp bootstrap codex
+platypus-mcp bootstrap claude
+platypus-mcp bootstrap opencode
+platypus-mcp bootstrap pi
+```
+
+Useful bootstrap options:
+
+```bash
+platypus-mcp bootstrap codex --dry-run
+platypus-mcp bootstrap codex --check
+platypus-mcp bootstrap codex --global
+platypus-mcp bootstrap codex --root /path/to/project
+```
+
 Smoke-test the stdio tool contract against the current directory:
 
 ```bash
@@ -53,7 +71,7 @@ env = { PLATYPUS_MCP_ROOT = "/path/to/project" }
 ```
 
 For development inside this repository, `.codex/config.toml` contains a
-project-local configuration that runs the checked-out source directly.
+project-local configuration that uses the installed `platypus-mcp` binary.
 
 Source checkout configuration:
 

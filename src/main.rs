@@ -6,6 +6,10 @@ async fn main() -> Result<()> {
     if args.first().map(String::as_str) == Some("runner") {
         return platypus_mcp::runner::run_cli(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("bootstrap") {
+        let code = platypus_mcp::bootstrap::run_cli(&args[1..])?;
+        std::process::exit(code);
+    }
     if args.first().map(String::as_str) == Some("tool") {
         let code = platypus_mcp::cli::run_tool_cli(&args[1..]).await?;
         std::process::exit(code);
