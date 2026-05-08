@@ -29,7 +29,7 @@ documented in [docs/roadmap.md](docs/roadmap.md).
 flowchart LR
     host["MCP host<br/>Codex, Claude, or another client"]
     mcp["Platypus MCP server<br/>deterministic local tools"]
-    state[".platy/platypus.sqlite3<br/>runtime state"]
+    state["ProjectState backend<br/>local SQLite today"]
     files["Repository files<br/>backlog, platy.yaml, worktrees"]
     git["Git history<br/>closure and verification trailers"]
     worker["Worker harness<br/>runs in isolated worktree"]
@@ -52,7 +52,8 @@ and recoverable.
 - `src/server.rs`: RMCP server and tool router
 - `src/models.rs`: public tool request and response schemas
 - `src/backlog/`: backlog parsing, validation, listing, drafting, and creation
-- `src/storage/`: SQLite setup plus typed repository APIs; see
+- `src/storage/`: current SQLite reference implementation and migration
+  scaffolding for the domain-shaped `ProjectState` boundary; see
   [docs/storage.md](docs/storage.md)
 - `docs/diagrams.md`: repository-level Mermaid diagrams from multiple
   perspectives
@@ -82,13 +83,17 @@ Platypus-Verification: make check
 ```
 
 Runtime state such as queued/running tasks, task events, findings, claims, and
-future worker attempts belongs in `.platy/platypus.sqlite3`.
+future worker attempts belongs behind the `ProjectState` backend boundary.
+The current local backend stores it in `.platy/platypus.sqlite3`.
 
 SQLite is the local-first reference backend, not a permanent product boundary.
-Future shared runtime backends must preserve the same MCP schemas, event
-ordering, lease semantics, conflict behavior, recovery paths, and reconciliation
-rules documented in [docs/storage.md](docs/storage.md). Local SQLite support
-remains a first-class mode even if shared coordination is added later.
+MCP tools should depend on Platypus domain operations such as dispatching work,
+preparing assignments, completing worker execution, replaying events, and
+reconciling state, not on SQL-shaped repositories. Future shared runtime
+backends must preserve the same MCP schemas, event ordering, lease semantics,
+conflict behavior, recovery paths, and reconciliation rules documented in
+[docs/storage.md](docs/storage.md). Local SQLite support remains a first-class
+mode even if shared coordination is added later.
 
 External trackers are integration surfaces, not the hidden source of execution
 truth. Platypus imports approved external records into local backlog snapshots;
