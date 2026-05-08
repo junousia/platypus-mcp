@@ -1438,6 +1438,7 @@ pub async fn serve_stdio() -> AnyhowResult<()> {
 mod tests {
     use super::*;
     use rmcp::model::TaskSupport;
+    use serde_json::Value;
 
     #[test]
     fn tool_router_exposes_basic_tool_set() {
@@ -1595,6 +1596,72 @@ mod tests {
                 Some(TaskSupport::Forbidden),
                 "{name} should forbid task invocation"
             );
+        }
+    }
+
+    #[test]
+    fn nested_tool_inputs_are_advertised_as_structured_objects() {
+        let server = PlatypusMcp::new();
+        let tools = server.tool_router.list_all();
+
+        assert_array_items_are_objects(&tools, "draft_external_backlog_items", "records");
+        assert_array_items_are_objects(&tools, "import_github_issues", "issues");
+        assert_array_items_are_objects(&tools, "create_backlog_item", "external_refs");
+        assert_property_is_object(&tools, "request_external_report_approval", "draft");
+        assert_property_is_object(&tools, "write_task_plan", "plan");
+    }
+
+    fn assert_array_items_are_objects(
+        tools: &[rmcp::model::Tool],
+        tool_name: &str,
+        property_name: &str,
+    ) {
+        let schema = input_schema(tools, tool_name);
+        let property = property_schema(&schema, property_name);
+        assert_eq!(
+            property["type"], "array",
+            "{tool_name}.{property_name} should be an array: {property:#}"
+        );
+        let items = &property["items"];
+        assert!(
+            has_object_type(items),
+            "{tool_name}.{property_name} items should be inline objects, got: {items:#}"
+        );
+    }
+
+    fn assert_property_is_object(
+        tools: &[rmcp::model::Tool],
+        tool_name: &str,
+        property_name: &str,
+    ) {
+        let schema = input_schema(tools, tool_name);
+        let property = property_schema(&schema, property_name);
+        assert!(
+            has_object_type(property),
+            "{tool_name}.{property_name} should be an inline object, got: {property:#}"
+        );
+    }
+
+    fn input_schema(tools: &[rmcp::model::Tool], tool_name: &str) -> Value {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == tool_name)
+            .unwrap_or_else(|| panic!("{tool_name} missing"));
+        serde_json::to_value(tool.input_schema.as_ref()).expect("schema json")
+    }
+
+    fn property_schema<'a>(schema: &'a Value, property_name: &str) -> &'a Value {
+        schema
+            .get("properties")
+            .and_then(|properties| properties.get(property_name))
+            .unwrap_or_else(|| panic!("{property_name} missing in schema: {schema:#}"))
+    }
+
+    fn has_object_type(schema: &Value) -> bool {
+        match schema.get("type") {
+            Some(Value::String(kind)) => kind == "object",
+            Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind == "object"),
+            _ => false,
         }
     }
 }

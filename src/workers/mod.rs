@@ -3,7 +3,7 @@ pub mod codex;
 
 use serde_json::Value;
 use std::{
-    io::Write,
+    io::{ErrorKind, Write},
     path::Path,
     process::{Command, Stdio},
     thread,
@@ -89,9 +89,11 @@ pub(crate) fn run_harness_process(
         .map_err(|error| format!("failed to start worker harness: {error}"))?;
 
     if let Some(mut child_stdin) = child.stdin.take() {
-        child_stdin
-            .write_all(stdin.as_bytes())
-            .map_err(|error| format!("failed to write worker brief: {error}"))?;
+        if let Err(error) = child_stdin.write_all(stdin.as_bytes()) {
+            if error.kind() != ErrorKind::BrokenPipe {
+                return Err(format!("failed to write worker brief: {error}"));
+            }
+        }
     }
 
     let started = Instant::now();
