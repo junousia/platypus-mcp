@@ -29,6 +29,11 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"init_project"));
     assert!(tool_names.contains(&"next_safe_action"));
     assert!(tool_names.contains(&"record_finding"));
+    assert!(tool_names.contains(&"draft_task_plan"));
+    assert!(tool_names.contains(&"inspect_task_plan"));
+    assert!(tool_names.contains(&"list_task_plans"));
+    assert!(tool_names.contains(&"validate_task_plan"));
+    assert!(tool_names.contains(&"write_task_plan"));
     assert!(tool_names.contains(&"inspect_task"));
     assert!(tool_names.contains(&"claim_next_task"));
     assert!(tool_names.contains(&"worktree_create"));
@@ -171,6 +176,57 @@ async fn stdio_server_calls_project_doctor_with_configured_root() -> anyhow::Res
     assert_eq!(response["action"], "doctor_snapshot");
     assert_eq!(response["status"], "completed");
     assert_eq!(response["data"]["ok"], true);
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_drafts_writes_and_validates_task_plan() -> anyhow::Result<()> {
+    let project = assignment_project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let drafted =
+        call_tool_json(&client, "draft_task_plan", json!({ "item_id": "PROJ-001" })).await?;
+    assert_stage_status("draft_task_plan", &drafted, "completed");
+    assert_eq!(drafted["data"]["plan"]["item_id"], "PROJ-001");
+    assert_eq!(drafted["data"]["plan"]["tasks"][0]["id"], "PROJ-001-T01");
+
+    let written = call_tool_json(
+        &client,
+        "write_task_plan",
+        json!({
+            "item_id": "PROJ-001",
+            "plan": drafted["data"]["plan"].clone()
+        }),
+    )
+    .await?;
+    assert_stage_status("write_task_plan", &written, "completed");
+
+    let validated = call_tool_json(
+        &client,
+        "validate_task_plan",
+        json!({ "item_id": "PROJ-001", "include_errors": true }),
+    )
+    .await?;
+    assert_stage_status("validate_task_plan", &validated, "completed");
+    assert_eq!(validated["data"]["ok"], true);
+
+    let listed = call_tool_json(&client, "list_task_plans", json!({})).await?;
+    assert_stage_status("list_task_plans", &listed, "completed");
+    assert_eq!(listed["data"]["returned"], 1);
+
+    let inspected = call_tool_json(
+        &client,
+        "inspect_task_plan",
+        json!({ "item_id": "PROJ-001" }),
+    )
+    .await?;
+    assert_stage_status("inspect_task_plan", &inspected, "completed");
+    assert_eq!(
+        inspected["data"]["plan"]["tasks"][0]["verification"][0],
+        "make check"
+    );
 
     client.cancel().await?;
     Ok(())

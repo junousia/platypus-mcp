@@ -64,6 +64,11 @@ constraints, dependencies, surfaces, and acceptance criteria. They do not carry
 runtime fields such as status, assignment, PRs, task attempts, or closure
 metadata.
 
+Non-trivial items can have committed task plans under `backlog/plans/*.yaml`.
+Plans contain strict, reviewable requirements, design summaries, and planned
+worker tasks. They also stay free of runtime fields such as status, commit,
+attempts, results, or evidence.
+
 Closure is derived from reachable Git trailers:
 
 ```text
