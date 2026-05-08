@@ -29,6 +29,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"init_project"));
     assert!(tool_names.contains(&"next_safe_action"));
     assert!(tool_names.contains(&"inspect_work_queue"));
+    assert!(tool_names.contains(&"classify_planning_needs"));
     assert!(tool_names.contains(&"record_finding"));
     assert!(tool_names.contains(&"draft_task_plan"));
     assert!(tool_names.contains(&"inspect_task_plan"));
@@ -351,8 +352,38 @@ async fn stdio_server_inspects_work_queue_with_task_plan_state() -> anyhow::Resu
     assert_stage_status("inspect_work_queue ready", &ready, "completed");
     assert_eq!(ready["data"]["recommended_tool"], "dispatch_next_work");
     assert_eq!(ready["data"]["items"][0]["plan"]["status"], "valid");
+    assert_eq!(
+        ready["data"]["items"][0]["planning"]["required_mode"],
+        "standard"
+    );
     assert_eq!(ready["data"]["items"][0]["plan"]["task_count"], 1);
     assert_eq!(ready["data"]["items"][0]["ready_to_dispatch"], true);
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_classifies_planning_needs() -> anyhow::Result<()> {
+    let project = assignment_project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let classified = call_tool_json(
+        &client,
+        "classify_planning_needs",
+        json!({ "item_id": "PROJ-001", "limit": 5 }),
+    )
+    .await?;
+    assert_stage_status("classify_planning_needs", &classified, "completed");
+    assert_eq!(classified["data"]["returned"], 1);
+    assert_eq!(
+        classified["data"]["classifications"][0]["required_mode"],
+        "standard"
+    );
+    assert_eq!(
+        classified["data"]["classifications"][0]["required_artifact"],
+        "backlog/plans/PROJ-001.yaml"
+    );
 
     client.cancel().await?;
     Ok(())

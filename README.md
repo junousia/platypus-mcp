@@ -12,8 +12,9 @@ worker progress/result recording, approvals, events, findings, evidence, agent
 profiles, workflow integration configuration, and reconciliation.
 
 Use `inspect_work_queue` to choose executable backlog work and
-`next_safe_action` as the host-facing guide for the next safe lifecycle tool
-call.
+`classify_planning_needs` to explain whether an item needs direct, standard, or
+full planning. Use `next_safe_action` as the host-facing guide for the next safe
+lifecycle tool call.
 The preferred workflow is documented in [docs/workflow.md](docs/workflow.md),
 and the full tool surface is documented in [docs/tools.md](docs/tools.md).
 

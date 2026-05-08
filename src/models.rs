@@ -26,6 +26,13 @@ pub struct InspectWorkQueueParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ClassifyPlanningNeedsParams {
+    pub root: Option<String>,
+    pub item_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct InitProjectParams {
     pub root: Option<String>,
     pub project_name: Option<String>,
@@ -473,6 +480,7 @@ pub struct WorkQueueData {
 pub struct WorkQueueItem {
     pub position: usize,
     pub candidate: BacklogCandidate,
+    pub planning: PlanningClassification,
     pub plan: WorkQueuePlanState,
     pub ready_to_dispatch: bool,
     pub recommended_tool: String,
@@ -487,6 +495,21 @@ pub struct WorkQueuePlanState {
     pub task_count: usize,
     pub requirement_count: usize,
     pub errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone, JsonSchema)]
+pub struct PlanningClassification {
+    pub item_id: String,
+    pub required_mode: String,
+    pub required_artifact: Option<String>,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PlanningClassificationData {
+    pub root: String,
+    pub classifications: Vec<PlanningClassification>,
+    pub returned: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -541,6 +564,8 @@ pub struct BacklogCandidate {
     pub item_id: String,
     pub title: String,
     pub priority: String,
+    #[serde(rename = "type")]
+    pub item_type: String,
     pub area: String,
     pub suggested_worker: Option<String>,
     pub owned_surfaces: Vec<String>,

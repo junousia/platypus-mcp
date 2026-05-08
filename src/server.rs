@@ -4,25 +4,25 @@ use crate::{
     models::{
         ActionResult, AgentProfileData, AgentProfilesData, AgentProfilesParams, ApprovalListData,
         ApprovalListParams, ApprovalRespondParams, ApprovalResponseData, ClaimNextTaskParams,
-        CompleteWorkerExecutionParams, ConfigureAgentProfileParams, CreateBacklogItemParams,
-        CreatedBacklogItemData, DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData,
-        DraftBacklogItemsParams, DraftTaskPlanParams, EventsReplayData, EventsReplayParams,
-        EvidenceListData, EvidenceRecordData, FindingDispositionData, FindingListData,
-        FindingRecordData, FindingValidationData, GenerateTaskBundleParams, InitProjectParams,
-        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
+        ClassifyPlanningNeedsParams, CompleteWorkerExecutionParams, ConfigureAgentProfileParams,
+        CreateBacklogItemParams, CreatedBacklogItemData, DispatchNextWorkData, DoctorSnapshotData,
+        DraftBacklogData, DraftBacklogItemsParams, DraftTaskPlanParams, EventsReplayData,
+        EventsReplayParams, EvidenceListData, EvidenceRecordData, FindingDispositionData,
+        FindingListData, FindingRecordData, FindingValidationData, GenerateTaskBundleParams,
+        InitProjectParams, InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
         InspectWorkerAssignmentParams, IntegrateWorkerResultParams, LimitParams,
         ListEvidenceParams, ListFindingsParams, NextSafeActionData, NextSafeActionParams, PingData,
-        PingParams, PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData,
-        ReconcileParams, ReconciliationData, RecordEvidenceParams, RecordFindingParams,
-        RecordVerificationEvidenceParams, RecordWorkerEventParams, RootParams, RunnerPrepareParams,
-        RunnerReportData, SendWorkerGuidanceParams, StartWorkerExecutionParams, TaskBundleData,
-        TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams,
-        TaskPlanValidationData, TaskPlanWriteData, TaskRecordData, UpdateFindingDispositionParams,
-        ValidateBacklogParams, ValidateFindingsParams, WorkQueueData, WorkerAssignmentData,
-        WorkerAssignmentEventData, WorkerGuidanceData, WorkerResultIntegrationData,
-        WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData, WorktreeCleanupParams,
-        WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffParams,
-        WorktreeStatusParams, WriteTaskPlanParams,
+        PingParams, PlanningClassificationData, PrepareWorkerAssignmentParams, ProjectScaffoldData,
+        ProjectStatusData, ReconcileParams, ReconciliationData, RecordEvidenceParams,
+        RecordFindingParams, RecordVerificationEvidenceParams, RecordWorkerEventParams, RootParams,
+        RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams,
+        StartWorkerExecutionParams, TaskBundleData, TaskEventListData, TaskPlanData,
+        TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams, TaskPlanValidationData,
+        TaskPlanWriteData, TaskRecordData, UpdateFindingDispositionParams, ValidateBacklogParams,
+        ValidateFindingsParams, WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData,
+        WorkerGuidanceData, WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams,
+        WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams, WorktreeData,
+        WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
     },
     project, reconcile, runner, tasks, workspace,
 };
@@ -257,6 +257,28 @@ impl PlatypusMcp {
         Parameters(params): Parameters<InspectWorkQueueParams>,
     ) -> Json<ActionResult<WorkQueueData>> {
         Json(guidance::inspect_work_queue(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Classify Planning Needs",
+        description = "Classify runnable backlog items as direct, standard, or full planning mode.",
+        annotations(
+            title = "Classify Planning Needs",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn classify_planning_needs(
+        &self,
+        Parameters(params): Parameters<ClassifyPlanningNeedsParams>,
+    ) -> Json<ActionResult<PlanningClassificationData>> {
+        Json(guidance::classify_planning_needs(
+            &self.default_root,
+            params,
+        ))
     }
 
     #[tool(
@@ -1216,6 +1238,7 @@ mod tests {
             "project_status",
             "next_safe_action",
             "inspect_work_queue",
+            "classify_planning_needs",
             "list_backlog",
             "validate_backlog",
             "doctor_snapshot",
