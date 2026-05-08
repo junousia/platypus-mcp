@@ -1,0 +1,76 @@
+item_id: MCP-035
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: GitHub issues can be imported from host-provided issue records into local backlog snapshots.
+- id: R2
+  text: Imported items include GitHub external refs with deterministic source hashes and avoid duplicates.
+- id: R3
+  text: Import errors are structured and do not leave partial files for rejected issues.
+design:
+  summary: Add a GitHub issue import tool that accepts fixture/host-provided issue records, maps labels through the generic external intake boundary, and creates validated backlog items with GitHub external refs.
+  owned_surfaces:
+  - src/integrations
+  - src/models.rs
+  - src/server.rs
+  - docs/tools.md
+  - tests/stdio_protocol.rs
+  notes: Do not add live GitHub API calls in this item. Network-backed providers can be added behind the same adapter boundary later.
+tasks:
+- id: MCP-035-T01
+  title: Add GitHub issue import models and mapper
+  goal: Define typed GitHub issue input records and deterministic mapping into external work records.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/integrations
+  - src/models.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - GitHub issues map to provider github, kind issue, stable owner/repo#number ids, URLs, labels, and source hashes.
+  - State and limit filters are deterministic.
+  - Tests require no live GitHub.
+  notes: null
+- id: MCP-035-T02
+  title: Create backlog snapshots from GitHub issues
+  goal: Add an MCP tool that writes local backlog items for non-duplicate GitHub issue candidates.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-035-T01
+  owned_surfaces:
+  - src/integrations
+  - src/server.rs
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Imported issues create valid backlog item files.
+  - Already imported issue refs are skipped.
+  - Invalid issue records fail before writing partial backlog files.
+  notes: null
+- id: MCP-035-T03
+  title: Document GitHub import snapshot mode
+  goal: Explain host-provided GitHub import and why local backlog snapshots remain canonical for execution.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on:
+  - MCP-035-T02
+  owned_surfaces:
+  - docs/tools.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Docs mention import_github_issues and fixture/host-provided issue JSON.
+  - Docs state that live sync and reporting are later work.
+  notes: null
