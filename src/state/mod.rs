@@ -7,11 +7,13 @@
 
 mod commands;
 mod error;
+pub mod memory;
 pub mod sqlite;
 mod types;
 
 pub use commands::*;
 pub use error::{ProjectStateError, StateResult};
+pub use memory::MemoryProjectState;
 pub use types::*;
 
 /// Durable state operations for one Platypus project.

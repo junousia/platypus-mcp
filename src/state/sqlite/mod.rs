@@ -9,8 +9,8 @@ use crate::{
     backlog, bundle, git_trailers,
     models::{
         ActionResult, ActionStatus, BacklogCandidate, BacklogListData, EventRecord, EvidenceRecord,
-        FindingRecord, GenerateTaskBundleParams, RuntimeTransitionRecord, TaskBundleData,
-        TaskEventRecord, TaskRecord, WorkerAssignment, WorktreeCreateParams,
+        FindingRecord, GenerateTaskBundleParams, LeaseRecord, RuntimeTransitionRecord,
+        TaskBundleData, TaskEventRecord, TaskRecord, WorkerAssignment, WorktreeCreateParams,
     },
     state::{
         AcquireLeaseCommand, AppendWorkerEventCommand, ApprovalSnapshot, AssignmentLifecycleState,
@@ -19,11 +19,11 @@ use crate::{
         DispatchWorkCommand, DispatchWorkOutcome, EventReplaySnapshot, EvidenceListSnapshot,
         EvidenceQuery, EvidenceSnapshot, FindingDispositionSnapshot, FindingSnapshot,
         FindingsQuery, FindingsSnapshot, FindingsValidationSnapshot, IntegrateResultCommand,
-        LeaseSnapshot, NextSafeActionQuery, PrepareAssignmentCommand, ProjectEventSnapshot,
-        ProjectState, ProjectStateError, ReconcileGap, ReconcileProjectQuery, ReconcileSnapshot,
-        RecordEvidenceCommand, RecordFindingCommand, RecordWorkspaceCommand, ReplayEventsQuery,
-        ResolveApprovalCommand, SafeActionSnapshot, StartExecutionCommand, StateResult,
-        TaskLifecycleState, TaskQuery, TaskSnapshot, UpdateFindingDispositionCommand,
+        LeaseSnapshot, LeaseState, NextSafeActionQuery, PrepareAssignmentCommand,
+        ProjectEventSnapshot, ProjectState, ProjectStateError, ReconcileGap, ReconcileProjectQuery,
+        ReconcileSnapshot, RecordEvidenceCommand, RecordFindingCommand, RecordWorkspaceCommand,
+        ReplayEventsQuery, ResolveApprovalCommand, SafeActionSnapshot, StartExecutionCommand,
+        StateResult, TaskLifecycleState, TaskQuery, TaskSnapshot, UpdateFindingDispositionCommand,
         ValidateFindingsQuery, WorkerEventSnapshot, WorkerWorkspaceSnapshot,
     },
     storage::{
@@ -588,8 +588,20 @@ impl ProjectState for SqliteProjectState {
         self.unsupported("resolve_approval")
     }
 
-    fn acquire_lease(&self, _command: AcquireLeaseCommand) -> StateResult<LeaseSnapshot> {
-        self.unsupported("acquire_lease")
+    fn acquire_lease(&self, command: AcquireLeaseCommand) -> StateResult<LeaseSnapshot> {
+        let lease = self
+            .connection
+            .repository()
+            .leases()
+            .acquire(storage::LeaseInsert {
+                scope: lease_scope(&command.scope).to_string(),
+                target_id: command.target_id,
+                owner: command.owner,
+                ttl_seconds: command.ttl_seconds,
+                metadata: command.metadata,
+            })
+            .map_err(map_repository_error)?;
+        Ok(lease_snapshot(lease))
     }
 
     fn integrate_result(
@@ -1285,6 +1297,29 @@ fn worker_event_snapshot(assignment_id: String, event: TaskEventRecord) -> Worke
         summary: event.summary,
         payload: payload_object(event.payload),
         created_at: event.created_at,
+    }
+}
+
+fn lease_snapshot(lease: LeaseRecord) -> LeaseSnapshot {
+    LeaseSnapshot {
+        id: lease.id,
+        scope: lease.scope,
+        target_id: lease.target_id,
+        owner: lease.owner,
+        state: match lease.status.as_str() {
+            "expired" => LeaseState::Expired,
+            "released" => LeaseState::Released,
+            _ => LeaseState::Active,
+        },
+        metadata: lease.metadata,
+        expires_at: lease.expires_at,
+    }
+}
+
+fn lease_scope(scope: &crate::state::LeaseScope) -> &'static str {
+    match scope {
+        crate::state::LeaseScope::Project => "project",
+        crate::state::LeaseScope::Task => "task",
     }
 }
 

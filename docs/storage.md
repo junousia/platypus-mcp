@@ -149,6 +149,11 @@ The migration path is:
 6. Add a guard that blocks `rusqlite` and SQL query construction outside the
    SQLite backend implementation.
 
+`MemoryProjectState` is test/support infrastructure. It is intentionally
+non-durable, does not run migrations, and should not become the production
+default. Its job is to run backend-neutral `ProjectState` contract tests so
+SQLite behavior does not accidentally become the product contract.
+
 ## State Ownership
 
 Repository-owned declarative state stays in Git:

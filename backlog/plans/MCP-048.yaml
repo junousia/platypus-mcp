@@ -1,0 +1,73 @@
+item_id: MCP-048
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: MemoryProjectState implements the ProjectState trait for deterministic test and contract coverage without durable storage claims.
+- id: R2
+  text: Shared backend contract tests exercise the same lifecycle, event, evidence, findings, and reconciliation behavior against SQLite and memory where both backends advertise support.
+- id: R3
+  text: The memory backend is clearly scoped as test/support infrastructure and does not become a production default.
+design:
+  summary: Add a src/state/memory backend that stores ProjectState entities in deterministic in-memory collections guarded by local synchronization. Introduce reusable contract-test helpers that can instantiate both SQLite and memory backends, then cover core behavior that should not depend on SQL. Keep unsupported capabilities explicit if a non-essential operation is not part of the first memory backend slice.
+  owned_surfaces:
+  - src/state/memory
+  - src/state
+  - tests
+  notes: Keep the memory implementation simple and intentionally non-durable. Do not add SQL-shaped abstractions or public backend-selection behavior in this item.
+tasks:
+- id: MCP-048-T01
+  title: Add MemoryProjectState backend
+  goal: Implement an in-memory ProjectState backend with deterministic ids, lifecycle state, events, evidence, findings, leases, and backend capability reporting.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/state/memory
+  - src/state/mod.rs
+  suggested_worker: coder
+  verification:
+  - cargo test state::memory
+  acceptance:
+  - MemoryProjectState implements ProjectState.
+  - Backend capabilities report durable=false, offline=true, and shared_coordination=false.
+  - Unsupported operations return structured ProjectStateError::Unsupported rather than panicking.
+  notes: null
+- id: MCP-048-T02
+  title: Add reusable state contract tests
+  goal: Add backend-agnostic tests that run against SQLite and MemoryProjectState for shared ProjectState behavior.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-048-T01
+  owned_surfaces:
+  - tests
+  - src/state
+  suggested_worker: coder
+  verification:
+  - cargo test state_contract
+  acceptance:
+  - The same test functions cover lifecycle, event replay, evidence/findings, and reconciliation for both backends where supported.
+  - Contract failures describe backend-neutral behavior, not SQL details.
+  notes: null
+- id: MCP-048-T03
+  title: Verify full state backend behavior
+  goal: Run focused and full verification before opening the PR.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-048-T01
+  - MCP-048-T02
+  owned_surfaces:
+  - tests
+  - src/state
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Full make check passes.
+  - The PR includes Platypus-Closes and Platypus-Verification trailers.
+  notes: null
