@@ -30,6 +30,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"next_safe_action"));
     assert!(tool_names.contains(&"inspect_work_queue"));
     assert!(tool_names.contains(&"classify_planning_needs"));
+    assert!(tool_names.contains(&"classify_workflow_fit"));
     assert!(tool_names.contains(&"record_finding"));
     assert!(tool_names.contains(&"draft_external_backlog_items"));
     assert!(tool_names.contains(&"import_github_issues"));

@@ -69,14 +69,18 @@ mechanism is verified.
 
 ## Backlog Shaping
 
-1. Use `draft_backlog_items` for a deterministic first pass from a goal.
-2. Persist selected work with `create_backlog_item`.
-3. Run `validate_backlog`.
-4. Use `list_backlog` to see runnable candidates.
-5. Use `inspect_backlog_inventory` when the runnable queue is empty or unclear;
+1. Use `classify_workflow_fit` for broad goals. Simple greenfield scaffolds
+   can start with the host's native scaffold command, then return to Platypus
+   after the first commit.
+2. Use `draft_backlog_items` for a deterministic first pass from a goal when
+   the classifier recommends `platypus_workflow` or `hybrid`.
+3. Persist selected work with `create_backlog_item`.
+4. Run `validate_backlog`.
+5. Use `list_backlog` to see runnable candidates.
+6. Use `inspect_backlog_inventory` when the runnable queue is empty or unclear;
    it explains closed items from Git trailers and blocked items from open
    dependencies without requiring hosts to read markdown directly.
-6. Use `inspect_work_queue` to combine runnable candidates, task-plan state,
+7. Use `inspect_work_queue` to combine runnable candidates, task-plan state,
    and the recommended next tool.
 
 Backlog files should contain goal, implementation contract, acceptance

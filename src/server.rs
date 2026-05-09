@@ -4,29 +4,30 @@ use crate::{
     models::{
         AcquireLeaseParams, ActionResult, AgentProfileData, AgentProfilesData, AgentProfilesParams,
         ApprovalListData, ApprovalListParams, ApprovalRespondParams, ApprovalResponseData,
-        ClaimNextTaskParams, ClassifyPlanningNeedsParams, CompleteWorkerExecutionParams,
-        ConfigureAgentProfileParams, CreateBacklogItemParams, CreatedBacklogItemData,
-        DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
-        DraftExternalBacklogItemsParams, DraftExternalReportParams, DraftTaskPlanParams,
-        EventsReplayData, EventsReplayParams, EvidenceListData, EvidenceRecordData,
-        ExternalBacklogDraftData, ExternalReportApprovalData, ExternalReportDispatchData,
-        ExternalReportDraftData, FindingDispositionData, FindingListData, FindingRecordData,
-        FindingValidationData, GenerateTaskBundleParams, GitHubIssueImportData,
-        ImportGitHubIssuesParams, InitProjectParams, InspectTaskEventsParams, InspectTaskParams,
-        InspectWorkQueueParams, InspectWorkerAssignmentParams, IntegrateWorkerResultParams,
-        LeaseListData, LeaseRecordData, LimitParams, ListEvidenceParams, ListFindingsParams,
-        ListLeasesParams, NextSafeActionData, NextSafeActionParams, PingData, PingParams,
-        PlanningClassificationData, PrepareWorkerAssignmentParams, ProjectScaffoldData,
-        ProjectStatusData, ReconcileParams, ReconciliationData, RecordEvidenceParams,
-        RecordExternalReportDispatchParams, RecordFindingParams, RecordVerificationEvidenceParams,
-        RecordWorkerEventParams, ReleaseLeaseParams, RenewLeaseParams,
-        RequestExternalReportApprovalParams, RootParams, RunnerPrepareParams, RunnerReportData,
-        SendWorkerGuidanceParams, StartWorkerExecutionParams, StorageCapabilityProbeData,
-        StorageCapabilityProbeParams, TaskBundleData, TaskEventListData, TaskPlanData,
-        TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams, TaskPlanValidationData,
-        TaskPlanWriteData, TaskRecordData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams, WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData,
-        WorkerGuidanceData, WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams,
+        ClaimNextTaskParams, ClassifyPlanningNeedsParams, ClassifyWorkflowFitParams,
+        CompleteWorkerExecutionParams, ConfigureAgentProfileParams, CreateBacklogItemParams,
+        CreatedBacklogItemData, DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData,
+        DraftBacklogItemsParams, DraftExternalBacklogItemsParams, DraftExternalReportParams,
+        DraftTaskPlanParams, EventsReplayData, EventsReplayParams, EvidenceListData,
+        EvidenceRecordData, ExternalBacklogDraftData, ExternalReportApprovalData,
+        ExternalReportDispatchData, ExternalReportDraftData, FindingDispositionData,
+        FindingListData, FindingRecordData, FindingValidationData, GenerateTaskBundleParams,
+        GitHubIssueImportData, ImportGitHubIssuesParams, InitProjectParams,
+        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
+        InspectWorkerAssignmentParams, IntegrateWorkerResultParams, LeaseListData, LeaseRecordData,
+        LimitParams, ListEvidenceParams, ListFindingsParams, ListLeasesParams, NextSafeActionData,
+        NextSafeActionParams, PingData, PingParams, PlanningClassificationData,
+        PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData, ReconcileParams,
+        ReconciliationData, RecordEvidenceParams, RecordExternalReportDispatchParams,
+        RecordFindingParams, RecordVerificationEvidenceParams, RecordWorkerEventParams,
+        ReleaseLeaseParams, RenewLeaseParams, RequestExternalReportApprovalParams, RootParams,
+        RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams,
+        StartWorkerExecutionParams, StorageCapabilityProbeData, StorageCapabilityProbeParams,
+        TaskBundleData, TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData,
+        TaskPlanQueryParams, TaskPlanValidationData, TaskPlanWriteData, TaskRecordData,
+        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
+        WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData, WorkerGuidanceData,
+        WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams, WorkflowFitData,
         WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams, WorktreeData,
         WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
     },
@@ -348,6 +349,25 @@ impl PlatypusMcp {
             &self.default_root,
             params,
         ))
+    }
+
+    #[tool(
+        title = "Classify Workflow Fit",
+        description = "Classify whether a user goal should use direct scaffolding, full Platypus workflow, or a hybrid flow.",
+        annotations(
+            title = "Classify Workflow Fit",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn classify_workflow_fit(
+        &self,
+        Parameters(params): Parameters<ClassifyWorkflowFitParams>,
+    ) -> Json<ActionResult<WorkflowFitData>> {
+        Json(guidance::classify_workflow_fit(&self.default_root, params))
     }
 
     #[tool(
@@ -1537,6 +1557,7 @@ mod tests {
             "next_safe_action",
             "inspect_work_queue",
             "classify_planning_needs",
+            "classify_workflow_fit",
             "list_backlog",
             "inspect_backlog_inventory",
             "validate_backlog",

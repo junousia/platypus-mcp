@@ -3,7 +3,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-pub(super) fn resolve_root(
+pub(crate) fn resolve_root(
     default_root: &Path,
     root: Option<&str>,
 ) -> std::result::Result<PathBuf, String> {

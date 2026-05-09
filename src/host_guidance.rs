@@ -52,19 +52,22 @@ straight to broad edits. Convert the goal into a controlled loop:
 
 1. Inspect the project with `doctor_snapshot`, `inspect_status`, and
    `next_safe_action`.
-2. Draft a small backlog set with `draft_backlog_items`. Keep items
+2. Use `classify_workflow_fit` for broad user goals. If it recommends
+   `direct_scaffold`, let the host scaffold the first files directly, then
+   return to Platypus for follow-up backlog work.
+3. Draft a small backlog set with `draft_backlog_items`. Keep items
    independently reviewable and executable.
-3. Persist only accepted items with `create_backlog_item`; then run
+4. Persist only accepted items with `create_backlog_item`; then run
    `validate_backlog`.
-4. Use `inspect_work_queue` and `classify_planning_needs` to determine whether
+5. Use `inspect_work_queue` and `classify_planning_needs` to determine whether
    the next item is direct, standard, or full.
-5. For standard or full items, create a strict task plan with
+6. For standard or full items, create a strict task plan with
    `draft_task_plan`, `write_task_plan`, and `validate_task_plan`.
-6. Dispatch with `dispatch_next_work`, prepare handoff with
+7. Dispatch with `dispatch_next_work`, prepare handoff with
    `prepare_worker_handoff`, and run implementation in the assigned worktree.
-7. Record progress, verification evidence, findings, and completion through
+8. Record progress, verification evidence, findings, and completion through
    Platypus tools.
-8. Integrate with `integrate_worker_result`, then reconcile with
+9. Integrate with `integrate_worker_result`, then reconcile with
    `reconcile_project`.
 
 The host should present this as natural assistance, not as a manual ceremony:
@@ -88,6 +91,8 @@ Use status tools before making assumptions about the repository or task queue.
   and task-plan readiness.
 - `classify_planning_needs` explains whether runnable items need direct,
   standard, or full planning.
+- `classify_workflow_fit` decides whether a broad goal should use direct
+  scaffolding first, full Platypus workflow, or a hybrid flow.
 - `next_safe_action` converts the current lifecycle state into the next safe
   tool call.
 
