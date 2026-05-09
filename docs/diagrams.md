@@ -39,7 +39,7 @@ not current tool behavior.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued: dispatch_next_work
+    [*] --> queued: dispatch_ready_work or dispatch_next_work
     queued --> claimed: claim_next_task
     claimed --> running: start_worker_task
     running --> completed: complete_worker_task completed
@@ -69,10 +69,9 @@ sequenceDiagram
     participant State as Runtime store
 
     Host->>Platy: next_safe_action
-    Platy-->>Host: dispatch_next_work
-    Host->>Platy: dispatch_next_work
-    Platy->>State: create queued task
-    Host->>Platy: prepare_worker_handoff
+    Platy-->>Host: dispatch_ready_work
+    Host->>Platy: dispatch_ready_work
+    Platy->>State: create queued task and assignment
     Platy->>Git: create/record worktree
     Platy-->>Host: assignment bundle
     Host->>Worker: run bundle in worktree
@@ -279,8 +278,8 @@ flowchart TB
 
     subgraph Runtime["Task runtime"]
         next["next_safe_action"]
-        dispatch["dispatch_next_work"]
-        handoff["prepare_worker_handoff"]
+        dispatch["dispatch_ready_work"]
+        handoff["prepare_worker_handoff<br/>low-level fallback"]
         start["start_worker_task"]
         progress["record_worker_progress"]
         complete["complete_worker_task"]

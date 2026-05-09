@@ -346,7 +346,7 @@ fn work_queue_item(
     let ready_to_dispatch = !planning_required || plan_valid;
     let (recommended_tool, reason) = if ready_to_dispatch {
         (
-            "dispatch_next_work".to_string(),
+            "dispatch_ready_work".to_string(),
             "Backlog item is runnable.".to_string(),
         )
     } else if plan.status == "missing" {
@@ -561,8 +561,8 @@ fn recommended_queue_action(
     let item_id = first.candidate.item_id.as_str();
     let mut params = map_params([("root", root)]);
     match first.recommended_tool.as_str() {
-        "dispatch_next_work" => {
-            params.insert("summary".to_string(), Value::String(String::new()));
+        "dispatch_ready_work" => {
+            params.insert("max_tasks".to_string(), Value::Number(1.into()));
         }
         "draft_task_plan" | "validate_task_plan" => {
             params.insert("item_id".to_string(), Value::String(item_id.to_string()));
@@ -665,7 +665,7 @@ mod tests {
         let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
         let data = result.data.expect("next action");
 
-        assert_eq!(data.recommended_tool, "dispatch_next_work");
+        assert_eq!(data.recommended_tool, "dispatch_ready_work");
         assert!(data.summary.contains("PROJ-002"));
     }
 
@@ -743,7 +743,7 @@ mod tests {
         );
         let data = result.data.expect("queue");
 
-        assert_eq!(data.recommended_tool, "dispatch_next_work");
+        assert_eq!(data.recommended_tool, "dispatch_ready_work");
         assert_eq!(data.items[0].planning.required_mode, "direct");
         assert!(data.items[0].ready_to_dispatch);
     }
@@ -909,7 +909,7 @@ tasks:
         let data = result.data.expect("queue");
 
         assert_eq!(result.status, ActionStatus::Completed);
-        assert_eq!(data.recommended_tool, "dispatch_next_work");
+        assert_eq!(data.recommended_tool, "dispatch_ready_work");
         assert_eq!(data.items[0].plan.status, "valid");
         assert!(data.items[0].ready_to_dispatch);
         assert_eq!(data.items[0].plan.task_count, 1);

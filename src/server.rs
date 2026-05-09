@@ -6,30 +6,31 @@ use crate::{
         ApprovalListData, ApprovalListParams, ApprovalRespondParams, ApprovalResponseData,
         ClaimNextTaskParams, ClassifyPlanningNeedsParams, ClassifyWorkflowFitParams,
         CompleteWorkerExecutionParams, ConfigureAgentProfileParams, CreateBacklogItemParams,
-        CreatedBacklogItemData, DispatchNextWorkData, DoctorSnapshotData, DraftBacklogData,
-        DraftBacklogItemsParams, DraftExternalBacklogItemsParams, DraftExternalReportParams,
-        DraftTaskPlanParams, EventsReplayData, EventsReplayParams, EvidenceListData,
-        EvidenceRecordData, ExternalBacklogDraftData, ExternalReportApprovalData,
-        ExternalReportDispatchData, ExternalReportDraftData, FindingDispositionData,
-        FindingListData, FindingRecordData, FindingValidationData, GenerateTaskBundleParams,
-        GitHubIssueImportData, ImportGitHubIssuesParams, InitProjectParams,
-        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
-        InspectWorkerAssignmentParams, IntegrateWorkerResultParams, LeaseListData, LeaseRecordData,
-        LimitParams, ListEvidenceParams, ListFindingsParams, ListLeasesParams, NextSafeActionData,
-        NextSafeActionParams, PingData, PingParams, PlanningClassificationData,
-        PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData, ReconcileParams,
-        ReconciliationData, RecordEvidenceParams, RecordExternalReportDispatchParams,
-        RecordFindingParams, RecordVerificationEvidenceParams, RecordWorkerEventParams,
-        ReleaseLeaseParams, RenewLeaseParams, RequestExternalReportApprovalParams, RootParams,
-        RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams,
-        StartWorkerExecutionParams, StorageCapabilityProbeData, StorageCapabilityProbeParams,
-        TaskBundleData, TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData,
-        TaskPlanQueryParams, TaskPlanValidationData, TaskPlanWriteData, TaskRecordData,
-        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
-        WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData, WorkerGuidanceData,
-        WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams, WorkflowFitData,
-        WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams, WorktreeData,
-        WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
+        CreatedBacklogItemData, DispatchNextWorkData, DispatchReadyWorkData,
+        DispatchReadyWorkParams, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
+        DraftExternalBacklogItemsParams, DraftExternalReportParams, DraftTaskPlanParams,
+        EventsReplayData, EventsReplayParams, EvidenceListData, EvidenceRecordData,
+        ExternalBacklogDraftData, ExternalReportApprovalData, ExternalReportDispatchData,
+        ExternalReportDraftData, FindingDispositionData, FindingListData, FindingRecordData,
+        FindingValidationData, GenerateTaskBundleParams, GitHubIssueImportData,
+        ImportGitHubIssuesParams, InitProjectParams, InspectTaskEventsParams, InspectTaskParams,
+        InspectWorkQueueParams, InspectWorkerAssignmentParams, IntegrateWorkerResultParams,
+        LeaseListData, LeaseRecordData, LimitParams, ListEvidenceParams, ListFindingsParams,
+        ListLeasesParams, NextSafeActionData, NextSafeActionParams, PingData, PingParams,
+        PlanningClassificationData, PrepareWorkerAssignmentParams, ProjectScaffoldData,
+        ProjectStatusData, ReconcileParams, ReconciliationData, RecordEvidenceParams,
+        RecordExternalReportDispatchParams, RecordFindingParams, RecordVerificationEvidenceParams,
+        RecordWorkerEventParams, ReleaseLeaseParams, RenewLeaseParams,
+        RequestExternalReportApprovalParams, RootParams, RunnerPrepareParams, RunnerReportData,
+        SendWorkerGuidanceParams, StartWorkerExecutionParams, StorageCapabilityProbeData,
+        StorageCapabilityProbeParams, TaskBundleData, TaskEventListData, TaskPlanData,
+        TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams, TaskPlanValidationData,
+        TaskPlanWriteData, TaskRecordData, UpdateFindingDispositionParams, ValidateBacklogParams,
+        ValidateFindingsParams, WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData,
+        WorkerGuidanceData, WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams,
+        WorkflowFitData, WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams,
+        WorktreeData, WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams,
+        WriteTaskPlanParams,
     },
     project, reconcile, runner, storage, tasks, workspace,
 };
@@ -740,6 +741,25 @@ impl PlatypusMcp {
         Parameters(params): Parameters<RootParams>,
     ) -> Json<ActionResult<DispatchNextWorkData>> {
         Json(dispatch::dispatch_next_work(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Dispatch Ready Work",
+        description = "Dispatch multiple runnable backlog items and prepare worker handoffs in one safe batch.",
+        annotations(
+            title = "Dispatch Ready Work",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn dispatch_ready_work(
+        &self,
+        Parameters(params): Parameters<DispatchReadyWorkParams>,
+    ) -> Json<ActionResult<DispatchReadyWorkData>> {
+        Json(dispatch::dispatch_ready_work(&self.default_root, params))
     }
 
     #[tool(
@@ -1576,6 +1596,7 @@ mod tests {
             "validate_task_plan",
             "write_task_plan",
             "dispatch_next_work",
+            "dispatch_ready_work",
             "inspect_task",
             "claim_next_task",
             "worktree_create",
@@ -1633,6 +1654,7 @@ mod tests {
             "request_external_report_approval",
             "record_external_report_dispatch",
             "dispatch_next_work",
+            "dispatch_ready_work",
             "claim_next_task",
             "worktree_create",
             "worktree_cleanup",

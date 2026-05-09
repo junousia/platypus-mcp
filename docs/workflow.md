@@ -148,11 +148,12 @@ and `list_task_plans` to review committed plans.
 1. Call `inspect_work_queue`.
 2. If it requires a task plan, use the recommended task-plan tool first.
 3. Call `next_safe_action`.
-4. If it recommends `dispatch_next_work`, dispatch the next runnable item.
-5. Call `next_safe_action` again.
-6. If it recommends `prepare_worker_handoff`, prepare the persisted assignment.
-7. Give the assignment bundle and worktree path to the worker harness.
-8. Mark the worker active with `start_worker_task`.
+4. For normal execution, call `dispatch_ready_work`; it dispatches one or more
+   runnable items and prepares assignments, worktrees, and bundles.
+5. For low-level debugging only, call `dispatch_next_work` and then immediately
+   `prepare_worker_handoff`; do not run a worker from a bare task id.
+6. Give the assignment bundle and worktree path to the worker harness.
+7. Mark the worker active with `start_worker_task`.
 
 The worker should operate in the assigned worktree, not in the manager
 workspace.

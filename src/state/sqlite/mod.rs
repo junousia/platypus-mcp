@@ -154,15 +154,20 @@ impl ProjectState for SqliteProjectState {
                 return Err(ProjectStateError::backend(error.unwrap_or(summary)));
             }
         };
-        let candidate = candidates
+        let candidates = candidates
             .into_iter()
-            .find(|candidate| {
+            .filter(|candidate| {
                 command
                     .preferred_worker
                     .as_deref()
                     .is_none_or(|worker| candidate.suggested_worker.as_deref() == Some(worker))
             })
-            .ok_or_else(|| ProjectStateError::not_found("no runnable backlog items to dispatch"))?;
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return Err(ProjectStateError::not_found(
+                "no runnable backlog items to dispatch",
+            ));
+        }
 
         let storage = self.connect_storage()?;
         match storage
@@ -179,48 +184,53 @@ impl ProjectState for SqliteProjectState {
             }
             None => {}
         }
-        let task = storage
-            .repository()
-            .tasks()
-            .create(TaskInsert {
+        let mut active_items = Vec::new();
+        for candidate in candidates {
+            let task = match storage.repository().tasks().create(TaskInsert {
                 source_item_id: candidate.item_id.clone(),
                 title: candidate.title.clone(),
                 worker: candidate.suggested_worker.clone(),
-            })
-            .map_err(|error| match error {
-                storage::RepositoryError::Conflict { .. } => ProjectStateError::conflict(format!(
-                    "active task already exists for backlog item `{}`",
+            }) {
+                Ok(task) => task,
+                Err(storage::RepositoryError::Conflict { .. }) => {
+                    active_items.push(candidate.item_id.clone());
+                    continue;
+                }
+                Err(other) => return Err(map_repository_error(other)),
+            };
+            let summary = command.summary.clone().unwrap_or_else(|| {
+                format!(
+                    "Queued {} for external worker execution.",
                     candidate.item_id
-                )),
-                other => map_repository_error(other),
-            })?;
-        let summary = command.summary.unwrap_or_else(|| {
-            format!(
-                "Queued {} for external worker execution.",
-                candidate.item_id
-            )
-        });
-        storage
-            .repository()
-            .tasks()
-            .record_event(TaskEventInsert {
-                task_id: task.id.clone(),
-                sequence: Some(1),
-                event_type: "task_queued".to_string(),
-                summary,
-                payload: Some(json!({
-                    "source": candidate.source,
-                    "item_id": candidate.item_id,
-                    "worker": candidate.suggested_worker,
-                    "status": "queued"
-                })),
-            })
-            .map_err(map_repository_error)?;
+                )
+            });
+            storage
+                .repository()
+                .tasks()
+                .record_event(TaskEventInsert {
+                    task_id: task.id.clone(),
+                    sequence: Some(1),
+                    event_type: "task_queued".to_string(),
+                    summary,
+                    payload: Some(json!({
+                        "source": candidate.source,
+                        "item_id": candidate.item_id,
+                        "worker": candidate.suggested_worker,
+                        "status": "queued"
+                    })),
+                })
+                .map_err(map_repository_error)?;
 
-        Ok(DispatchWorkOutcome {
-            task: task_snapshot(task),
-            candidate: candidate_snapshot(candidate),
-        })
+            return Ok(DispatchWorkOutcome {
+                task: task_snapshot(task),
+                candidate: candidate_snapshot(candidate),
+            });
+        }
+
+        Err(ProjectStateError::not_found(format!(
+            "no runnable backlog items without active tasks; active items: {}",
+            active_items.join(", ")
+        )))
     }
 
     fn prepare_assignment(
@@ -765,10 +775,10 @@ impl ProjectState for SqliteProjectState {
         {
             if let Some(candidate) = candidates.first() {
                 return Ok(safe_action(
-                    "dispatch_next_work",
+                    "dispatch_ready_work",
                     format!("Backlog item `{}` is runnable.", candidate.item_id),
-                    "Dispatch the next runnable backlog item to create a durable task.",
-                    [("root", root.as_str()), ("summary", "")],
+                    "Dispatch ready backlog work and prepare worker handoffs.",
+                    [("root", root.as_str()), ("max_tasks", "1")],
                 ));
             }
         }
@@ -1992,7 +2002,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_active_dispatch_fails_safely_through_project_state() {
+    fn duplicate_active_dispatch_reports_no_available_work_through_project_state() {
         let project = project_with_backlog();
         let state = SqliteProjectState::open(project.path(), None).expect("state");
 
@@ -2009,12 +2019,13 @@ mod tests {
                 summary: None,
                 preferred_worker: None,
             })
-            .expect_err("duplicate active task should fail");
+            .expect_err("all active items should be skipped");
 
         assert!(
-            matches!(error, ProjectStateError::Conflict { .. }),
+            matches!(error, ProjectStateError::NotFound { .. }),
             "unexpected error: {error:?}"
         );
+        assert!(error.to_string().contains("active items: PROJ-001"));
     }
 
     #[test]

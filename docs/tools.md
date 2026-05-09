@@ -44,8 +44,9 @@ deterministic and references the current public tool names.
 3. Plan non-trivial work: `draft_task_plan`, `write_task_plan`,
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
 4. Inspect the executable queue: `inspect_work_queue`.
-5. Dispatch work: `next_safe_action`, `dispatch_next_work`,
-   `prepare_worker_handoff`.
+5. Dispatch work: prefer `dispatch_ready_work` for one or more ready items;
+   use `dispatch_next_work` and `prepare_worker_handoff` only for precise
+   single-step control.
 6. Run worker externally: pass the generated bundle/worktree to Codex, Claude,
    or another harness.
 7. Record worker activity: `start_worker_task`, `record_worker_progress`,
@@ -59,7 +60,7 @@ deterministic and references the current public tool names.
 flowchart LR
     bootstrap["Bootstrap<br/>init and doctor"]
     backlog["Backlog<br/>draft, create, validate, list"]
-    dispatch["Dispatch<br/>next safe action and handoff"]
+    dispatch["Dispatch<br/>ready work and handoff"]
     worker["Worker<br/>external harness"]
     result["Result<br/>progress, complete, verify"]
     integrate["Integrate<br/>merge policy and trailers"]
@@ -215,8 +216,14 @@ trailers.
   state and a recommended next tool.
 - `classify_planning_needs`: classify runnable items as `direct`, `standard`,
   or `full` planning mode with structured reasons.
-- `dispatch_next_work`: create a queued task from the next runnable backlog
-  item.
+- `dispatch_ready_work`: preferred host flow for executable backlog work. It
+  checks Git readiness, dispatches up to `max_tasks` runnable independent
+  items, skips already-active items, and prepares worker assignments,
+  worktrees, and bundles by default.
+- `dispatch_next_work`: low-level single-item queueing. It also checks Git
+  readiness before creating task state, but hosts usually want
+  `dispatch_ready_work` so worker assignment state cannot be accidentally
+  skipped.
 - `inspect_task`: inspect one task lifecycle record.
 - `claim_next_task`: atomically claim a queued task.
 - `worktree_create`: create an isolated task worktree.
@@ -267,10 +274,10 @@ trailers.
 }
 ```
 
-When a backlog item is runnable, the result recommends `dispatch_next_work`.
-After dispatch, the same tool recommends `prepare_worker_handoff`, then
-`start_worker_task`, then `record_worker_progress` while the assignment is
-running.
+When a backlog item is runnable, the result recommends `dispatch_ready_work`.
+It returns task ids, assignment ids, worktree paths, and per-item skipped or
+failed reasons in one response. After dispatch, use `start_worker_task`, then
+`record_worker_progress` while the assignment is running.
 
 ## Workflow Configuration
 
