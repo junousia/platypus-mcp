@@ -504,6 +504,8 @@ Read task state and backlog content.
 "#,
         )
         .expect("item");
+        git(&project, &["add", "backlog"]);
+        git(&project, &["commit", "-m", "Add backlog fixture"]);
         project
     }
 

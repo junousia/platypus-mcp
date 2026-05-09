@@ -1,5 +1,6 @@
 use crate::{
     config, events, evidence,
+    git_readiness::{inspect_git_readiness, GitReadinessStatus},
     models::{
         ActionResult, ActionStatus, IntegrateWorkerResultParams, RecordEvidenceParams,
         WorkerResultIntegrationData, WorktreeCleanupData, WorktreeCleanupParams,
@@ -71,8 +72,16 @@ pub fn worktree_create(
     };
     let root = state.root().to_path_buf();
     let root_string = root.display().to_string();
-    if let Err(error) = ensure_git_project_root(&root) {
-        return ActionResult::failed(action, "Could not create worktree.", error);
+    let git_readiness = inspect_git_readiness(&root, true);
+    if !git_readiness.ready() {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Failed,
+            summary: git_readiness.summary,
+            next_action: git_readiness.next_action,
+            data: None,
+            error: git_readiness.details,
+        };
     }
 
     let task = match load_task(&state, &task_id) {
@@ -423,8 +432,16 @@ pub fn integrate_worker_result(
     };
     let root = state.root().to_path_buf();
     let root_string = root.display().to_string();
-    if let Err(error) = ensure_git_project_root(&root) {
-        return ActionResult::failed(action, "Could not integrate worker result.", error);
+    let readiness = inspect_git_readiness(&root, false);
+    if !readiness.ready() {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Failed,
+            summary: readiness.summary,
+            next_action: readiness.next_action,
+            data: None,
+            error: readiness.details,
+        };
     }
     let config = match config::effective_workflow_config(&root) {
         Ok(config) => config,
@@ -455,17 +472,31 @@ pub fn integrate_worker_result(
         None => "verification not recorded".to_string(),
     };
     if config.require_clean_manager_workspace {
-        match manager_status_without_platypus_state(&root) {
-            Ok(status) if status.trim().is_empty() => {}
-            Ok(status) => {
+        let readiness = inspect_git_readiness(&root, true);
+        match readiness.status {
+            GitReadinessStatus::Ready => {}
+            GitReadinessStatus::Dirty => {
                 return ActionResult::skipped(
                     action,
-                    "Manager workspace has local changes.",
-                    &format!("Commit or clean these changes before integration:\n{status}"),
+                    readiness.summary,
+                    &format!(
+                        "{}\n{}",
+                        readiness.next_action.unwrap_or_else(|| {
+                            "Review manager workspace changes before integration.".to_string()
+                        }),
+                        readiness.details.unwrap_or_default()
+                    ),
                 )
             }
-            Err(error) => {
-                return ActionResult::failed(action, "Could not inspect manager workspace.", error)
+            _ => {
+                return ActionResult {
+                    action: action.to_string(),
+                    status: ActionStatus::Failed,
+                    summary: readiness.summary,
+                    next_action: readiness.next_action,
+                    data: None,
+                    error: readiness.details,
+                }
             }
         }
     }
@@ -610,18 +641,6 @@ fn latest_verification_summary(state: &SqliteProjectState, task_id: &str) -> Opt
         .ok()
         .and_then(|snapshot| snapshot.evidence.into_iter().last())
         .map(|evidence| evidence.summary)
-}
-
-fn manager_status_without_platypus_state(root: &Path) -> Result<String, String> {
-    let status = run_git(root, &["status", "--porcelain=v1", "--untracked-files=all"])?;
-    let lines = status
-        .lines()
-        .filter(|line| {
-            let path = line.get(3..).unwrap_or_default();
-            !path.starts_with(".platy/")
-        })
-        .collect::<Vec<_>>();
-    Ok(lines.join("\n"))
 }
 
 fn commit_worker_changes(
@@ -925,19 +944,6 @@ fn workspace_task(task: TaskSnapshot) -> WorkspaceTask {
         workspace_branch,
         workspace_base_ref,
     }
-}
-
-fn ensure_git_project_root(root: &Path) -> Result<(), String> {
-    let top_level = run_git(root, &["rev-parse", "--show-toplevel"])?;
-    let top_level = fs::canonicalize(top_level.trim()).map_err(|error| error.to_string())?;
-    if top_level != root {
-        return Err(format!(
-            "project root {} is not the Git top-level {}",
-            root.display(),
-            top_level.display()
-        ));
-    }
-    Ok(())
 }
 
 fn resolve_base_commit(root: &Path, base_ref: &str) -> Result<String, String> {
@@ -1544,6 +1550,7 @@ mod tests {
 
         assert!(matches!(result.status, ActionStatus::Skipped));
         assert!(result.summary.contains("local changes"));
+        assert!(result.next_action.unwrap().contains("commit, stash"));
     }
 
     #[test]
@@ -1571,10 +1578,68 @@ mod tests {
         );
 
         assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result.summary.contains("no initial commit"));
+        assert!(result.next_action.unwrap().contains("initial commit"));
+    }
+
+    #[test]
+    fn rejects_missing_git_repository_with_recovery_guidance() {
+        let project = TempDir::new().expect("temp dir");
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Workspace task".to_string(),
+                worker: None,
+            },
+        )
+        .expect("task");
+
+        let result = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id,
+                base_ref: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result.summary.contains("not initialized"));
         assert!(result
-            .error
-            .expect("error")
-            .contains("Needed a single revision"));
+            .next_action
+            .expect("next action")
+            .contains("git init"));
+    }
+
+    #[test]
+    fn rejects_dirty_manager_workspace_before_worktree_creation() {
+        let project = git_project();
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Workspace task".to_string(),
+                worker: None,
+            },
+        )
+        .expect("task");
+        fs::write(project.path().join("local.txt"), "local\n").expect("local change");
+
+        let result = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id,
+                base_ref: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result.summary.contains("local changes"));
+        assert!(result.next_action.unwrap().contains("commit, stash"));
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub mod dispatch;
 pub mod events;
 pub mod evidence;
 pub mod findings;
+pub mod git_readiness;
 pub mod guidance;
 pub mod host_guidance;
 pub mod integrations;

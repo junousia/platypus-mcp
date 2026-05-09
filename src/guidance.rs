@@ -1,5 +1,6 @@
 use crate::{
     backlog,
+    git_readiness::inspect_git_readiness,
     models::{
         ActionResult, ActionStatus, BacklogCandidate, BacklogListData, ClassifyPlanningNeedsParams,
         InspectWorkQueueParams, NextSafeActionData, NextSafeActionParams, PlanningClassification,
@@ -26,6 +27,27 @@ pub fn next_safe_action(
             )
         }
     };
+    let readiness = inspect_git_readiness(state.root(), false);
+    if !readiness.ready() {
+        let reason = readiness
+            .next_action
+            .clone()
+            .unwrap_or_else(|| "Inspect Git setup before dispatching work.".to_string());
+        return ActionResult::completed(
+            action,
+            readiness.summary.clone(),
+            NextSafeActionData {
+                root: state.root().display().to_string(),
+                recommended_tool: "doctor_snapshot".to_string(),
+                summary: readiness.summary,
+                reason,
+                params: BTreeMap::from([(
+                    "root".to_string(),
+                    Value::String(state.root().display().to_string()),
+                )]),
+            },
+        );
+    }
     match state.next_safe_action(NextSafeActionQuery::default()) {
         Ok(snapshot) => ActionResult::completed(
             action,
@@ -408,6 +430,7 @@ mod tests {
     #[test]
     fn recommends_preparing_queued_task() {
         let project = TempDir::new().expect("temp dir");
+        init_git(project.path());
         create_task_record(
             project.path(),
             None,
@@ -429,6 +452,7 @@ mod tests {
     #[test]
     fn recommends_preparing_claimed_task_before_dispatching_more_backlog() {
         let project = backlog_project();
+        init_git(project.path());
         write_item(project.path(), "PROJ-001", "First item");
         create_task_record(
             project.path(),
@@ -479,6 +503,33 @@ mod tests {
 
         assert_eq!(data.recommended_tool, "dispatch_next_work");
         assert!(data.summary.contains("PROJ-002"));
+    }
+
+    #[test]
+    fn next_safe_action_reports_missing_git_before_dispatch() {
+        let project = backlog_project();
+        write_item(project.path(), "PROJ-001", "First item");
+
+        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
+        let data = result.data.expect("next action");
+
+        assert_eq!(data.recommended_tool, "doctor_snapshot");
+        assert!(data.summary.contains("not initialized"));
+        assert!(data.reason.contains("git init"));
+    }
+
+    #[test]
+    fn next_safe_action_reports_unborn_head_before_dispatch() {
+        let project = backlog_project();
+        git(project.path(), &["init"]);
+        write_item(project.path(), "PROJ-001", "First item");
+
+        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
+        let data = result.data.expect("next action");
+
+        assert_eq!(data.recommended_tool, "doctor_snapshot");
+        assert!(data.summary.contains("no initial commit"));
+        assert!(data.reason.contains("initial commit"));
     }
 
     #[test]
@@ -654,6 +705,15 @@ area: general
                 &format!("Close item\n\nPlatypus-Closes: {item_id}\nPlatypus-Verification: test"),
             ],
         );
+    }
+
+    fn init_git(root: &Path) {
+        git(root, &["init"]);
+        git(root, &["config", "user.name", "Platypus Test"]);
+        git(root, &["config", "user.email", "platypus@example.invalid"]);
+        fs::write(root.join("README.md"), "# Test\n").expect("readme");
+        git(root, &["add", "README.md"]);
+        git(root, &["commit", "-m", "Initial commit"]);
     }
 
     fn git(root: &Path, args: &[&str]) {

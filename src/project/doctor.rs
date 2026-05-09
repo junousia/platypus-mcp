@@ -1,5 +1,8 @@
 use super::paths::resolve_root;
-use crate::models::{ActionResult, DoctorCheck, DoctorCheckStatus, DoctorSnapshotData};
+use crate::{
+    git_readiness::{inspect_git_readiness, GitReadinessStatus},
+    models::{ActionResult, DoctorCheck, DoctorCheckStatus, DoctorSnapshotData},
+};
 use std::{fs, path::Path};
 
 pub fn doctor_snapshot(
@@ -94,23 +97,21 @@ fn directory_check(name: &str, path: &Path, pass_summary: &str, next_action: &st
 }
 
 fn git_check(root: &Path) -> DoctorCheck {
-    let git_path = root.join(".git");
-    if git_path.exists() {
-        DoctorCheck {
-            name: "git_metadata".to_string(),
-            status: DoctorCheckStatus::Pass,
-            summary: ".git metadata exists.".to_string(),
-            next_action: None,
+    let readiness = inspect_git_readiness(root, false);
+    let status = match readiness.status {
+        GitReadinessStatus::Ready => DoctorCheckStatus::Pass,
+        GitReadinessStatus::MissingRepository | GitReadinessStatus::UnbornHead => {
+            DoctorCheckStatus::Fail
         }
-    } else {
-        DoctorCheck {
-            name: "git_metadata".to_string(),
-            status: DoctorCheckStatus::Warn,
-            summary: ".git metadata is missing.".to_string(),
-            next_action: Some(
-                "Initialize git before dispatching worktree-based tasks.".to_string(),
-            ),
+        GitReadinessStatus::NotTopLevel | GitReadinessStatus::Dirty | GitReadinessStatus::Error => {
+            DoctorCheckStatus::Warn
         }
+    };
+    DoctorCheck {
+        name: "git_readiness".to_string(),
+        status,
+        summary: readiness.summary,
+        next_action: readiness.next_action,
     }
 }
 
@@ -143,13 +144,13 @@ fn backlog_count_check(root: &Path) -> DoctorCheck {
 mod tests {
     use super::*;
     use crate::models::{ActionStatus, DoctorCheckStatus};
-    use std::fs;
+    use std::{fs, process::Command};
     use tempfile::TempDir;
 
     #[test]
     fn doctor_snapshot_reports_ready_project() {
         let temp = project_fixture(true);
-        fs::create_dir(temp.path().join(".git")).expect("git metadata");
+        init_git(temp.path());
         fs::write(temp.path().join("backlog/items/PROJ-001.md"), "# item\n").expect("backlog item");
 
         let root = temp.path().to_string_lossy().into_owned();
@@ -179,6 +180,26 @@ mod tests {
         assert!(data.checks.iter().any(|check| check.next_action.is_some()));
     }
 
+    #[test]
+    fn doctor_snapshot_reports_unborn_head_recovery() {
+        let temp = project_fixture(true);
+        run_git(temp.path(), &["init"]);
+
+        let root = temp.path().to_string_lossy().into_owned();
+        let result = doctor_snapshot(temp.path(), Some(root.as_str()));
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        let data = result.data.expect("data");
+        let git = data
+            .checks
+            .iter()
+            .find(|check| check.name == "git_readiness")
+            .expect("git readiness check");
+        assert!(matches!(git.status, DoctorCheckStatus::Fail));
+        assert!(git.summary.contains("no initial commit"));
+        assert!(git.next_action.as_ref().unwrap().contains("initial commit"));
+    }
+
     fn project_fixture(with_backlog_dirs: bool) -> TempDir {
         let temp = TempDir::new().expect("temp dir");
         if with_backlog_dirs {
@@ -187,5 +208,24 @@ mod tests {
             fs::create_dir_all(temp.path().join("backlog/epics")).expect("epics dir");
         }
         temp
+    }
+
+    fn init_git(root: &Path) {
+        run_git(root, &["init"]);
+        run_git(root, &["config", "user.name", "Platypus Test"]);
+        run_git(root, &["config", "user.email", "platypus@example.invalid"]);
+        fs::write(root.join("README.md"), "# Test\n").expect("readme");
+        run_git(root, &["add", "README.md"]);
+        run_git(root, &["commit", "-m", "Initial commit"]);
+    }
+
+    fn run_git(root: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {:?} failed", args);
     }
 }

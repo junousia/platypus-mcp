@@ -1,0 +1,56 @@
+item_id: MCP-058
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: Worktree dispatch and preparation failures identify missing Git repository and unborn HEAD states before opaque git errors.
+- id: R2
+  text: Dirty manager workspace failures include structured, non-destructive recovery guidance.
+- id: R3
+  text: Doctor and safe-action guidance expose the same Git readiness status that dispatch paths depend on.
+design:
+  summary: Add a shared Git readiness diagnostic layer for project/workspace state, then route worktree creation, doctor snapshots, and next safe action through that layer. Keep the implementation read-only and recovery-oriented; do not initialize Git, commit, stash, or discard files automatically.
+  owned_surfaces:
+  - src/workspace
+  - src/project/doctor.rs
+  - src/guidance.rs
+  - tests
+  notes: Fresh-project bootstrap can initialize Platypus files, but Git recovery must remain explicit and non-destructive.
+tasks:
+- id: MCP-058-T01
+  title: Add shared Git readiness diagnostics
+  goal: Provide a typed helper that distinguishes missing repository, unborn HEAD, dirty manager workspace, and ready states.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/workspace
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test workspace::tests
+  acceptance:
+  - Missing repository is reported before worktree creation attempts.
+  - Unborn HEAD is reported with initial-commit recovery guidance.
+  - Dirty manager workspace reports commit/stash/discard recovery guidance.
+  notes: null
+- id: MCP-058-T02
+  title: Surface Git readiness in doctor and safe action
+  goal: Reuse the shared readiness diagnostic in setup inspection and next-action guidance.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-058-T01
+  owned_surfaces:
+  - src/project/doctor.rs
+  - src/guidance.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - doctor_snapshot reports Git initialization or initial-commit recovery when needed.
+  - next_safe_action blocks dispatch guidance on Git readiness failures.
+  - Tests cover doctor/safe-action output for not-a-repo and unborn HEAD states.
+  notes: null

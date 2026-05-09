@@ -2141,7 +2141,15 @@ fn prompt_text(message: &rmcp::model::PromptMessage) -> &str {
 fn project_fixture() -> TempDir {
     let temp = TempDir::new().expect("temp dir");
     fs::write(temp.path().join("platy.yaml"), "project: test\n").expect("config");
-    fs::create_dir(temp.path().join(".git")).expect("git metadata");
+    git(temp.path(), &["init"]);
+    git(temp.path(), &["config", "user.name", "Platypus Test"]);
+    git(
+        temp.path(),
+        &["config", "user.email", "platypus@example.invalid"],
+    );
+    fs::write(temp.path().join("README.md"), "# Test\n").expect("readme");
+    git(temp.path(), &["add", "README.md"]);
+    git(temp.path(), &["commit", "-m", "Initial commit"]);
     fs::create_dir_all(temp.path().join("backlog/items")).expect("items dir");
     fs::create_dir_all(temp.path().join("backlog/epics")).expect("epics dir");
     fs::write(temp.path().join("backlog/items/PROJ-001.md"), "# item\n").expect("item");
@@ -2312,6 +2320,8 @@ Keep changes in README.md.
 "#,
     )
     .expect("item");
+    git(temp.path(), &["add", "platy.yaml", "backlog"]);
+    git(temp.path(), &["commit", "-m", "Add Platypus scaffold"]);
     temp
 }
 
