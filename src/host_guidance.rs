@@ -32,8 +32,10 @@ model turns, and external worker execution.
    `validate_task_plan`, `inspect_task_plan`, and `list_task_plans` to create a
    committed executable plan.
 5. Ask `next_safe_action` before advancing lifecycle state.
-6. Dispatch only through `dispatch_next_work`, then prepare the worker with
-   `prepare_worker_handoff`.
+6. Dispatch normal worker work through `dispatch_ready_work`; it prepares
+   assignments, worktrees, and bundles in the same step. Use
+   `dispatch_next_work` plus `prepare_worker_handoff` only for low-level
+   lifecycle control.
 7. Start, track, complete, verify, integrate, and reconcile with
    `start_worker_task`, `record_worker_progress`, `complete_worker_task`,
    `record_verification_evidence`, `integrate_worker_result`, and
@@ -63,8 +65,8 @@ straight to broad edits. Convert the goal into a controlled loop:
    the next item is direct, standard, or full.
 6. For standard or full items, create a strict task plan with
    `draft_task_plan`, `write_task_plan`, and `validate_task_plan`.
-7. Dispatch with `dispatch_next_work`, prepare handoff with
-   `prepare_worker_handoff`, and run implementation in the assigned worktree.
+7. Dispatch with `dispatch_ready_work`, then run implementation in the
+   assigned worktree from the returned worker assignment.
 8. Record progress, verification evidence, findings, and completion through
    Platypus tools.
 9. Integrate with `integrate_worker_result`, then reconcile with
@@ -140,8 +142,11 @@ const WORKER_HANDOFF_TEXT: &str = r#"# Worker Handoff Guidance
 Workers run outside the MCP server. Platypus prepares and records their
 execution state.
 
-1. Use `dispatch_next_work` to create a durable task.
-2. Use `prepare_worker_handoff` to create the assignment, worktree, and bundle.
+1. Prefer `dispatch_ready_work` to create durable task records and prepared
+   assignments for one or more ready backlog items.
+2. For low-level control, use `dispatch_next_work` followed immediately by
+   `prepare_worker_handoff`; do not run an external worker from a task id
+   without an assignment.
 3. Give the bundle and worktree path to the selected worker harness.
 4. Mark execution with `start_worker_task`.
 5. Persist safe progress with `record_worker_progress`.

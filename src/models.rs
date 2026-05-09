@@ -14,6 +14,17 @@ pub struct RootParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct DispatchReadyWorkParams {
+    pub root: Option<String>,
+    pub max_tasks: Option<usize>,
+    pub worker: Option<String>,
+    pub claimant: Option<String>,
+    pub prepare_handoffs: Option<bool>,
+    #[serde(default)]
+    pub verification_command: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct NextSafeActionParams {
     pub root: Option<String>,
 }
@@ -1091,6 +1102,27 @@ pub struct DispatchNextWorkData {
     pub root: String,
     pub candidate: BacklogCandidate,
     pub task: TaskRecord,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DispatchReadyWorkData {
+    pub root: String,
+    pub requested: usize,
+    pub dispatched: usize,
+    pub prepared: usize,
+    pub failed: usize,
+    pub stopped_reason: String,
+    pub items: Vec<DispatchReadyWorkItem>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DispatchReadyWorkItem {
+    pub item_id: String,
+    pub title: String,
+    pub status: String,
+    pub reason: String,
+    pub task: Option<TaskRecord>,
+    pub assignment: Option<WorkerAssignment>,
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]

@@ -1,0 +1,78 @@
+item_id: MCP-060
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: Dispatch refuses early with Git readiness guidance when the worktree lifecycle cannot proceed safely.
+- id: R2
+  text: A batch workflow tool dispatches multiple independent runnable backlog items and prepares worker handoffs in one call.
+- id: R3
+  text: Batch output is per-item and explains created, prepared, skipped, and failed outcomes without hiding partial progress.
+design:
+  summary: Keep single-item tools intact, but add a higher-level workflow tool for the common host path. Reuse existing backlog selection, task creation, task events, and assignment preparation. Preflight Git readiness before mutating state when handoffs are requested so hosts do not create stranded queued tasks.
+  owned_surfaces:
+  - src/dispatch.rs
+  - src/models.rs
+  - src/server.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - tests
+  notes: This is not an agent runner. It prepares durable handoffs/worktrees for external hosts or subagents.
+tasks:
+- id: MCP-060-T01
+  title: Add dispatch readiness preflight
+  goal: Make dispatch_next_work fail before queuing when Git is missing, unborn, nested, or dirty.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - src/dispatch.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test dispatch::tests
+  acceptance:
+  - Missing Git repository blocks dispatch with git init guidance.
+  - Dirty manager workspace blocks dispatch with commit/stash guidance.
+  notes: null
+- id: MCP-060-T02
+  title: Add batch dispatch and handoff tool
+  goal: Dispatch up to max_tasks runnable independent items and prepare worker assignments by default.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-060-T01
+  owned_surfaces:
+  - src/dispatch.rs
+  - src/models.rs
+  - src/server.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test dispatch::tests
+  - cargo test server::tests::tool_router_exposes_basic_tool_set
+  acceptance:
+  - Two independent backlog items can be dispatched and prepared by one tool call.
+  - Existing active item is skipped and does not block dispatching the next item.
+  - Per-item output includes task id, assignment id, worktree path, status, and reason.
+  notes: null
+- id: MCP-060-T03
+  title: Document the preferred dispatch flow
+  goal: Update host guidance so users see batch dispatch as the normal multi-worker control path.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-060-T02
+  owned_surfaces:
+  - docs/tools.md
+  - docs/workflow.md
+  - src/host_guidance.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Docs explain when to use batch dispatch versus single dispatch.
+  - Host guidance warns against running external task agents without a prepared handoff.
+  notes: null

@@ -386,7 +386,7 @@ async fn stdio_server_inspects_work_queue_with_task_plan_state() -> anyhow::Resu
     )
     .await?;
     assert_stage_status("inspect_work_queue ready", &ready, "completed");
-    assert_eq!(ready["data"]["recommended_tool"], "dispatch_next_work");
+    assert_eq!(ready["data"]["recommended_tool"], "dispatch_ready_work");
     assert_eq!(ready["data"]["items"][0]["plan"]["status"], "valid");
     assert_eq!(
         ready["data"]["items"][0]["planning"]["required_mode"],
@@ -1150,6 +1150,44 @@ async fn stdio_server_runs_storage_capability_probe() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn stdio_server_dispatches_ready_work_with_handoffs() -> anyhow::Result<()> {
+    let project = dispatch_project_fixture();
+    write_backlog_item(project.path(), "PROJ-002", "Second independent work", &[])?;
+    git(project.path(), &["add", "backlog/items/PROJ-002.md"]);
+    git(project.path(), &["commit", "-m", "Add second backlog item"]);
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let result = call_tool_json(
+        &client,
+        "dispatch_ready_work",
+        json!({
+            "max_tasks": 2,
+            "worker": "coder",
+            "claimant": "stdio-batch",
+            "verification_command": ["make", "check"]
+        }),
+    )
+    .await?;
+
+    assert_stage_status("dispatch_ready_work", &result, "completed");
+    assert_eq!(result["data"]["dispatched"], 2);
+    assert_eq!(result["data"]["prepared"], 2);
+    let items = result["data"]["items"].as_array().expect("items");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["status"], "prepared");
+    assert_eq!(items[1]["status"], "prepared");
+    assert_eq!(items[0]["item_id"], "PROJ-001");
+    assert_eq!(items[1]["item_id"], "PROJ-002");
+    assert!(items[0]["assignment"]["worktree_path"]
+        .as_str()
+        .expect("worktree path")
+        .contains(".platy/worktrees"));
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_blocks_dispatch_with_active_project_lease() -> anyhow::Result<()> {
     let project = dispatch_project_fixture();
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
@@ -1224,7 +1262,7 @@ async fn stdio_server_rejects_duplicate_active_dispatch_for_same_item() -> anyho
     let project = dispatch_project_fixture();
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
 
-    for expected_status in ["completed", "failed"] {
+    for expected_status in ["completed", "skipped"] {
         let result = client
             .call_tool(CallToolRequestParams {
                 meta: None,
@@ -1235,11 +1273,11 @@ async fn stdio_server_rejects_duplicate_active_dispatch_for_same_item() -> anyho
             .await?;
         let response = result.structured_content.expect("dispatch content");
         assert_eq!(response["status"], expected_status);
-        if expected_status == "failed" {
-            assert!(response["error"]
+        if expected_status == "skipped" {
+            assert!(response["summary"]
                 .as_str()
-                .expect("error")
-                .contains("active task already exists"));
+                .expect("summary")
+                .contains("No runnable backlog items"));
         }
     }
 
@@ -1568,7 +1606,7 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
         })
         .await?;
     let initial = initial.structured_content.expect("initial guidance");
-    assert_eq!(initial["data"]["recommended_tool"], "dispatch_next_work");
+    assert_eq!(initial["data"]["recommended_tool"], "dispatch_ready_work");
 
     let dispatched = client
         .call_tool(CallToolRequestParams {
@@ -1878,7 +1916,7 @@ async fn stdio_server_runs_full_lifecycle_smoke_with_fake_worker() -> anyhow::Re
 
     let initial = call_tool_json(&client, "next_safe_action", json!({})).await?;
     assert_eq!(
-        initial["data"]["recommended_tool"], "dispatch_next_work",
+        initial["data"]["recommended_tool"], "dispatch_ready_work",
         "stage next_safe_action before dispatch: {initial:#}"
     );
 
@@ -2046,6 +2084,14 @@ async fn stdio_server_skips_dispatch_when_backlog_has_no_runnable_items() -> any
     fs::write(project.path().join("platy.yaml"), "project: test\n")?;
     fs::create_dir_all(project.path().join("backlog/items"))?;
     fs::create_dir_all(project.path().join("backlog/epics"))?;
+    git(project.path(), &["init"]);
+    git(project.path(), &["config", "user.name", "Platypus Test"]);
+    git(
+        project.path(),
+        &["config", "user.email", "platypus@example.invalid"],
+    );
+    git(project.path(), &["add", "--all"]);
+    git(project.path(), &["commit", "-m", "Initial empty backlog"]);
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
 
     let result = client
@@ -2212,7 +2258,6 @@ Contract.
 fn dispatch_project_fixture() -> TempDir {
     let temp = TempDir::new().expect("temp dir");
     fs::write(temp.path().join("platy.yaml"), "project: test\n").expect("config");
-    fs::create_dir(temp.path().join(".git")).expect("git metadata");
     fs::create_dir_all(temp.path().join("backlog/items")).expect("items dir");
     fs::create_dir_all(temp.path().join("backlog/epics")).expect("epics dir");
     fs::write(
@@ -2259,6 +2304,15 @@ Queue work without running a worker.
 "#,
     )
     .expect("item");
+    git(temp.path(), &["init"]);
+    git(temp.path(), &["config", "user.name", "Platypus Test"]);
+    git(
+        temp.path(),
+        &["config", "user.email", "platypus@example.invalid"],
+    );
+    fs::write(temp.path().join("README.md"), "# Test\n").expect("readme");
+    git(temp.path(), &["add", "--all"]);
+    git(temp.path(), &["commit", "-m", "Initial commit"]);
     temp
 }
 
