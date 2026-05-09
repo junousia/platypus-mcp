@@ -1,0 +1,33 @@
+item_id: MCP-055
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Roadmap documentation reflects the current landed MCP baseline instead of presenting completed tranches as future work.
+- id: R2
+  text: Future direction is framed as candidate product priorities, not as already-promised implementation commitments.
+design:
+  summary: Refresh docs only. Move completed near-term work into a current baseline section, replace stale upcoming item lists with current candidate directions, and keep README wording aligned with the refreshed roadmap.
+  owned_surfaces:
+  - docs/roadmap.md
+  - README.md
+  notes: Do not edit completed backlog item history.
+tasks:
+- id: MCP-055-T01
+  title: Refresh roadmap baseline and future direction
+  goal: Update roadmap sections so readers can see what is already landed and what remains candidate future work.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - docs/roadmap.md
+  - README.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - docs/roadmap.md no longer lists completed MCP-037 through MCP-054 items as the next tranche.
+  - README.md points at the roadmap without stale near-term wording.
+  - Completed backlog history is unchanged except for adding MCP-055 itself.
+  notes: null
