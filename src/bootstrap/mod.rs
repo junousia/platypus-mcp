@@ -5,6 +5,7 @@ mod paths;
 mod tests;
 mod types;
 
+use crate::{models::InitProjectParams, project};
 use anyhow::{Context, Result};
 use std::{env, fs, path::PathBuf};
 
@@ -34,18 +35,21 @@ fn run_invocation(invocation: BootstrapInvocation) -> Result<i32> {
         }
         BootstrapMode::Check => {
             print_plan(
-                if plan.already_configured {
+                if plan.already_configured && plan.project_ready_for_check() {
                     "configured"
                 } else {
                     "missing"
                 },
                 &plan,
             );
-            Ok(i32::from(!plan.already_configured))
+            Ok(i32::from(
+                !plan.already_configured || !plan.project_ready_for_check(),
+            ))
         }
         BootstrapMode::Apply => {
             plan.apply()?;
-            print_plan("completed", &plan);
+            let refreshed = BootstrapPlan::for_invocation(&invocation)?;
+            print_plan("completed", &refreshed);
             Ok(0)
         }
     }
@@ -58,6 +62,10 @@ struct BootstrapPlan {
     rendered: String,
     existed: bool,
     already_configured: bool,
+    project_root: PathBuf,
+    init_project: bool,
+    project_name: Option<String>,
+    project_already_initialized: bool,
     force: bool,
 }
 
@@ -93,20 +101,46 @@ impl BootstrapPlan {
             rendered,
             existed,
             already_configured,
+            project_root: root.clone(),
+            init_project: invocation.init_project,
+            project_name: invocation.project_name.clone(),
+            project_already_initialized: project_scaffold_ready(&root),
             force: invocation.force,
         })
     }
 
     fn apply(&self) -> Result<()> {
-        if self.already_configured {
-            return Ok(());
+        if !self.already_configured {
+            if let Some(parent) = self.path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("create {}", parent.display()))?;
+            }
+            fs::write(&self.path, &self.rendered)
+                .with_context(|| format!("write {}", self.path.display()))?;
         }
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        if self.init_project {
+            let result = project::init_project(
+                &self.project_root,
+                InitProjectParams {
+                    root: Some(self.project_root.to_string_lossy().to_string()),
+                    project_name: self.project_name.clone(),
+                    overwrite: Some(false),
+                },
+            );
+            if result.error.is_some() {
+                anyhow::bail!(
+                    "{}",
+                    result
+                        .error
+                        .unwrap_or_else(|| "project initialization failed".to_string())
+                );
+            }
         }
-        fs::write(&self.path, &self.rendered)
-            .with_context(|| format!("write {}", self.path.display()))?;
         Ok(())
+    }
+
+    fn project_ready_for_check(&self) -> bool {
+        !self.init_project || self.project_already_initialized
     }
 }
 
@@ -136,4 +170,43 @@ fn print_plan(status: &str, plan: &BootstrapPlan) {
     }
     println!("server: {SERVER_NAME}");
     println!("command: sh -lc '{}'", SERVER_LAUNCHER);
+    if plan.init_project {
+        println!("project init: requested");
+        println!("project root: {}", plan.project_root.display());
+        println!(
+            "project state: {}",
+            if plan.project_already_initialized {
+                "already initialized"
+            } else {
+                "init required"
+            }
+        );
+    } else {
+        println!("project init: not requested");
+        println!("next: run with --init-project to create AGENTS.md, WORKFLOW.md, and backlog/");
+    }
+}
+
+fn project_scaffold_ready(root: &std::path::Path) -> bool {
+    [
+        "backlog",
+        "backlog/items",
+        "backlog/plans",
+        "backlog/epics",
+        "backlog/templates",
+    ]
+    .iter()
+    .all(|relative| root.join(relative).is_dir())
+        && [
+            "AGENTS.md",
+            "CLAUDE.md",
+            "WORKFLOW.md",
+            "platy.yaml",
+            "backlog/README.md",
+            "backlog/epics/general.md",
+            "backlog/templates/item.md",
+            "backlog/templates/plan.yaml",
+        ]
+        .iter()
+        .all(|relative| root.join(relative).is_file())
 }

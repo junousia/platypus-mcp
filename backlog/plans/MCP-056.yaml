@@ -1,0 +1,58 @@
+item_id: MCP-056
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Bootstrap can optionally run project initialization for the selected project root.
+- id: R2
+  text: The combined fresh-project flow preserves existing files by default and does not write project files in dry-run or check mode.
+- id: R3
+  text: Documentation explains when to use host-only bootstrap versus bootstrap with project initialization.
+design:
+  summary: Extend bootstrap host options with an explicit project initialization flag. Keep host configuration as the default behavior, then run the existing init_project implementation only in apply mode when requested. Reuse init_project preservation semantics instead of duplicating scaffold logic.
+  owned_surfaces:
+  - src/bootstrap
+  - src/project/init.rs
+  - docs/install.md
+  - docs/workflow.md
+  - README.md
+  - tests
+  notes: This is an onboarding ergonomics fix, not a new lifecycle runner.
+tasks:
+- id: MCP-056-T01
+  title: Add bootstrap project initialization option
+  goal: Extend bootstrap parsing, planning, output, and tests for an opt-in init_project step.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/bootstrap
+  - src/project/init.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test bootstrap
+  acceptance:
+  - A bootstrap apply call with the new option creates AGENTS.md in the root.
+  - Dry-run/check do not create project scaffold files.
+  - Existing files are skipped unless a future explicit overwrite option is introduced.
+  notes: null
+- id: MCP-056-T02
+  title: Document fresh-project bootstrap flow
+  goal: Update install and workflow docs so users know one command can configure the host and initialize project guidance.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-056-T01
+  owned_surfaces:
+  - docs/install.md
+  - docs/workflow.md
+  - README.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Docs show bootstrap with project initialization as the preferred fresh-project command.
+  - Docs still explain host-only bootstrap for already initialized projects.
+  notes: null

@@ -44,8 +44,10 @@ pub(super) struct BootstrapInvocation {
     pub(super) scope: Scope,
     pub(super) config: Option<PathBuf>,
     pub(super) root: Option<PathBuf>,
+    pub(super) project_name: Option<String>,
     pub(super) mode: BootstrapMode,
     pub(super) force: bool,
+    pub(super) init_project: bool,
     pub(super) list_hosts: bool,
 }
 
@@ -98,6 +100,12 @@ pub struct HostOptions {
     /// Bind Platypus MCP tools to this project root.
     #[arg(long, alias = "project-root")]
     root: Option<PathBuf>,
+    /// Also initialize Platypus project files such as AGENTS.md and backlog/.
+    #[arg(long)]
+    init_project: bool,
+    /// Project name to use when --init-project creates platy.yaml.
+    #[arg(long, requires = "init_project")]
+    project_name: Option<String>,
     /// Print the planned configuration without writing it.
     #[arg(long, conflicts_with = "check")]
     dry_run: bool,
@@ -128,8 +136,10 @@ impl HostOptions {
             scope,
             config: self.config,
             root: self.root,
+            project_name: self.project_name,
             mode,
             force: self.force,
+            init_project: self.init_project,
             list_hosts: false,
         }
     }
@@ -142,8 +152,10 @@ pub(super) fn invocation_from_command(command: BootstrapCommand) -> BootstrapInv
             scope: Scope::Project,
             config: None,
             root: None,
+            project_name: None,
             mode: BootstrapMode::Apply,
             force: false,
+            init_project: false,
             list_hosts: true,
         },
         BootstrapCommand::Codex(options) => options.into_invocation(Host::Codex),
