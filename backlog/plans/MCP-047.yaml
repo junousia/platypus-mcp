@@ -1,0 +1,105 @@
+item_id: MCP-047
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: Evidence MCP tools use ProjectState domain operations for recording and listing verification evidence instead of direct storage or rusqlite access.
+- id: R2
+  text: Findings MCP tools use ProjectState domain operations for recording, listing, validation, and disposition updates while preserving existing public response schemas.
+- id: R3
+  text: Reconciliation reads task, finding, evidence, and integration state through ProjectState snapshots and returns backend-neutral gaps with structured recovery guidance.
+- id: R4
+  text: Workspace metadata paths used by task inspection and reconciliation remain hidden behind ProjectState snapshots or backend-private helpers.
+design:
+  summary: Extend the ProjectState boundary with evidence and finding mutation/query commands plus richer reconciliation snapshots. Implement those operations in the SQLite backend by moving persistence-specific SQL into src/state/sqlite, then make evidence.rs, findings.rs, reconcile.rs, and workspace metadata call sites translate backend-independent snapshots back into the existing MCP response models. Keep public schemas stable and keep SQL imports private to backend modules.
+  owned_surfaces:
+  - src/state
+  - src/evidence.rs
+  - src/findings.rs
+  - src/reconcile.rs
+  - src/workspace.rs
+  - tests
+  notes: Avoid SQL-shaped repository APIs in ProjectState. The boundary should describe product operations such as record evidence, validate findings, and reconcile project health. Do not change backlog markdown semantics or add runtime fields to backlog items.
+tasks:
+- id: MCP-047-T01
+  title: Add evidence and finding ProjectState operations
+  goal: Extend state commands and snapshots with evidence recording/listing and finding record/disposition operations, then implement them in SqliteProjectState.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/state
+  suggested_worker: coder
+  verification:
+  - cargo test state::sqlite
+  acceptance:
+  - ProjectState exposes domain-shaped evidence and finding commands without backend-specific terminology.
+  - SqliteProjectState records, lists, validates, and dispositions findings with existing safety and conflict behavior.
+  - SqliteProjectState records and lists evidence with existing validation and bounded output behavior.
+  notes: null
+- id: MCP-047-T02
+  title: Route evidence and findings tools through ProjectState
+  goal: Update evidence.rs and findings.rs so public MCP tools call ProjectState operations and no longer import rusqlite or storage directly.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on:
+  - MCP-047-T01
+  owned_surfaces:
+  - src/evidence.rs
+  - src/findings.rs
+  suggested_worker: coder
+  verification:
+  - cargo test evidence::tests
+  - cargo test findings::tests
+  acceptance:
+  - evidence.rs has no direct rusqlite or storage imports.
+  - findings.rs has no direct rusqlite or storage imports.
+  - Public evidence and findings response models remain unchanged.
+  notes: null
+- id: MCP-047-T03
+  title: Route reconciliation and workspace metadata reads
+  goal: Update reconcile.rs and workspace metadata read paths so reconciliation uses ProjectState snapshots and backend-private persistence helpers.
+  requirement_refs:
+  - R3
+  - R4
+  depends_on:
+  - MCP-047-T01
+  - MCP-047-T02
+  owned_surfaces:
+  - src/reconcile.rs
+  - src/workspace.rs
+  - src/state
+  suggested_worker: coder
+  verification:
+  - cargo test reconcile::tests
+  - cargo test workspace::tests
+  acceptance:
+  - reconcile.rs has no direct rusqlite imports.
+  - Reconciliation reports closed items, completed tasks, unresolved required findings, and evidence gaps through backend-neutral snapshots.
+  - Workspace metadata used by ProjectState remains private to backend implementation details.
+  notes: null
+- id: MCP-047-T04
+  title: Preserve MCP behavior with full verification
+  goal: Add or adjust tests that prove the migrated tools preserve existing behavior and complete the repository verification suite.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  - R4
+  depends_on:
+  - MCP-047-T01
+  - MCP-047-T02
+  - MCP-047-T03
+  owned_surfaces:
+  - tests
+  - src/state
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Existing stdio tests for evidence, findings, reconciliation, and worktree lifecycle pass.
+  - Full make check passes before commit.
+  - The PR includes Platypus-Closes and Platypus-Verification trailers.
+  notes: null

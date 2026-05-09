@@ -3,10 +3,8 @@ use crate::{
         ActionResult, ActionStatus, EvidenceListData, EvidenceRecord, EvidenceRecordData,
         ListEvidenceParams, RecordEvidenceParams, RecordVerificationEvidenceParams,
     },
-    storage,
+    state::{sqlite::SqliteProjectState, EvidenceQuery, ProjectState, RecordEvidenceCommand},
 };
-use rusqlite::{params, Row};
-use serde::de::DeserializeOwned;
 use std::path::Path;
 
 const DEFAULT_LIMIT: usize = 50;
@@ -38,8 +36,8 @@ pub fn record_evidence(
     if summary.is_empty() {
         return ActionResult::failed(action, "Could not record evidence.", "summary is required");
     }
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(
                 action,
@@ -48,58 +46,24 @@ pub fn record_evidence(
             )
         }
     };
-    let id = match params
-        .id
-        .as_deref()
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-    {
-        Some(id) => id.to_string(),
-        None => match next_evidence_id(&storage.connection) {
-            Ok(id) => id,
-            Err(error) => {
-                return ActionResult::failed(
-                    action,
-                    "Could not allocate evidence id.",
-                    error.to_string(),
-                )
-            }
-        },
-    };
-    let refs = clean_vec(params.refs);
-    let refs_json = json_string(&refs);
-    let metadata_json = json_string(&params.metadata);
-    let inserted = storage.connection.execute(
-        r#"
-        INSERT INTO evidence(
-            id, source_item_id, source_task_id, kind, summary, refs_json, metadata_json
-        )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-        "#,
-        params![
-            id,
-            clean_optional(params.source_item_id),
-            clean_optional(params.source_task_id),
-            kind,
-            summary,
-            refs_json,
-            metadata_json
-        ],
-    );
-    if let Err(error) = inserted {
-        return ActionResult::failed(action, "Could not record evidence.", error.to_string());
-    }
-    match get_evidence(&storage.connection, &id) {
-        Ok(evidence) => ActionResult::completed(
-            action,
-            format!("Recorded evidence `{}`.", evidence.id),
-            EvidenceRecordData { evidence },
-        ),
-        Err(error) => ActionResult::failed(
-            action,
-            "Could not load recorded evidence.",
-            error.to_string(),
-        ),
+    match state.record_evidence(RecordEvidenceCommand {
+        id: params.id,
+        source_item_id: params.source_item_id,
+        source_task_id: params.source_task_id,
+        kind: kind.to_string(),
+        summary: summary.to_string(),
+        refs: params.refs,
+        metadata: params.metadata,
+    }) {
+        Ok(evidence) => {
+            let evidence = evidence_record(evidence);
+            ActionResult::completed(
+                action,
+                format!("Recorded evidence `{}`.", evidence.id),
+                EvidenceRecordData { evidence },
+            )
+        }
+        Err(error) => ActionResult::failed(action, "Could not record evidence.", error.to_string()),
     }
 }
 
@@ -134,8 +98,8 @@ pub fn list_evidence(
     params: ListEvidenceParams,
 ) -> ActionResult<EvidenceListData> {
     let action = "list_evidence";
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(
                 action,
@@ -145,21 +109,20 @@ pub fn list_evidence(
         }
     };
     let limit = bounded_limit(params.limit);
-    let evidence = match query_evidence(
-        &storage.connection,
-        params.source_item_id.as_deref(),
-        params.source_task_id.as_deref(),
-        params.kind.as_deref(),
-        limit,
-    ) {
-        Ok(evidence) => evidence,
+    let evidence: Vec<EvidenceRecord> = match state.list_evidence(EvidenceQuery {
+        source_item_id: params.source_item_id,
+        source_task_id: params.source_task_id,
+        kind: params.kind,
+        limit: Some(limit),
+    }) {
+        Ok(evidence) => evidence.evidence.into_iter().map(evidence_record).collect(),
         Err(error) => {
             return ActionResult::failed(action, "Could not list evidence.", error.to_string())
         }
     };
     let returned = evidence.len();
     let data = EvidenceListData {
-        root: storage.storage.root.display().to_string(),
+        root: state.root().display().to_string(),
         evidence,
         returned,
     };
@@ -181,89 +144,17 @@ pub fn list_evidence(
     }
 }
 
-pub(crate) fn query_evidence(
-    connection: &rusqlite::Connection,
-    source_item_id: Option<&str>,
-    source_task_id: Option<&str>,
-    kind: Option<&str>,
-    limit: usize,
-) -> rusqlite::Result<Vec<EvidenceRecord>> {
-    let mut statement = connection.prepare(
-        r#"
-        SELECT id, source_item_id, source_task_id, kind, summary, refs_json, metadata_json, created_at
-        FROM evidence
-        WHERE (?1 IS NULL OR source_item_id = ?1)
-          AND (?2 IS NULL OR source_task_id = ?2)
-          AND (?3 IS NULL OR kind = ?3)
-        ORDER BY created_at ASC, id ASC
-        LIMIT ?4
-        "#,
-    )?;
-    let rows = statement.query_map(
-        params![source_item_id, source_task_id, kind, limit],
-        row_to_evidence,
-    )?;
-    rows.collect()
-}
-
-fn get_evidence(connection: &rusqlite::Connection, id: &str) -> rusqlite::Result<EvidenceRecord> {
-    connection.query_row(
-        r#"
-        SELECT id, source_item_id, source_task_id, kind, summary, refs_json, metadata_json, created_at
-        FROM evidence
-        WHERE id = ?1
-        "#,
-        [id],
-        row_to_evidence,
-    )
-}
-
-fn next_evidence_id(connection: &rusqlite::Connection) -> rusqlite::Result<String> {
-    let existing: i64 =
-        connection.query_row("SELECT COUNT(*) FROM evidence", [], |row| row.get(0))?;
-    Ok(format!("EVD-{:03}", existing + 1))
-}
-
-fn row_to_evidence(row: &Row<'_>) -> rusqlite::Result<EvidenceRecord> {
-    let refs_json: Option<String> = row.get("refs_json")?;
-    let metadata_json: Option<String> = row.get("metadata_json")?;
-    Ok(EvidenceRecord {
-        id: row.get("id")?,
-        source_item_id: row.get("source_item_id")?,
-        source_task_id: row.get("source_task_id")?,
-        kind: row.get("kind")?,
-        summary: row.get("summary")?,
-        refs: decode_json(refs_json).unwrap_or_default(),
-        metadata: decode_json(metadata_json).unwrap_or_default(),
-        created_at: row.get("created_at")?,
-    })
-}
-
-fn clean_optional(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
-}
-
-fn clean_vec(values: Vec<String>) -> Vec<String> {
-    values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect()
-}
-
-fn json_string<T: serde::Serialize>(value: &T) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
-}
-
-fn decode_json<T: DeserializeOwned>(raw: Option<String>) -> Option<T> {
-    raw.and_then(|raw| serde_json::from_str(&raw).ok())
+fn evidence_record(evidence: crate::state::EvidenceSnapshot) -> EvidenceRecord {
+    EvidenceRecord {
+        id: evidence.id,
+        source_item_id: evidence.source_item_id,
+        source_task_id: evidence.source_task_id,
+        kind: evidence.kind,
+        summary: evidence.summary,
+        refs: evidence.refs,
+        metadata: evidence.metadata,
+        created_at: evidence.created_at,
+    }
 }
 
 fn bounded_limit(limit: Option<usize>) -> usize {
