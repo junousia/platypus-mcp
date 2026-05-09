@@ -129,9 +129,12 @@ make smoke-storage
 
 Backlog schema quick reference:
 
-- Required `create_backlog_item` fields: `title`, `goal`,
-  `implementation_contract` or `contract`, and at least one `acceptance`
-  criterion.
+- Minimal `create_backlog_item` input: a meaningful `goal` or `title`.
+  Platypus derives conservative title, goal, implementation contract, and first
+  acceptance text when those fields are omitted.
+- Rich `create_backlog_item` input: provide explicit `title`, `goal`,
+  `implementation_contract` or `contract`, and `acceptance` when the work is
+  complex or the generated defaults would be too broad.
 - Priority values: `P0`, `P1`, `P2`.
 - Type values: `foundation`, `feature`, `safety`, `ux`, `test`, `docs`.
 - Defaults when omitted: priority `P1`, type `feature`, epic `general`,

@@ -1,0 +1,57 @@
+item_id: MCP-061
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Minimal backlog creation accepts a meaningful title or goal and derives missing structured fields.
+- id: R2
+  text: Strict backlog validation and explicit field behavior remain unchanged for complete inputs.
+- id: R3
+  text: Empty or meaningless input still fails with actionable schema guidance.
+design:
+  summary: Normalize create_backlog_item inputs before validation. Derive title, goal, implementation contract, and one acceptance criterion only from host-provided title or goal text. Write the derived fields into normal backlog markdown so the result remains reviewable and deterministic.
+  owned_surfaces:
+  - src/backlog/create.rs
+  - src/models.rs
+  - docs/tools.md
+  - src/host_guidance.rs
+  - tests
+  notes: Do not add runtime state to backlog items and do not introduce sampling for field generation.
+tasks:
+- id: MCP-061-T01
+  title: Add deterministic minimal-field normalization
+  goal: Let create_backlog_item derive missing structured fields from title or goal.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/backlog/create.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test backlog::tests::create_backlog_item
+  acceptance:
+  - Goal-only creation produces valid markdown with derived title, contract, and acceptance.
+  - Title-only creation produces valid markdown with derived goal, contract, and acceptance.
+  - Empty input still reports missing title and goal.
+  notes: null
+- id: MCP-061-T02
+  title: Update host-facing backlog authoring guidance
+  goal: Document the one-call minimal backlog creation path and when to add richer fields.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on:
+  - MCP-061-T01
+  owned_surfaces:
+  - docs/tools.md
+  - src/host_guidance.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Tool docs state the minimal accepted fields.
+  - Guidance encourages one-call creation for small simple goals and richer contracts for complex work.
+  notes: null

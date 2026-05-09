@@ -118,8 +118,12 @@ state, or blocked/done fields. Closure is derived from Git trailers such as
 
 Backlog schema quick reference:
 
-- Required create fields: `title`, `goal`, `implementation_contract` or
-  `contract`, and at least one `acceptance` criterion.
+- Minimal create input: a meaningful `goal` or `title`. Platypus derives
+  conservative title, goal, implementation contract, and first acceptance text
+  when those fields are omitted.
+- Rich create input: provide explicit `title`, `goal`,
+  `implementation_contract` or `contract`, and `acceptance` when the work is
+  complex or the defaults would be too broad.
 - Priorities: `P0` critical/next, `P1` normal important work, `P2` refinement.
 - Types: `foundation`, `feature`, `safety`, `ux`, `test`, `docs`.
 - Defaults: priority `P1`, type `feature`, epic `general`, worker `coder`.
