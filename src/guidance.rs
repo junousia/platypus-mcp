@@ -49,23 +49,58 @@ pub fn next_safe_action(
         );
     }
     match state.next_safe_action(NextSafeActionQuery::default()) {
-        Ok(snapshot) => ActionResult::completed(
-            action,
-            snapshot.summary.clone(),
-            NextSafeActionData {
-                root: state.root().display().to_string(),
-                recommended_tool: snapshot.recommended_tool,
-                summary: snapshot.summary,
-                reason: snapshot.reason,
-                params: snapshot.params,
-            },
-        ),
+        Ok(snapshot) => {
+            let snapshot = verification_policy_adjusted_snapshot(state.root(), snapshot);
+            ActionResult::completed(
+                action,
+                snapshot.summary.clone(),
+                NextSafeActionData {
+                    root: state.root().display().to_string(),
+                    recommended_tool: snapshot.recommended_tool,
+                    summary: snapshot.summary,
+                    reason: snapshot.reason,
+                    params: snapshot.params,
+                },
+            )
+        }
         Err(error) => ActionResult::failed(
             action,
             "Could not inspect next safe action.",
             error.to_string(),
         ),
     }
+}
+
+fn verification_policy_adjusted_snapshot(
+    root: &Path,
+    mut snapshot: crate::state::SafeActionSnapshot,
+) -> crate::state::SafeActionSnapshot {
+    if snapshot.recommended_tool != "record_verification_evidence" {
+        return snapshot;
+    }
+    let Ok(config) = crate::config::effective_workflow_config(root) else {
+        return snapshot;
+    };
+    if config.require_verification_evidence {
+        return snapshot;
+    }
+    let Some(task_id) = snapshot
+        .params
+        .get("source_task_id")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+    else {
+        return snapshot;
+    };
+    snapshot.recommended_tool = "integrate_worker_result".to_string();
+    snapshot.summary = format!("Completed task `{task_id}` can be integrated.");
+    snapshot.reason = "Workflow policy does not require separate verification evidence; integrate now or record verification evidence first if useful.".to_string();
+    let root_string = root.to_string_lossy().to_string();
+    snapshot.params = map_params([("root", root_string.as_str()), ("task_id", &task_id)]);
+    snapshot
+        .params
+        .insert("allow_unverified".to_string(), Value::Bool(true));
+    snapshot
 }
 
 pub fn inspect_work_queue(
@@ -98,11 +133,18 @@ pub fn inspect_work_queue(
         })
         .collect();
 
+    let ready_count = items.iter().filter(|item| item.ready_to_dispatch).count();
+    let blocked_count = items.len().saturating_sub(ready_count);
     let (recommended_tool, reason, params) = recommended_queue_action(&root, &items);
     let summary = if items.is_empty() {
         "No runnable backlog items.".to_string()
     } else {
-        format!("{} runnable backlog item(s) inspected.", items.len())
+        format!(
+            "{} runnable backlog item(s) inspected: {} ready, {} blocked by planning.",
+            items.len(),
+            ready_count,
+            blocked_count
+        )
     };
     let status = if items.is_empty() {
         ActionStatus::Skipped
@@ -117,6 +159,8 @@ pub fn inspect_work_queue(
         data: Some(WorkQueueData {
             root,
             require_task_plan,
+            ready_count,
+            blocked_count,
             recommended_tool,
             summary,
             reason,
@@ -580,11 +624,15 @@ fn recommended_queue_action(
         );
     };
 
+    let ready_count = items.iter().filter(|item| item.ready_to_dispatch).count();
     let item_id = first.candidate.item_id.as_str();
     let mut params = map_params([("root", root)]);
     match first.recommended_tool.as_str() {
         "dispatch_ready_work" => {
-            params.insert("max_tasks".to_string(), Value::Number(1.into()));
+            params.insert(
+                "max_tasks".to_string(),
+                Value::Number((ready_count.max(1).min(10) as u64).into()),
+            );
         }
         "draft_task_plan" | "validate_task_plan" => {
             params.insert("item_id".to_string(), Value::String(item_id.to_string()));
@@ -593,7 +641,16 @@ fn recommended_queue_action(
     }
     (
         first.recommended_tool.clone(),
-        format!("{} {}", item_id, first.reason),
+        if first.recommended_tool == "dispatch_ready_work" {
+            format!(
+                "{} {} {} ready item(s) can be selected now; pass max_tasks to control the batch size.",
+                item_id,
+                first.reason,
+                ready_count
+            )
+        } else {
+            format!("{} {}", item_id, first.reason)
+        },
         params,
     )
 }
@@ -665,6 +722,39 @@ mod tests {
         assert_eq!(data.recommended_tool, "prepare_worker_handoff");
         assert_eq!(data.params["task_id"], "PROJ-001-T001");
         assert!(data.summary.contains("already claimed"));
+    }
+
+    #[test]
+    fn next_safe_action_integrates_completed_task_when_verification_not_required() {
+        let project = TempDir::new().expect("temp dir");
+        init_git(project.path());
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Completed task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        crate::tasks::claim_next_task(
+            project.path(),
+            crate::models::ClaimNextTaskParams {
+                root: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("runner-1".to_string()),
+            },
+        );
+        crate::tasks::mark_task_running(project.path(), None, &task.id).expect("running");
+        crate::tasks::finish_task(project.path(), None, &task.id, "completed").expect("completed");
+
+        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
+        let data = result.data.expect("next action");
+
+        assert_eq!(data.recommended_tool, "integrate_worker_result");
+        assert_eq!(data.params["task_id"], task.id);
+        assert_eq!(data.params["allow_unverified"], true);
     }
 
     #[test]

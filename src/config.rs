@@ -69,7 +69,7 @@ impl Default for WorkflowIntegrationConfigFile {
         Self {
             merge_style: Some(DEFAULT_MERGE_STYLE.to_string()),
             require_clean_manager_workspace: Some(true),
-            require_verification_evidence: Some(true),
+            require_verification_evidence: Some(false),
         }
     }
 }
@@ -230,7 +230,7 @@ fn effective_integration_config(
     Ok(WorkflowIntegrationConfig {
         merge_style,
         require_clean_manager_workspace: config.require_clean_manager_workspace.unwrap_or(true),
-        require_verification_evidence: config.require_verification_evidence.unwrap_or(true),
+        require_verification_evidence: config.require_verification_evidence.unwrap_or(false),
     })
 }
 
@@ -437,7 +437,7 @@ mod tests {
         ));
         assert_eq!(data.integration.merge_style, "merge_commit");
         assert!(data.integration.require_clean_manager_workspace);
-        assert!(data.integration.require_verification_evidence);
+        assert!(!data.integration.require_verification_evidence);
     }
 
     #[test]

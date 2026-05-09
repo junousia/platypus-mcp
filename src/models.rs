@@ -355,6 +355,16 @@ pub struct WorktreeCleanupParams {
 pub struct IntegrateWorkerResultParams {
     pub root: Option<String>,
     pub task_id: String,
+    /// Override workflow.integration.merge_style for this integration.
+    ///
+    /// Supported values: merge_commit, fast_forward, squash, apply_changed_files.
+    pub strategy: Option<String>,
+    /// Permit integration without separately recorded verification evidence.
+    ///
+    /// This is explicit so low-risk work can move without weakening strict project policy.
+    pub allow_unverified: Option<bool>,
+    /// Remove the task worktree after successful integration when it is clean.
+    pub cleanup_after: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -667,6 +677,8 @@ pub struct NextSafeActionData {
 pub struct WorkQueueData {
     pub root: String,
     pub require_task_plan: bool,
+    pub ready_count: usize,
+    pub blocked_count: usize,
     pub recommended_tool: String,
     pub summary: String,
     pub reason: String,
@@ -1108,6 +1120,8 @@ pub struct DispatchNextWorkData {
 pub struct DispatchReadyWorkData {
     pub root: String,
     pub requested: usize,
+    pub available_before_dispatch: usize,
+    pub selected: usize,
     pub dispatched: usize,
     pub prepared: usize,
     pub failed: usize,
@@ -1193,6 +1207,8 @@ pub struct WorkerResultIntegrationData {
     pub merge_style: String,
     pub branch: String,
     pub commit: String,
+    pub cleaned_up: bool,
+    pub cleanup_error: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

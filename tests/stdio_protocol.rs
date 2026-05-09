@@ -1791,7 +1791,7 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
         .expect("next action")
         .contains("record_verification_evidence"));
 
-    let verification_guidance = client
+    let integration_guidance = client
         .call_tool(CallToolRequestParams {
             meta: None,
             name: "next_safe_action".into(),
@@ -1799,16 +1799,17 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
             task: None,
         })
         .await?;
-    let verification_guidance = verification_guidance
+    let integration_guidance = integration_guidance
         .structured_content
-        .expect("verification guidance");
+        .expect("integration guidance");
     assert_eq!(
-        verification_guidance["data"]["recommended_tool"],
-        "record_verification_evidence"
+        integration_guidance["data"]["recommended_tool"],
+        "integrate_worker_result"
     );
+    assert_eq!(integration_guidance["data"]["params"]["task_id"], task_id);
     assert_eq!(
-        verification_guidance["data"]["params"]["source_task_id"],
-        task_id
+        integration_guidance["data"]["params"]["allow_unverified"],
+        true
     );
 
     let evidence = client

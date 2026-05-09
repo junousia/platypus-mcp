@@ -1,0 +1,80 @@
+item_id: MCP-063
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Integration should not leave users in manual MERGE_HEAD recovery paths.
+- id: R2
+  text: Worker branch file application should be available as an explicit safe integration strategy.
+- id: R3
+  text: Verification evidence should be policy-controlled and explicitly bypassable for low-risk work.
+- id: R4
+  text: Ready-task selection and dispatch limits should be visible in tool output.
+design:
+  summary: Extend existing integration and queue tools with explicit policy and recovery controls. Keep merge styles unchanged, add apply_changed_files as a named strategy, and expose counts/reasons rather than requiring users to infer readiness from stopped_reason alone.
+  owned_surfaces:
+  - src/workspace.rs
+  - src/dispatch.rs
+  - src/guidance.rs
+  - src/config.rs
+  - src/project/init.rs
+  - tests
+  notes: This keeps strict behavior configurable while making the common low-risk workflow smoother.
+tasks:
+- id: MCP-063-T01
+  title: Harden integration recovery and policy controls
+  goal: Add unfinished-Git-operation checks, conflict file reporting, verification bypass, and cleanup-after-integration.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/workspace.rs
+  - src/models.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test workspace::tests
+  acceptance:
+  - Existing MERGE_HEAD-like operations are rejected before integration starts.
+  - Merge conflicts return file-level guidance and abort cleanly.
+  - Explicit allow_unverified permits integration when no verification evidence exists.
+  - cleanup_after removes a clean integrated worktree and clears metadata.
+  notes: null
+- id: MCP-063-T02
+  title: Add file-level worker integration strategy
+  goal: Replace manual git checkout of worker files with a typed integration strategy.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-063-T01
+  owned_surfaces:
+  - src/workspace.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test workspace::tests::integrates_worker_result_with_apply_changed_files_strategy
+  acceptance:
+  - apply_changed_files integrates changed worker files into the manager workspace and commits with Platypus trailers.
+  - Path validation blocks unsafe worker branch paths.
+  notes: null
+- id: MCP-063-T03
+  title: Expose ready queue counts and dispatch limits
+  goal: Make dispatch_ready_work and inspect_work_queue explain ready, blocked, and selected counts.
+  requirement_refs:
+  - R4
+  depends_on:
+  - MCP-063-T02
+  owned_surfaces:
+  - src/dispatch.rs
+  - src/guidance.rs
+  - src/models.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test guidance::tests dispatch::tests
+  acceptance:
+  - inspect_work_queue includes ready and blocked counts.
+  - dispatch_ready_work includes available and selected counts plus clear stopped_reason semantics.
+  - next safe action recommends a max_tasks value based on visible ready count.
+  notes: null

@@ -293,7 +293,7 @@ pub fn complete_worker_execution(
     );
     if status == "completed" && verification_status.as_deref() != Some("passed") {
         result.next_action = Some(
-            "Record verification evidence with record_verification_evidence, or rerun verification before claiming the work is reconciled."
+            "Record verification evidence with record_verification_evidence when useful, or integrate with allow_unverified=true when workflow policy permits."
                 .to_string(),
         );
     }
