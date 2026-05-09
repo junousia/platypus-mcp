@@ -196,6 +196,26 @@ still contain SQLite code. The desired end state is that `rusqlite`,
 `query_row`, `prepare`, and raw SQL strings appear only in SQLite backend
 modules and their focused tests.
 
+`tests/sql_isolation.rs` enforces the current allowlist during `cargo test`,
+so it is also part of `make check`. Permanent SQLite-specific locations are:
+
+- `src/state/sqlite/mod.rs`
+- `src/storage/mod.rs`
+- `src/storage/probe.rs`
+- `src/storage/repository.rs`
+- `src/storage/schema.rs`
+- `src/storage/traits.rs`
+
+The temporary migration allowlist is intentionally small:
+
+- `src/assignments/store.rs`
+- `src/tasks.rs`
+
+These temporary entries exist only because assignment and task persistence
+helpers still bridge older tool paths during the `ProjectState` migration. Do
+not add new product or MCP tool modules to the allowlist; move new persistence
+behavior into a backend module instead.
+
 ## Backend Capabilities
 
 Backends should report capabilities explicitly. This avoids pretending every

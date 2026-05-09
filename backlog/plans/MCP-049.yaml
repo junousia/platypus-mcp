@@ -1,0 +1,73 @@
+item_id: MCP-049
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: A repeatable check fails when rusqlite imports, direct rusqlite types, or raw SQL query strings appear outside the approved persistence allowlist.
+- id: R2
+  text: The approved allowlist is narrow, documented, and separates final backend modules from temporary migration internals.
+- id: R3
+  text: The SQL isolation guard runs as part of the normal make check path.
+design:
+  summary: Add a Rust integration test that recursively scans src/*.rs for backend-specific SQLite markers and raw SQL strings. Allow only src/state/sqlite, src/storage, and explicitly documented temporary migration internals that still own legacy persistence helpers. Keep the guard in cargo test so make check runs it automatically, and document the allowlist plus the expectation that temporary entries shrink as migration continues.
+  owned_surfaces:
+  - tests
+  - docs/storage.md
+  - Makefile
+  - src/state
+  - src/storage
+  notes: The first guard should prevent new leaks without forcing a large unrelated migration of remaining legacy task/assignment persistence helpers.
+tasks:
+- id: MCP-049-T01
+  title: Add SQL isolation source guard
+  goal: Create a source-scanning integration test that fails on rusqlite or raw SQL outside allowed persistence modules.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test --test sql_isolation
+  acceptance:
+  - The guard scans src recursively.
+  - The guard reports offending file paths and matched markers.
+  - The guard is included in cargo test and therefore make check.
+  notes: null
+- id: MCP-049-T02
+  title: Document allowed persistence locations
+  goal: Update storage documentation with the permanent backend allowlist and temporary migration allowlist.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-049-T01
+  owned_surfaces:
+  - docs/storage.md
+  suggested_worker: coder
+  verification:
+  - cargo test --test sql_isolation
+  acceptance:
+  - docs/storage.md names each allowed location.
+  - Temporary entries explain why they remain allowed and that new product modules must not be added.
+  notes: null
+- id: MCP-049-T03
+  title: Verify SQL guard in full check
+  goal: Run full repository verification with the SQL isolation guard enabled.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-049-T01
+  - MCP-049-T02
+  owned_surfaces:
+  - Makefile
+  - tests
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - make check passes.
+  - The PR includes Platypus-Closes and Platypus-Verification trailers.
+  notes: null
