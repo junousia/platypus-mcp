@@ -2162,6 +2162,8 @@ Edit only the assigned owned surface.
 "#,
         )
         .expect("item");
+        git(&project, &["add", "backlog"]);
+        git(&project, &["commit", "-m", "Add backlog fixture"]);
         project
     }
 

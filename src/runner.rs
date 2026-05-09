@@ -533,6 +533,8 @@ Claim, create worktree, and generate bundle.
 "#,
         )
         .expect("item");
+        git(&project, &["add", "--all"]);
+        git(&project, &["commit", "-m", "Add Platypus scaffold"]);
         project
     }
 

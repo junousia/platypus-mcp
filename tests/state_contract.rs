@@ -308,6 +308,11 @@ fn sqlite_project() -> TempDir {
             notes: None,
         },
     );
+    git(project.path(), &["add", "--all"]);
+    git(
+        project.path(),
+        &["commit", "-m", "Add Platypus contract scaffold"],
+    );
     project
 }
 
