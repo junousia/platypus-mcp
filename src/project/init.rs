@@ -45,6 +45,9 @@ pub fn init_project(
             return ActionResult::failed(action, "Could not initialize Platypus project.", error);
         }
     }
+    if let Err(error) = ensure_gitignore(&root, &mut entries) {
+        return ActionResult::failed(action, "Could not initialize Platypus project.", error);
+    }
 
     let created = entries
         .iter()
@@ -140,6 +143,47 @@ fn scaffold_files(project_name: &str) -> Vec<(&'static str, String)> {
         ("backlog/templates/plan.yaml", plan_template()),
         ("backlog/templates/epic.md", epic_template()),
     ]
+}
+
+fn ensure_gitignore(
+    root: &Path,
+    entries: &mut Vec<ScaffoldEntry>,
+) -> std::result::Result<(), String> {
+    let relative_path = checked_relative_path(".gitignore")?;
+    let path = root.join(relative_path);
+    let rule = ".platy/";
+    if !path.exists() {
+        fs::write(&path, format!("# Platypus runtime state\n{rule}\n"))
+            .map_err(|error| format!("{}: {}", path.display(), error))?;
+        entries.push(created_entry(root, &path, "file"));
+        return Ok(());
+    }
+    if !path.is_file() {
+        return Err(format!("{} exists but is not a file", path.display()));
+    }
+    let content =
+        fs::read_to_string(&path).map_err(|error| format!("{}: {}", path.display(), error))?;
+    if gitignore_has_rule(&content, rule) {
+        entries.push(skipped_entry(root, &path, "file"));
+        return Ok(());
+    }
+    let mut updated = content;
+    if !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    if !updated.trim_end().is_empty() {
+        updated.push('\n');
+    }
+    updated.push_str("# Platypus runtime state\n");
+    updated.push_str(rule);
+    updated.push('\n');
+    fs::write(&path, updated).map_err(|error| format!("{}: {}", path.display(), error))?;
+    entries.push(created_entry(root, &path, "file"));
+    Ok(())
+}
+
+fn gitignore_has_rule(content: &str, rule: &str) -> bool {
+    content.lines().any(|line| line.trim() == rule)
 }
 
 fn project_config(project_name: &str) -> String {
@@ -302,6 +346,8 @@ mod tests {
         assert!(temp.path().join("platy.yaml").is_file());
         assert!(temp.path().join("AGENTS.md").is_file());
         assert!(temp.path().join("CLAUDE.md").is_file());
+        let gitignore = fs::read_to_string(temp.path().join(".gitignore")).expect("gitignore");
+        assert!(gitignore.contains(".platy/"));
         let config = fs::read_to_string(temp.path().join("platy.yaml")).expect("config");
         assert!(config.contains("workflow:"));
         assert!(config.contains("merge_style: merge_commit"));
@@ -336,6 +382,7 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         fs::write(temp.path().join("platy.yaml"), "custom: true\n").expect("config");
         fs::write(temp.path().join("CLAUDE.md"), "# Custom Claude\n").expect("claude");
+        fs::write(temp.path().join(".gitignore"), "custom-ignore\n").expect("gitignore");
         let root = temp.path().to_string_lossy().into_owned();
 
         let result = init_project(
@@ -356,6 +403,31 @@ mod tests {
             fs::read_to_string(temp.path().join("CLAUDE.md")).expect("claude"),
             "# Custom Claude\n"
         );
+        let gitignore = fs::read_to_string(temp.path().join(".gitignore")).expect("gitignore");
+        assert!(gitignore.contains("custom-ignore"));
+        assert!(gitignore.contains(".platy/"));
         assert!(result.data.expect("data").skipped > 0);
+    }
+
+    #[test]
+    fn init_project_merges_gitignore_even_with_overwrite() {
+        let temp = TempDir::new().expect("temp dir");
+        fs::write(temp.path().join(".gitignore"), "target/\n.env\n").expect("gitignore");
+        let root = temp.path().to_string_lossy().into_owned();
+
+        let result = init_project(
+            temp.path(),
+            InitProjectParams {
+                root: Some(root),
+                project_name: None,
+                overwrite: Some(true),
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let gitignore = fs::read_to_string(temp.path().join(".gitignore")).expect("gitignore");
+        assert!(gitignore.contains("target/"));
+        assert!(gitignore.contains(".env"));
+        assert!(gitignore.contains(".platy/"));
     }
 }
