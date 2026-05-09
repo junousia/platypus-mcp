@@ -294,6 +294,76 @@ mod tests {
     }
 
     #[test]
+    fn create_backlog_item_derives_fields_from_minimal_goal_or_title() {
+        let temp = project_fixture();
+
+        let goal_only = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-001".to_string()),
+                id_prefix: None,
+                title: String::new(),
+                priority: None,
+                item_type: None,
+                area: None,
+                epic: None,
+                depends_on: Vec::new(),
+                suggested_worker: None,
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: "Scaffold frontend".to_string(),
+                implementation_contract: None,
+                contract: None,
+                acceptance: Vec::new(),
+                notes: None,
+            },
+        );
+        assert!(matches!(goal_only.status, ActionStatus::Completed));
+        let goal_text =
+            fs::read_to_string(temp.path().join("backlog/items/PROJ-001.md")).expect("goal item");
+        assert!(goal_text.contains("title: Scaffold frontend"));
+        assert!(goal_text.contains(
+            "## Implementation Contract\n\nImplement the requested change: Scaffold frontend."
+        ));
+        assert!(goal_text
+            .contains("- Scaffold frontend is implemented and the validation path is documented."));
+
+        let title_only = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-002".to_string()),
+                id_prefix: None,
+                title: "Document recovery flow".to_string(),
+                priority: None,
+                item_type: None,
+                area: None,
+                epic: None,
+                depends_on: Vec::new(),
+                suggested_worker: None,
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: String::new(),
+                implementation_contract: None,
+                contract: None,
+                acceptance: Vec::new(),
+                notes: None,
+            },
+        );
+        assert!(matches!(title_only.status, ActionStatus::Completed));
+        let title_text =
+            fs::read_to_string(temp.path().join("backlog/items/PROJ-002.md")).expect("title item");
+        assert!(title_text.contains("## Goal\n\nDocument recovery flow."));
+        assert!(title_text.contains(
+            "## Implementation Contract\n\nImplement the requested change: Document recovery flow."
+        ));
+
+        let validation = validate_backlog(temp.path(), Some(root_arg(temp.path()).as_str()), true);
+        assert!(matches!(validation.status, ActionStatus::Completed));
+    }
+
+    #[test]
     fn create_backlog_item_reports_schema_guidance() {
         let temp = project_fixture();
 

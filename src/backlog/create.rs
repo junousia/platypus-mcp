@@ -6,6 +6,14 @@ use super::{
 use crate::models::{ActionResult, CreateBacklogItemParams, CreatedBacklogItemData};
 use std::{fs, path::Path};
 
+#[derive(Debug)]
+struct NormalizedBacklogInput {
+    title: String,
+    goal: String,
+    contract: String,
+    acceptance: Vec<String>,
+}
+
 pub fn create_backlog_item(
     default_root: &Path,
     params: CreateBacklogItemParams,
@@ -75,29 +83,23 @@ pub fn create_backlog_item(
             ),
         );
     }
-    let contract = params
-        .implementation_contract
-        .as_ref()
-        .or(params.contract.as_ref())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let acceptance = clean_vec(params.acceptance.clone());
     if let Err(error) = validate_external_refs(&params.external_refs) {
         return ActionResult::failed(action, "Could not create backlog item.", error);
     }
-    let missing_fields =
-        missing_required_fields(&params, contract.is_none(), acceptance.is_empty());
-    if !missing_fields.is_empty() {
-        return ActionResult::failed(
-            action,
-            "Could not create backlog item.",
-            format!(
-                "missing required field(s): {}. Required fields: title, goal, implementation_contract or contract, and at least one acceptance criterion.",
-                missing_fields.join(", ")
-            ),
-        );
-    }
-    let text = match backlog_item_text(&item_id, &params, &priority, &item_type, &epic, &acceptance)
+    let normalized = match normalize_backlog_input(&params) {
+        Ok(normalized) => normalized,
+        Err(missing_fields) => {
+            return ActionResult::failed(
+                action,
+                "Could not create backlog item.",
+                format!(
+                    "missing required field(s): {}. Provide at least title or goal; explicit fields can still override derived defaults. Required persisted fields: title, goal, implementation_contract or contract, and at least one acceptance criterion.",
+                    missing_fields.join(", ")
+                ),
+            );
+        }
+    };
+    let text = match backlog_item_text(&item_id, &params, &normalized, &priority, &item_type, &epic)
     {
         Ok(text) => text,
         Err(error) => return ActionResult::failed(action, "Could not create backlog item.", error),
@@ -157,27 +159,6 @@ fn clean_optional(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn missing_required_fields(
-    params: &CreateBacklogItemParams,
-    missing_contract: bool,
-    missing_acceptance: bool,
-) -> Vec<&'static str> {
-    let mut missing = Vec::new();
-    if params.title.trim().is_empty() {
-        missing.push("title");
-    }
-    if params.goal.trim().is_empty() {
-        missing.push("goal");
-    }
-    if missing_contract {
-        missing.push("implementation_contract|contract");
-    }
-    if missing_acceptance {
-        missing.push("acceptance");
-    }
-    missing
-}
-
 fn clean_vec(values: Vec<String>) -> Vec<String> {
     values
         .into_iter()
@@ -186,23 +167,97 @@ fn clean_vec(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn backlog_item_text(
-    item_id: &str,
+fn normalize_backlog_input(
     params: &CreateBacklogItemParams,
-    priority: &str,
-    item_type: &str,
-    epic: &str,
-    acceptance: &[String],
-) -> std::result::Result<String, String> {
+) -> Result<NormalizedBacklogInput, Vec<&'static str>> {
+    let explicit_title = clean_text(&params.title);
+    let explicit_goal = clean_text(&params.goal);
+    if explicit_title.is_none() && explicit_goal.is_none() {
+        return Err(vec![
+            "title",
+            "goal",
+            "implementation_contract|contract",
+            "acceptance",
+        ]);
+    }
+
+    let title = explicit_title
+        .or_else(|| explicit_goal.as_deref().and_then(derive_title))
+        .ok_or_else(|| vec!["title"])?;
+    let goal = explicit_goal.unwrap_or_else(|| with_period(&title));
     let contract = params
         .implementation_contract
         .as_deref()
         .or(params.contract.as_deref())
-        .unwrap_or("")
+        .and_then(clean_text)
+        .unwrap_or_else(|| format!("Implement the requested change: {}", with_period(&goal)));
+    let mut acceptance = clean_vec(params.acceptance.clone());
+    if acceptance.is_empty() {
+        acceptance.push(format!(
+            "{} is implemented and the validation path is documented.",
+            title
+        ));
+    }
+
+    Ok(NormalizedBacklogInput {
+        title,
+        goal,
+        contract,
+        acceptance,
+    })
+}
+
+fn clean_text(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn derive_title(value: &str) -> Option<String> {
+    let line = value
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?
+        .trim_matches(|character: char| {
+            character.is_whitespace() || matches!(character, '#' | '-' | '*' | ':')
+        })
         .trim();
+    clean_text(&limit_title(line))
+}
+
+fn limit_title(value: &str) -> String {
+    const MAX_CHARS: usize = 80;
+    let mut chars = value.chars();
+    let mut title = chars.by_ref().take(MAX_CHARS).collect::<String>();
+    if chars.next().is_some() {
+        title.push_str("...");
+    }
+    title
+}
+
+fn with_period(value: impl AsRef<str>) -> String {
+    let value = value.as_ref().trim();
+    if value.ends_with(['.', '!', '?']) {
+        value.to_string()
+    } else {
+        format!("{value}.")
+    }
+}
+
+fn backlog_item_text(
+    item_id: &str,
+    params: &CreateBacklogItemParams,
+    normalized: &NormalizedBacklogInput,
+    priority: &str,
+    item_type: &str,
+    epic: &str,
+) -> std::result::Result<String, String> {
     let frontmatter = BacklogItemFrontmatterOut {
         id: item_id.to_string(),
-        title: params.title.trim().to_string(),
+        title: normalized.title.clone(),
         priority: priority.to_string(),
         item_type: item_type.to_string(),
         area: clean_optional(params.area.clone()).unwrap_or_else(|| "tooling".to_string()),
@@ -218,10 +273,11 @@ fn backlog_item_text(
         "---\n{}---\n\n# {} {}\n\n## Goal\n\n{}\n\n## Implementation Contract\n\n{}\n\n## Acceptance\n\n{}\n",
         yaml,
         item_id,
-        params.title.trim(),
-        params.goal.trim(),
-        contract,
-        acceptance
+        normalized.title,
+        normalized.goal,
+        normalized.contract,
+        normalized
+            .acceptance
             .iter()
             .map(|criterion| format!("- {}", criterion))
             .collect::<Vec<_>>()
