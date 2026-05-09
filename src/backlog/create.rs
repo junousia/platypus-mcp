@@ -59,8 +59,7 @@ pub fn create_backlog_item(
         );
     }
     let priority = clean_optional(params.priority.clone()).unwrap_or_else(|| "P1".to_string());
-    let item_type =
-        clean_optional(params.item_type.clone()).unwrap_or_else(|| "feature".to_string());
+    let item_type = normalize_item_type(params.item_type.as_deref());
     if !VALID_PRIORITIES.contains(&priority.as_str()) {
         return ActionResult::failed(
             action,
@@ -157,6 +156,19 @@ fn clean_optional(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn normalize_item_type(value: Option<&str>) -> String {
+    match value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("feature")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "backlog" | "story" | "user_story" | "task" | "chore" => "feature".to_string(),
+        value => value.to_string(),
+    }
 }
 
 fn clean_vec(values: Vec<String>) -> Vec<String> {

@@ -407,15 +407,18 @@ fn classify_candidate(candidate: &BacklogCandidate) -> PlanningClassification {
         .iter()
         .map(|surface| surface.to_ascii_lowercase())
         .collect::<Vec<_>>();
+    let simple_scaffold = is_simple_single_surface_scaffold(&text, &surfaces);
 
     if candidate.owned_surfaces.len() > 1 {
         mode = "standard";
         reasons.push("touches multiple owned surfaces".to_string());
     }
-    if matches!(
-        candidate.item_type.as_str(),
-        "foundation" | "feature" | "safety" | "ux"
-    ) {
+    if !simple_scaffold
+        && matches!(
+            candidate.item_type.as_str(),
+            "foundation" | "feature" | "safety" | "ux"
+        )
+    {
         mode = max_mode(mode, "standard");
         reasons.push(format!(
             "{} item type usually needs planned execution",
@@ -453,7 +456,11 @@ fn classify_candidate(candidate: &BacklogCandidate) -> PlanningClassification {
         );
     }
     if reasons.is_empty() {
-        reasons.push("small low-risk item can be handled directly".to_string());
+        if simple_scaffold {
+            reasons.push("single-surface scaffold/setup item can be handled directly".to_string());
+        } else {
+            reasons.push("small low-risk item can be handled directly".to_string());
+        }
     }
 
     PlanningClassification {
@@ -465,6 +472,21 @@ fn classify_candidate(candidate: &BacklogCandidate) -> PlanningClassification {
         },
         reasons,
     }
+}
+
+fn is_simple_single_surface_scaffold(text: &str, surfaces: &[String]) -> bool {
+    surfaces.len() == 1
+        && !high_risk_surface(surfaces)
+        && [
+            "scaffold",
+            "setup",
+            "set up",
+            "bootstrap",
+            "initial",
+            "starter",
+        ]
+        .iter()
+        .any(|keyword| text.contains(keyword))
 }
 
 fn max_mode(current: &str, candidate: &str) -> &'static str {
@@ -730,6 +752,35 @@ mod tests {
                 item_type: "docs",
                 area: "docs",
                 owned_surfaces: &["README.md"],
+            },
+        );
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: Some(true),
+            },
+        );
+        let data = result.data.expect("queue");
+
+        assert_eq!(data.recommended_tool, "dispatch_ready_work");
+        assert_eq!(data.items[0].planning.required_mode, "direct");
+        assert!(data.items[0].ready_to_dispatch);
+    }
+
+    #[test]
+    fn simple_single_surface_scaffolds_do_not_require_task_plan() {
+        let project = backlog_project();
+        write_item_with(
+            project.path(),
+            ItemFixture {
+                id: "PROJ-001",
+                title: "Set up React frontend project structure",
+                item_type: "foundation",
+                area: "tooling",
+                owned_surfaces: &["frontend"],
             },
         );
 

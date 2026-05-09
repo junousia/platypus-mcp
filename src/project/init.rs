@@ -151,9 +151,8 @@ fn ensure_gitignore(
 ) -> std::result::Result<(), String> {
     let relative_path = checked_relative_path(".gitignore")?;
     let path = root.join(relative_path);
-    let rule = ".platy/";
     if !path.exists() {
-        fs::write(&path, format!("# Platypus runtime state\n{rule}\n"))
+        fs::write(&path, default_gitignore())
             .map_err(|error| format!("{}: {}", path.display(), error))?;
         entries.push(created_entry(root, &path, "file"));
         return Ok(());
@@ -163,7 +162,12 @@ fn ensure_gitignore(
     }
     let content =
         fs::read_to_string(&path).map_err(|error| format!("{}: {}", path.display(), error))?;
-    if gitignore_has_rule(&content, rule) {
+    let missing_rules = default_gitignore_rules()
+        .iter()
+        .copied()
+        .filter(|rule| !gitignore_has_rule(&content, rule))
+        .collect::<Vec<_>>();
+    if missing_rules.is_empty() {
         entries.push(skipped_entry(root, &path, "file"));
         return Ok(());
     }
@@ -174,12 +178,37 @@ fn ensure_gitignore(
     if !updated.trim_end().is_empty() {
         updated.push('\n');
     }
-    updated.push_str("# Platypus runtime state\n");
-    updated.push_str(rule);
-    updated.push('\n');
+    updated.push_str("# Platypus runtime and generated files\n");
+    for rule in missing_rules {
+        updated.push_str(rule);
+        updated.push('\n');
+    }
     fs::write(&path, updated).map_err(|error| format!("{}: {}", path.display(), error))?;
     entries.push(created_entry(root, &path, "file"));
     Ok(())
+}
+
+fn default_gitignore() -> String {
+    let mut content = "# Platypus runtime and generated files\n".to_string();
+    for rule in default_gitignore_rules() {
+        content.push_str(rule);
+        content.push('\n');
+    }
+    content
+}
+
+fn default_gitignore_rules() -> &'static [&'static str] {
+    &[
+        ".platy/",
+        "__pycache__/",
+        "*.py[cod]",
+        ".venv/",
+        "node_modules/",
+        "dist/",
+        "build/",
+        ".env",
+        ".env.*",
+    ]
 }
 
 fn gitignore_has_rule(content: &str, rule: &str) -> bool {
@@ -348,6 +377,9 @@ mod tests {
         assert!(temp.path().join("CLAUDE.md").is_file());
         let gitignore = fs::read_to_string(temp.path().join(".gitignore")).expect("gitignore");
         assert!(gitignore.contains(".platy/"));
+        assert!(gitignore.contains("__pycache__/"));
+        assert!(gitignore.contains("node_modules/"));
+        assert!(gitignore.contains(".env"));
         let config = fs::read_to_string(temp.path().join("platy.yaml")).expect("config");
         assert!(config.contains("workflow:"));
         assert!(config.contains("merge_style: merge_commit"));
@@ -429,5 +461,7 @@ mod tests {
         assert!(gitignore.contains("target/"));
         assert!(gitignore.contains(".env"));
         assert!(gitignore.contains(".platy/"));
+        assert!(gitignore.contains("__pycache__/"));
+        assert!(gitignore.contains("node_modules/"));
     }
 }

@@ -364,6 +364,43 @@ mod tests {
     }
 
     #[test]
+    fn create_backlog_item_accepts_common_type_aliases() {
+        let temp = project_fixture();
+
+        let result = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-001".to_string()),
+                id_prefix: None,
+                title: "Seed backlog".to_string(),
+                priority: Some("P1".to_string()),
+                item_type: Some("backlog".to_string()),
+                area: Some("planning".to_string()),
+                epic: Some("general".to_string()),
+                depends_on: Vec::new(),
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: "Seed initial backlog items.".to_string(),
+                implementation_contract: Some("Create valid backlog items.".to_string()),
+                contract: None,
+                acceptance: vec!["Backlog validates.".to_string()],
+                notes: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let parsed = validate::validate_backlog_at_root(temp.path(), true);
+        let created = parsed
+            .items
+            .iter()
+            .find(|item| item.frontmatter.id == "PROJ-001")
+            .expect("created item");
+        assert_eq!(created.frontmatter.item_type, "feature");
+    }
+
+    #[test]
     fn create_backlog_item_reports_schema_guidance() {
         let temp = project_fixture();
 

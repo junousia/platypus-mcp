@@ -225,11 +225,26 @@ fn manager_relevant_status(status: &str) -> String {
     status
         .lines()
         .filter(|line| {
-            let path = line.get(3..).unwrap_or_default();
-            !path.starts_with(".platy/")
+            let path = porcelain_status_path(line);
+            !path_is_ignored_runtime(path)
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn porcelain_status_path(line: &str) -> &str {
+    if line.as_bytes().get(2) == Some(&b' ') {
+        line.get(3..).unwrap_or_default()
+    } else if line.as_bytes().get(1) == Some(&b' ') {
+        line.get(2..).unwrap_or_default()
+    } else {
+        line.get(3..).unwrap_or_default()
+    }
+}
+
+fn path_is_ignored_runtime(path: &str) -> bool {
+    path.split(" -> ")
+        .all(|path_part| path_part.starts_with(".platy/"))
 }
 
 #[cfg(test)]
@@ -269,6 +284,70 @@ mod tests {
 
         assert_eq!(readiness.status, GitReadinessStatus::Dirty);
         assert!(readiness.next_action.unwrap().contains("commit, stash"));
+    }
+
+    #[test]
+    fn ignores_tracked_platypus_runtime_state_when_checking_dirty_workspace() {
+        let project = git_project();
+        fs::create_dir_all(project.path().join(".platy")).expect("state dir");
+        fs::write(project.path().join(".platy/platypus.sqlite3"), "state-v1\n").expect("state");
+        run_git(project.path(), &["add", ".platy/platypus.sqlite3"]).expect("git add state");
+        run_git(
+            project.path(),
+            &["commit", "-m", "Accidentally track runtime state"],
+        )
+        .expect("git commit state");
+        fs::write(project.path().join(".platy/platypus.sqlite3"), "state-v2\n")
+            .expect("state update");
+
+        let readiness = inspect_git_readiness(project.path(), true);
+
+        assert_eq!(readiness.status, GitReadinessStatus::Ready);
+    }
+
+    #[test]
+    fn reports_runtime_state_renamed_into_source() {
+        let project = git_project();
+        fs::create_dir_all(project.path().join(".platy")).expect("state dir");
+        fs::create_dir_all(project.path().join("src")).expect("src dir");
+        fs::write(project.path().join(".platy/platypus.sqlite3"), "state\n").expect("state");
+        run_git(project.path(), &["add", ".platy/platypus.sqlite3"]).expect("git add state");
+        run_git(
+            project.path(),
+            &["commit", "-m", "Accidentally track runtime state"],
+        )
+        .expect("git commit state");
+        run_git(
+            project.path(),
+            &["mv", ".platy/platypus.sqlite3", "src/platypus.sqlite3"],
+        )
+        .expect("git mv state");
+
+        let readiness = inspect_git_readiness(project.path(), true);
+
+        assert_eq!(readiness.status, GitReadinessStatus::Dirty);
+    }
+
+    #[test]
+    fn ignores_runtime_state_renamed_inside_runtime_dir() {
+        let project = git_project();
+        fs::create_dir_all(project.path().join(".platy")).expect("state dir");
+        fs::write(project.path().join(".platy/platypus.sqlite3"), "state\n").expect("state");
+        run_git(project.path(), &["add", ".platy/platypus.sqlite3"]).expect("git add state");
+        run_git(
+            project.path(),
+            &["commit", "-m", "Accidentally track runtime state"],
+        )
+        .expect("git commit state");
+        run_git(
+            project.path(),
+            &["mv", ".platy/platypus.sqlite3", ".platy/state.sqlite3"],
+        )
+        .expect("git mv state");
+
+        let readiness = inspect_git_readiness(project.path(), true);
+
+        assert_eq!(readiness.status, GitReadinessStatus::Ready);
     }
 
     fn git_project() -> TempDir {

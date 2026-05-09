@@ -1,0 +1,70 @@
+item_id: MCP-062
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Platypus runtime state must not make a project look dirty for dispatch readiness.
+- id: R2
+  text: Common user wording for backlog item type should map to valid persisted schema values when safe.
+- id: R3
+  text: Trivial scaffold/setup items should not require task-plan YAML before dispatch.
+design:
+  summary: Add narrowly-scoped compatibility and filtering rules around existing strict contracts. Keep persisted backlog item types in the existing enum, but normalize common aliases before validation. Keep Git readiness conservative for source changes, but ignore .platy runtime paths. Keep plan classification strict for high-risk surfaces, while allowing simple single-surface scaffold/setup work to be direct.
+  owned_surfaces:
+  - src/backlog/create.rs
+  - src/git_readiness.rs
+  - src/guidance.rs
+  - src/project/init.rs
+  - tests
+  notes: This is a friction-reduction slice, not a new workflow model.
+tasks:
+- id: MCP-062-T01
+  title: Harden runtime state ignore behavior
+  goal: Make runtime DB and generated default ignore behavior explicit and tested.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - src/git_readiness.rs
+  - src/project/init.rs
+  suggested_worker: coder
+  verification:
+  - cargo test git_readiness::tests project::init::tests
+  acceptance:
+  - Tracked `.platy/platypus.sqlite3` modifications are ignored by readiness.
+  - Generated project `.gitignore` includes Platypus, Python cache, Node dependency, build output, and env-file defaults.
+  notes: null
+- id: MCP-062-T02
+  title: Add backlog type aliases
+  goal: Accept safe common type aliases such as backlog without weakening persisted schema values.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-062-T01
+  owned_surfaces:
+  - src/backlog/create.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test backlog::tests::create_backlog_item
+  acceptance:
+  - "type: backlog creates a valid item persisted as feature."
+  - Unknown unsafe type values still fail with enum guidance.
+  notes: null
+- id: MCP-062-T03
+  title: Classify simple scaffolds as direct
+  goal: Avoid mandatory task-plan YAML for trivial single-surface scaffold/setup items.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-062-T02
+  owned_surfaces:
+  - src/guidance.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test guidance::tests
+  acceptance:
+  - A single-surface scaffold/setup item is direct even when its persisted type is feature or foundation.
+  - Multi-surface, workflow, security, persistence, and protocol items still require standard or full planning.
+  notes: null
