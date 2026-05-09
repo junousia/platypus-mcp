@@ -19,9 +19,9 @@ The preferred workflow is documented in [docs/workflow.md](docs/workflow.md),
 client setup is documented in [docs/install.md](docs/install.md), and the full
 tool surface is documented in [docs/tools.md](docs/tools.md).
 
-Near-term work now focuses on tightening integration evidence, reconciliation,
-full lifecycle smoke coverage, and MCP host guidance. That roadmap is
-documented in [docs/roadmap.md](docs/roadmap.md).
+The roadmap now tracks the landed MCP baseline and candidate next directions
+instead of a manual queue index. See [docs/roadmap.md](docs/roadmap.md) for the
+current product direction.
 
 ## Product Boundary
 

@@ -18,52 +18,71 @@ perspectives.
 - Workers run in isolated worktrees with explicit handoff bundles.
 - Every important state transition is inspectable, auditable, and recoverable.
 
-## Near-Term Direction
+## Current Baseline
 
-1. Add a provider-neutral external report draft boundary so imported GitHub or
-   future tracker work can flow back toward external systems without making
-   those systems the runtime source of truth.
-2. Add an approval-gated external report dispatch boundary that records
-   host/plugin send results without storing credentials in Platypus state.
-3. Add a host-style lifecycle exercise that drives the public MCP tool surface
-   from project setup through imported work, fake worker execution, evidence,
-   reconciliation, and report drafting.
-4. Polish installation and client configuration so Codex and Claude users can
-   configure stdio MCP usage and smoke test the server without guessing.
-5. Add a storage backend capability probe that runs the documented transaction,
-   replay, lease, idempotency, migration, and recovery checks through the
-   repository traits.
+The current Rust MCP server has moved past the initial prototype tranche. The
+landed baseline includes:
+
+- declarative backlog authoring and validation
+- strict task-plan YAML for non-trivial work
+- durable local task, assignment, event, approval, evidence, finding, lease,
+  and reconciliation state
+- isolated Git worktree creation, inspection, cleanup, and managed integration
+- fake-worker lifecycle smoke coverage through the public MCP protocol
+- Codex, Claude, OpenCode, and Pi bootstrap helpers for stdio MCP setup
+- repo-local spec-driven guidance files from `init_project`
+- MCP resources and prompts for workflow, backlog authoring, worker handoff,
+  integration review, recovery, and spec-driven development
+- external intake and approved external report draft/dispatch boundaries
+- a domain-shaped `ProjectState` boundary with SQLite and memory
+  implementations under shared contract tests
+- a SQL isolation guard that prevents new direct SQLite usage outside approved
+  backend/migration internals
+- a backlog inventory tool that explains closed, blocked, and runnable items
+  without a manual queue index
+
+After the MCP-037 through MCP-054 tranches, the repository backlog can be empty
+without meaning the product is done. It means the currently committed,
+reviewed work queue has been landed and the next tranche should be selected
+from the product direction below.
+
+## Candidate Next Directions
+
+1. **Hosted protocol polish:** keep stdio as the stable baseline, then evaluate
+   streamable HTTP only when a real host integration requires it.
+2. **Worker handoff reliability:** make failed handoffs, retries, guidance, and
+   result integration boringly recoverable across host restarts.
+3. **Backlog and spec ergonomics:** improve goal-to-backlog and
+   backlog-to-task-plan flows so hosts need fewer guesses when shaping work.
+4. **External system adapters:** generalize GitHub import/reporting into an
+   adapter boundary for Linear, Jira, GitLab, and plugin-backed sources.
+5. **Second backend readiness:** use the storage capability probe and
+   `ProjectState` contract tests to decide whether a shared backend such as
+   Postgres is justified.
+6. **Release and installation hardening:** keep crates.io, GitHub releases,
+   bootstrap diagnostics, and host smoke tests simple enough for fresh installs.
 
 ```mermaid
 flowchart LR
-    intake["MCP-035<br/>GitHub import snapshots"]
-    policy["MCP-036<br/>external reporting policy"]
-    draft["MCP-037<br/>report drafts"]
-    dispatch["MCP-038<br/>approved report dispatch"]
-    smoke["MCP-039<br/>host-style lifecycle exercise"]
-    install["MCP-040<br/>install and client config"]
-    storage["MCP-032<br/>backend contract"]
-    probe["MCP-041<br/>backend capability probe"]
+    host["MCP hosts<br/>Codex, Claude, others"]
+    tools["Platypus MCP tools<br/>deterministic state transitions"]
+    state["ProjectState<br/>SQLite now, memory tests"]
+    repo["Repository artifacts<br/>backlog, plans, worktrees, docs"]
+    external["External systems<br/>GitHub, Linear, Jira later"]
 
-    intake --> policy --> draft --> dispatch
-    draft --> smoke
-    install --> smoke
-    storage --> probe
+    host --> tools
+    tools --> state
+    tools --> repo
+    external -->|import snapshots| tools
+    tools -->|approved reports| external
 ```
 
-## Backlog Tranche
+## Current Planning Rule
 
-- `MCP-037`: draft provider-neutral external report payloads.
-- `MCP-038`: add the approval-gated external report dispatch boundary.
-- `MCP-039`: exercise the public MCP host lifecycle end to end with local
-  fixtures.
-- `MCP-040`: polish installation and Codex/Claude client configuration.
-- `MCP-041`: probe the documented storage backend capability contract.
-
-`MCP-035` and `MCP-036` established external import snapshots and reporting
-policy. The next tranche turns that policy into a concrete report draft/send
-boundary, then proves the whole MCP workflow can be exercised without real
-agents or provider network calls.
+Do not keep a manual queue index. Use `inspect_work_queue` for executable work
+and `inspect_backlog_inventory` when the queue is empty or confusing. New
+tranches should be added as small, reviewable backlog items with task plans for
+standard or full work.
 
 ## Design Defaults
 
@@ -77,16 +96,12 @@ agents or provider network calls.
 
 ## Later Work
 
-- Distribution and installation for real MCP clients.
-- Better host guidance through MCP prompts/resources.
-- More complete Codex and Claude adapter behavior, still behind the generic
-  worker boundary.
-- External intake adapters for GitHub, Linear, Jira, GitLab, and custom
-  plugin-backed sources, all mapping into local executable backlog snapshots.
-- The next implementation step after GitHub issue import is an approved
-  external report draft/send boundary: first draft provider-neutral report
-  payloads locally, then send comments/statuses only through explicit approval.
-- Optional richer storage abstraction if SQL scattering becomes a maintenance
-  risk.
-- A second runtime backend only after the storage capability probe demonstrates
-  equivalent semantics to local SQLite.
+- First-class host smoke tests for each supported bootstrap target.
+- Richer MCP guidance resources if hosts start consuming them consistently.
+- External intake adapters for Linear, Jira, GitLab, and custom plugin-backed
+  sources, all mapping into local executable backlog snapshots.
+- A second runtime backend only after the storage capability probe and
+  `ProjectState` contract suite demonstrate equivalent semantics to local
+  SQLite.
+- Optional HTTP transport once stdio behavior is mature and an actual client
+  needs attachable or remote transport semantics.
