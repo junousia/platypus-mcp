@@ -1,5 +1,5 @@
 use crate::{
-    assignments,
+    assignments, backlog,
     git_readiness::inspect_git_readiness,
     models::{
         ActionResult, ActionStatus, BacklogCandidate, DispatchNextWorkData, DispatchReadyWorkData,
@@ -80,7 +80,15 @@ pub fn dispatch_ready_work(
     }
 
     let root = state.root().display().to_string();
-    let requested = params.max_tasks.unwrap_or(2).clamp(1, 10);
+    let available_before_dispatch =
+        backlog::list_backlog(default_root, params.root.as_deref(), Some(100))
+            .data
+            .map(|data| data.candidates.len())
+            .unwrap_or(0);
+    let requested = params
+        .max_tasks
+        .unwrap_or_else(|| available_before_dispatch.clamp(1, 10))
+        .clamp(1, 10);
     let prepare_handoffs = params.prepare_handoffs.unwrap_or(true);
     let claimant = params
         .claimant
@@ -90,6 +98,8 @@ pub fn dispatch_ready_work(
     let mut report = DispatchReadyWorkData {
         root: root.clone(),
         requested,
+        available_before_dispatch,
+        selected: 0,
         dispatched: 0,
         prepared: 0,
         failed: 0,
@@ -137,6 +147,7 @@ pub fn dispatch_ready_work(
         let candidate = backlog_candidate(outcome.candidate);
         let task = task_record(outcome.task);
         report.dispatched += 1;
+        report.selected += 1;
         if !prepare_handoffs {
             report.items.push(DispatchReadyWorkItem {
                 item_id: candidate.item_id,
@@ -198,6 +209,9 @@ pub fn dispatch_ready_work(
     } else {
         ActionStatus::Completed
     };
+    if report.stopped_reason == "max_tasks_reached" && report.selected < report.requested {
+        report.stopped_reason = "selection_exhausted".to_string();
+    }
     let summary = if prepare_handoffs && report.failed > 0 && report.prepared == 0 {
         format!(
             "Dispatched {} task(s), but no worker handoff could be prepared.",
@@ -205,8 +219,8 @@ pub fn dispatch_ready_work(
         )
     } else if report.prepared > 0 {
         format!(
-            "Dispatched {} task(s) and prepared {} worker handoff(s).",
-            report.dispatched, report.prepared
+            "Dispatched {} of {} available task(s) and prepared {} worker handoff(s).",
+            report.dispatched, report.available_before_dispatch, report.prepared
         )
     } else if report.dispatched > 0 {
         format!("Dispatched {} task(s).", report.dispatched)
@@ -218,7 +232,16 @@ pub fn dispatch_ready_work(
         status,
         summary: summary.clone(),
         next_action: Some(if report.prepared > 0 {
-            "Assign each prepared bundle/worktree to its worker, then use start_worker_task and complete_worker_task for lifecycle updates.".to_string()
+            if report.stopped_reason == "max_tasks_reached"
+                && report.available_before_dispatch > report.selected
+            {
+                format!(
+                    "Assign each prepared bundle/worktree to its worker. {} additional runnable item(s) were left by max_tasks; call dispatch_ready_work again or pass a larger max_tasks value.",
+                    report.available_before_dispatch.saturating_sub(report.selected)
+                )
+            } else {
+                "Assign each prepared bundle/worktree to its worker, then use start_worker_task and complete_worker_task for lifecycle updates.".to_string()
+            }
         } else {
             "Inspect the returned per-item reasons and create or unblock backlog items if needed."
                 .to_string()

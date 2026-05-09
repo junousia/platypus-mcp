@@ -47,6 +47,13 @@ struct RecordedWorktree {
     base_ref: String,
 }
 
+#[derive(Debug)]
+struct ChangedFile {
+    status: String,
+    path: String,
+    previous_path: Option<String>,
+}
+
 pub fn worktree_create(
     default_root: &Path,
     params: WorktreeCreateParams,
@@ -449,6 +456,19 @@ pub fn integrate_worker_result(
             return ActionResult::failed(action, "Could not inspect workflow config.", error)
         }
     };
+    if let Some(operation) = in_progress_git_operation(&root) {
+        return ActionResult::skipped(
+            action,
+            format!("Git operation `{operation}` is already in progress."),
+            "Finish or abort the current Git operation before integrating worker results.",
+        );
+    }
+    let strategy = match integration_strategy(params.strategy.as_deref(), &config.merge_style) {
+        Ok(strategy) => strategy,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not integrate worker result.", error)
+        }
+    };
     let worktree = match recorded_worktree(action, &state, &root, &task_id) {
         Ok(worktree) => worktree,
         Err(result) => return result,
@@ -462,11 +482,11 @@ pub fn integrate_worker_result(
     }
     let verification = match latest_verification_summary(&state, &task_id) {
         Some(summary) => summary,
-        None if config.require_verification_evidence => {
+        None if config.require_verification_evidence && !params.allow_unverified.unwrap_or(false) => {
             return ActionResult::skipped(
                 action,
                 format!("Task `{task_id}` has no verification evidence."),
-                "Record verification evidence before integrating worker results.",
+                "Record verification evidence before integrating worker results, or retry with allow_unverified=true for low-risk work.",
             )
         }
         None => "verification not recorded".to_string(),
@@ -511,7 +531,7 @@ pub fn integrate_worker_result(
         }
     };
     if worker_dirty {
-        if let Err(error) = commit_worker_changes(&worktree, &config.merge_style, &verification) {
+        if let Err(error) = commit_worker_changes(&worktree, &strategy, &verification) {
             return ActionResult::failed(action, "Could not commit worker changes.", error);
         }
     }
@@ -527,20 +547,35 @@ pub fn integrate_worker_result(
         );
     }
 
-    let commit = match config.merge_style.as_str() {
+    let commit = match strategy.as_str() {
         "fast_forward" => match run_git(&root, &["merge", "--ff-only", worktree.branch.as_str()]) {
             Ok(_) => head_commit(&root),
             Err(error) => Err(error),
         },
         "squash" => integrate_squash(&root, &worktree, &verification),
         "merge_commit" => integrate_merge_commit(&root, &worktree, &verification),
+        "apply_changed_files" => integrate_apply_changed_files(&root, &worktree, &verification),
         other => Err(format!("unsupported merge style `{other}`")),
     };
     let commit = match commit {
         Ok(commit) => commit,
         Err(error) => {
+            let conflicts = conflicted_files(&root);
             let _ = run_git(&root, &["merge", "--abort"]);
-            return ActionResult::failed(action, "Could not integrate worker result.", error);
+            let _ = run_git(&root, &["reset", "--merge"]);
+            let detail = if conflicts.is_empty() {
+                error
+            } else {
+                format!("{error}\nconflicting files: {}", conflicts.join(", "))
+            };
+            return ActionResult {
+                action: action.to_string(),
+                status: ActionStatus::Failed,
+                summary: "Could not integrate worker result.".to_string(),
+                next_action: Some("Resolve the source conflict, or retry with strategy=apply_changed_files when replacing changed worker files is acceptable.".to_string()),
+                data: None,
+                error: Some(detail),
+            };
         }
     };
 
@@ -555,7 +590,7 @@ pub fn integrate_worker_result(
             payload: Some(serde_json::json!({
                 "branch": worktree.branch.clone(),
                 "commit": commit.clone(),
-                "merge_style": config.merge_style.clone(),
+                "merge_style": strategy.clone(),
                 "source_item_id": worktree.source_item_id.clone()
             })),
         },
@@ -575,7 +610,7 @@ pub fn integrate_worker_result(
             metadata: BTreeMap::from([
                 (
                     "merge_style".to_string(),
-                    serde_json::Value::String(config.merge_style.clone()),
+                    serde_json::Value::String(strategy.clone()),
                 ),
                 (
                     "branch".to_string(),
@@ -604,7 +639,7 @@ pub fn integrate_worker_result(
             payload: Some(serde_json::json!({
                 "branch": worktree.branch.clone(),
                 "commit": commit.clone(),
-                "merge_style": config.merge_style.clone(),
+                "merge_style": strategy.clone(),
                 "source_item_id": worktree.source_item_id.clone()
             })),
         },
@@ -616,18 +651,35 @@ pub fn integrate_worker_result(
         );
     }
 
-    ActionResult::completed(
-        action,
-        format!("Integrated worker result for task `{task_id}`."),
-        WorkerResultIntegrationData {
+    let (cleaned_up, cleanup_error) = if params.cleanup_after.unwrap_or(false) {
+        match cleanup_integrated_worktree(&state, &root, &worktree) {
+            Ok(()) => (true, None),
+            Err(error) => (false, Some(error)),
+        }
+    } else {
+        (false, None)
+    };
+    let next_action = cleanup_error
+        .as_ref()
+        .map(|error| format!("Worker result was integrated, but cleanup failed: {error}"));
+
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Completed,
+        summary: format!("Integrated worker result for task `{task_id}`."),
+        next_action,
+        data: Some(WorkerResultIntegrationData {
             root: root_string,
             task_id,
             source_item_id: worktree.source_item_id,
-            merge_style: config.merge_style,
+            merge_style: strategy,
             branch: worktree.branch,
             commit,
-        },
-    )
+            cleaned_up,
+            cleanup_error,
+        }),
+        error: None,
+    }
 }
 
 fn latest_verification_summary(state: &SqliteProjectState, task_id: &str) -> Option<String> {
@@ -718,6 +770,211 @@ fn integrate_squash(
         ],
     )?;
     head_commit(root)
+}
+
+fn integrate_apply_changed_files(
+    root: &Path,
+    worktree: &RecordedWorktree,
+    verification: &str,
+) -> Result<String, String> {
+    let changed_files = changed_files_between(root, &worktree.base_ref, &worktree.branch)?;
+    if changed_files.is_empty() {
+        return Err("worker branch has no changed files to apply".to_string());
+    }
+    apply_changed_files_to_manager(root, &worktree.branch, &changed_files)?;
+    commit_with_message(
+        root,
+        &format!("Integrate {}: {}", worktree.source_item_id, worktree.title),
+        &[
+            format!("Platypus-Closes: {}", worktree.source_item_id),
+            format!("Platypus-Verification: {}", one_line(verification)),
+            format!("Platypus-Integration-Strategy: apply_changed_files"),
+        ],
+    )?;
+    head_commit(root)
+}
+
+fn changed_files_between(
+    root: &Path,
+    base_ref: &str,
+    branch: &str,
+) -> Result<Vec<ChangedFile>, String> {
+    let range = format!("{base_ref}..{branch}");
+    let output = run_git(root, &["diff", "--name-status", "-M", range.as_str()])?;
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(parse_changed_file)
+        .collect()
+}
+
+fn parse_changed_file(line: &str) -> Result<ChangedFile, String> {
+    let parts = line.split('\t').collect::<Vec<_>>();
+    let status = parts.first().copied().unwrap_or_default();
+    if status.is_empty() {
+        return Err("empty changed file status".to_string());
+    }
+    let (previous_path, path) = if status.starts_with('R') || status.starts_with('C') {
+        let previous = parts
+            .get(1)
+            .copied()
+            .ok_or_else(|| format!("missing previous path in changed file line `{line}`"))?;
+        let current = parts
+            .get(2)
+            .copied()
+            .ok_or_else(|| format!("missing current path in changed file line `{line}`"))?;
+        (
+            Some(validate_relative_git_path(previous)?),
+            validate_relative_git_path(current)?,
+        )
+    } else {
+        let current = parts
+            .get(1)
+            .copied()
+            .ok_or_else(|| format!("missing path in changed file line `{line}`"))?;
+        (None, validate_relative_git_path(current)?)
+    };
+    Ok(ChangedFile {
+        status: status.to_string(),
+        path,
+        previous_path,
+    })
+}
+
+fn validate_relative_git_path(path: &str) -> Result<String, String> {
+    let candidate = Path::new(path);
+    if candidate.is_absolute()
+        || path.contains('\0')
+        || candidate
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        || path.split('/').any(|part| part == ".git")
+    {
+        return Err(format!("unsafe changed file path `{path}`"));
+    }
+    Ok(path.to_string())
+}
+
+fn apply_changed_files_to_manager(
+    root: &Path,
+    branch: &str,
+    files: &[ChangedFile],
+) -> Result<(), String> {
+    let mut remove_paths = Vec::new();
+    let mut checkout_paths = Vec::new();
+    for file in files {
+        if file.status.starts_with('D') {
+            remove_paths.push(file.path.clone());
+            continue;
+        }
+        if file.status.starts_with('R') {
+            if let Some(previous) = &file.previous_path {
+                if previous != &file.path {
+                    remove_paths.push(previous.clone());
+                }
+            }
+        }
+        checkout_paths.push(file.path.clone());
+    }
+    if !remove_paths.is_empty() {
+        let mut args = vec![
+            "rm".to_string(),
+            "-q".to_string(),
+            "--ignore-unmatch".to_string(),
+            "--".to_string(),
+        ];
+        args.extend(remove_paths);
+        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        run_git(root, &arg_refs)?;
+    }
+    if !checkout_paths.is_empty() {
+        let mut args = vec!["checkout".to_string(), branch.to_string(), "--".to_string()];
+        args.extend(checkout_paths);
+        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        run_git(root, &arg_refs)?;
+    }
+    Ok(())
+}
+
+fn cleanup_integrated_worktree(
+    state: &SqliteProjectState,
+    root: &Path,
+    worktree: &RecordedWorktree,
+) -> Result<(), String> {
+    let status = run_git(
+        &worktree.path,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )?;
+    if !status.trim().is_empty() {
+        return Err(
+            "integrated worktree still has local changes; inspect before cleanup".to_string(),
+        );
+    }
+    let path = path_arg(&worktree.path);
+    run_git(root, &["worktree", "remove", path.as_str()])?;
+    state
+        .clear_workspace(ClearWorkspaceCommand {
+            task_id: worktree.task_id.clone(),
+        })
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn integration_strategy(requested: Option<&str>, configured: &str) -> Result<String, String> {
+    let strategy = requested
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(configured)
+        .to_ascii_lowercase();
+    if matches!(
+        strategy.as_str(),
+        "merge_commit" | "fast_forward" | "squash" | "apply_changed_files"
+    ) {
+        Ok(strategy)
+    } else {
+        Err(format!(
+            "unsupported integration strategy `{strategy}`; expected merge_commit, fast_forward, squash, or apply_changed_files"
+        ))
+    }
+}
+
+fn in_progress_git_operation(root: &Path) -> Option<String> {
+    let git_dir = git_dir(root).ok()?;
+    [
+        ("merge", "MERGE_HEAD"),
+        ("cherry-pick", "CHERRY_PICK_HEAD"),
+        ("revert", "REVERT_HEAD"),
+        ("rebase", "rebase-merge"),
+        ("rebase", "rebase-apply"),
+    ]
+    .iter()
+    .find_map(|(operation, marker)| git_dir.join(marker).exists().then(|| operation.to_string()))
+}
+
+fn git_dir(root: &Path) -> Result<PathBuf, String> {
+    let output = run_git(root, &["rev-parse", "--git-dir"])?;
+    let raw = output.trim();
+    if raw.is_empty() {
+        return Err("git directory did not resolve".to_string());
+    }
+    let path = PathBuf::from(raw);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    };
+    fs::canonicalize(&path).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+fn conflicted_files(root: &Path) -> Vec<String> {
+    run_git(root, &["diff", "--name-only", "--diff-filter=U"])
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn commit_with_message(root: &Path, subject: &str, body_lines: &[String]) -> Result<(), String> {
@@ -1382,6 +1639,9 @@ mod tests {
             IntegrateWorkerResultParams {
                 root: None,
                 task_id: task_id.clone(),
+                strategy: None,
+                allow_unverified: None,
+                cleanup_after: None,
             },
         );
         let data = result.data.expect("integration data");
@@ -1390,6 +1650,7 @@ mod tests {
         assert_eq!(data.task_id, task_id);
         assert_eq!(data.source_item_id, "PROJ-001");
         assert_eq!(data.merge_style, "merge_commit");
+        assert!(!data.cleaned_up);
         assert_eq!(
             fs::read_to_string(project.path().join("README.md")).expect("readme"),
             "# Integrated\n"
@@ -1452,6 +1713,9 @@ mod tests {
             IntegrateWorkerResultParams {
                 root: None,
                 task_id,
+                strategy: None,
+                allow_unverified: None,
+                cleanup_after: None,
             },
         );
         let data = result.data.expect("integration data");
@@ -1483,6 +1747,9 @@ mod tests {
             IntegrateWorkerResultParams {
                 root: None,
                 task_id,
+                strategy: None,
+                allow_unverified: None,
+                cleanup_after: None,
             },
         );
         let data = result.data.expect("integration data");
@@ -1494,8 +1761,237 @@ mod tests {
     }
 
     #[test]
+    fn integrates_worker_result_with_apply_changed_files_strategy() {
+        let project = git_project();
+        let (first_task, _first_worktree) = completed_task_with_change(&project, "# First\n");
+        let (second_task, _second_worktree) = completed_task_with_change(&project, "# Second\n");
+
+        let first = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id: first_task,
+                strategy: None,
+                allow_unverified: None,
+                cleanup_after: None,
+            },
+        );
+        assert!(matches!(first.status, ActionStatus::Completed));
+
+        let second = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id: second_task,
+                strategy: Some("apply_changed_files".to_string()),
+                allow_unverified: None,
+                cleanup_after: None,
+            },
+        );
+        let data = second.data.expect("integration data");
+
+        assert!(matches!(second.status, ActionStatus::Completed));
+        assert_eq!(data.merge_style, "apply_changed_files");
+        assert_eq!(
+            fs::read_to_string(project.path().join("README.md")).expect("readme"),
+            "# Second\n"
+        );
+        let log = run_git(project.path(), &["log", "-1", "--pretty=%B"]).expect("log");
+        assert!(log.contains("Platypus-Integration-Strategy: apply_changed_files"));
+    }
+
+    #[test]
+    fn apply_changed_files_strategy_handles_deleted_files() {
+        let project = git_project();
+        fs::write(project.path().join("remove-me.txt"), "remove\n").expect("file");
+        run_git(project.path(), &["add", "remove-me.txt"]).expect("git add file");
+        run_git(project.path(), &["commit", "-m", "Add removable file"]).expect("git commit file");
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Delete stale file".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        let created = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        )
+        .data
+        .expect("worktree data");
+        fs::remove_file(Path::new(&created.path).join("remove-me.txt")).expect("delete file");
+        finish_task(project.path(), &task.id);
+        record_evidence(
+            project.path(),
+            RecordEvidenceParams {
+                root: None,
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: Some(task.id.clone()),
+                kind: "verification".to_string(),
+                summary: "Deletion reviewed".to_string(),
+                refs: vec!["local".to_string()],
+                metadata: BTreeMap::new(),
+            },
+        );
+
+        let result = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id: task.id,
+                strategy: Some("apply_changed_files".to_string()),
+                allow_unverified: None,
+                cleanup_after: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert!(!project.path().join("remove-me.txt").exists());
+        let log = run_git(project.path(), &["log", "-1", "--pretty=%B"]).expect("log");
+        assert!(log.contains("Platypus-Integration-Strategy: apply_changed_files"));
+    }
+
+    #[test]
+    fn reports_conflicts_and_aborts_failed_merge_integration() {
+        let project = git_project();
+        let (first_task, _first_worktree) = completed_task_with_change(&project, "# First\n");
+        let (second_task, _second_worktree) = completed_task_with_change(&project, "# Second\n");
+
+        let first = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id: first_task,
+                strategy: None,
+                allow_unverified: None,
+                cleanup_after: None,
+            },
+        );
+        assert!(matches!(first.status, ActionStatus::Completed));
+
+        let second = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id: second_task,
+                strategy: None,
+                allow_unverified: None,
+                cleanup_after: None,
+            },
+        );
+
+        assert!(matches!(second.status, ActionStatus::Failed));
+        assert!(second
+            .error
+            .expect("error")
+            .contains("conflicting files: README.md"));
+        assert!(second
+            .next_action
+            .expect("next action")
+            .contains("apply_changed_files"));
+        assert!(!project.path().join(".git/MERGE_HEAD").exists());
+    }
+
+    #[test]
+    fn refuses_integration_when_git_operation_is_in_progress() {
+        let project = git_project();
+        let (task_id, _worktree) = completed_task_with_change(&project, "# Integrated\n");
+        fs::write(project.path().join(".git/MERGE_HEAD"), "pending\n").expect("merge head");
+
+        let result = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id,
+                strategy: None,
+                allow_unverified: None,
+                cleanup_after: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Skipped));
+        assert!(result.summary.contains("merge"));
+    }
+
+    #[test]
+    fn allows_explicit_unverified_integration_under_strict_policy() {
+        let project = git_project();
+        fs::write(
+            project.path().join("platy.yaml"),
+            "workflow:\n  integration:\n    require_verification_evidence: true\n",
+        )
+        .expect("config");
+        run_git(project.path(), &["add", "platy.yaml"]).expect("git add config");
+        run_git(
+            project.path(),
+            &["commit", "-m", "Require verification evidence"],
+        )
+        .expect("git commit config");
+        let (task_id, _worktree) =
+            completed_task_with_change_without_evidence(&project, "# Changed\n");
+
+        let result = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id,
+                strategy: None,
+                allow_unverified: Some(true),
+                cleanup_after: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let log = run_git(project.path(), &["log", "-1", "--pretty=%B"]).expect("log");
+        assert!(log.contains("Platypus-Verification: verification not recorded"));
+    }
+
+    #[test]
+    fn cleanup_after_integration_removes_worktree_metadata() {
+        let project = git_project();
+        let (task_id, worktree) = completed_task_with_change(&project, "# Integrated\n");
+
+        let result = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id: task_id.clone(),
+                strategy: None,
+                allow_unverified: None,
+                cleanup_after: Some(true),
+            },
+        );
+        let data = result.data.expect("integration data");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert!(data.cleaned_up);
+        assert!(!Path::new(&worktree.path).exists());
+        let task = tasks::get_task_by_id(project.path(), None, &task_id).expect("task");
+        assert!(task.workspace_path.is_none());
+    }
+
+    #[test]
     fn refuses_integration_without_verification_evidence() {
         let project = git_project();
+        fs::write(
+            project.path().join("platy.yaml"),
+            "workflow:\n  integration:\n    require_verification_evidence: true\n",
+        )
+        .expect("config");
+        run_git(project.path(), &["add", "platy.yaml"]).expect("git add config");
+        run_git(
+            project.path(),
+            &["commit", "-m", "Require verification evidence"],
+        )
+        .expect("git commit config");
         let task = create_task_record(
             project.path(),
             None,
@@ -1524,6 +2020,9 @@ mod tests {
             IntegrateWorkerResultParams {
                 root: None,
                 task_id: task.id,
+                strategy: None,
+                allow_unverified: None,
+                cleanup_after: None,
             },
         );
 
@@ -1545,6 +2044,9 @@ mod tests {
             IntegrateWorkerResultParams {
                 root: None,
                 task_id,
+                strategy: None,
+                allow_unverified: None,
+                cleanup_after: None,
             },
         );
 
@@ -1675,6 +2177,27 @@ mod tests {
     }
 
     fn completed_task_with_change(project: &TempDir, readme: &str) -> (String, WorktreeData) {
+        let (task_id, created) = completed_task_with_change_without_evidence(project, readme);
+        record_evidence(
+            project.path(),
+            RecordEvidenceParams {
+                root: None,
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: Some(task_id.clone()),
+                kind: "verification".to_string(),
+                summary: "make check passed".to_string(),
+                refs: vec!["local".to_string()],
+                metadata: BTreeMap::new(),
+            },
+        );
+        (task_id, created)
+    }
+
+    fn completed_task_with_change_without_evidence(
+        project: &TempDir,
+        readme: &str,
+    ) -> (String, WorktreeData) {
         let task = create_task_record(
             project.path(),
             None,
@@ -1697,19 +2220,6 @@ mod tests {
         .expect("worktree data");
         fs::write(Path::new(&created.path).join("README.md"), readme).expect("change");
         finish_task(project.path(), &task.id);
-        record_evidence(
-            project.path(),
-            RecordEvidenceParams {
-                root: None,
-                id: None,
-                source_item_id: Some("PROJ-001".to_string()),
-                source_task_id: Some(task.id.clone()),
-                kind: "verification".to_string(),
-                summary: "make check passed".to_string(),
-                refs: vec!["local".to_string()],
-                metadata: BTreeMap::new(),
-            },
-        );
         (task.id, created)
     }
 

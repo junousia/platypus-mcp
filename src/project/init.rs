@@ -217,7 +217,7 @@ fn gitignore_has_rule(content: &str, rule: &str) -> bool {
 
 fn project_config(project_name: &str) -> String {
     format!(
-        "project:\n  name: {}\nbacklog:\n  id_prefix: PROJ\n  items: backlog/items\n  epics: backlog/epics\nworkflow:\n  integration:\n    merge_style: merge_commit\n    require_clean_manager_workspace: true\n    require_verification_evidence: true\n",
+        "project:\n  name: {}\nbacklog:\n  id_prefix: PROJ\n  items: backlog/items\n  epics: backlog/epics\nworkflow:\n  integration:\n    merge_style: merge_commit\n    require_clean_manager_workspace: true\n    require_verification_evidence: false\n",
         yaml_string(project_name)
     )
 }
