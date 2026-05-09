@@ -3,7 +3,8 @@ use super::{
     validate::validate_backlog_at_root,
 };
 use crate::models::{
-    ActionResult, ActionStatus, BacklogCandidate, BacklogListData, ProjectStatusData,
+    ActionResult, ActionStatus, BacklogCandidate, BacklogInventoryData, BacklogInventoryItem,
+    BacklogListData, ProjectStatusData,
 };
 use std::{collections::BTreeSet, path::Path};
 
@@ -81,6 +82,60 @@ pub fn list_backlog(
     )
 }
 
+pub fn inspect_backlog_inventory(
+    default_root: &Path,
+    root: Option<&str>,
+    limit: Option<usize>,
+) -> ActionResult<BacklogInventoryData> {
+    let action = "inspect_backlog_inventory";
+    let root = match resolve_root(default_root, root) {
+        Ok(root) => root,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect backlog inventory.", error)
+        }
+    };
+    let validation = validate_backlog_at_root(&root, true);
+    if !validation.ok {
+        return ActionResult::failed(
+            action,
+            "Backlog is not valid enough to inspect inventory.",
+            validation.errors.join("\n"),
+        );
+    }
+    let closed_ids = closed_item_ids(&root);
+    let mut items = backlog_inventory_items(&validation.items, &closed_ids);
+    let total = items.len();
+    let runnable = items.iter().filter(|item| item.runnable).count();
+    let closed = items.iter().filter(|item| item.closed).count();
+    let blocked = items
+        .iter()
+        .filter(|item| !item.closed && !item.open_dependencies.is_empty())
+        .count();
+
+    let truncated = if let Some(limit) = limit {
+        items.truncate(limit);
+        items.len() < total
+    } else {
+        false
+    };
+    let returned = items.len();
+
+    ActionResult::completed(
+        action,
+        format!("Backlog inventory inspected: {total} item(s), {runnable} runnable."),
+        BacklogInventoryData {
+            root: root.display().to_string(),
+            items,
+            total,
+            returned,
+            truncated,
+            runnable,
+            closed,
+            blocked,
+        },
+    )
+}
+
 fn runnable_backlog_candidates(
     items: &[ParsedBacklogItem],
     closed_ids: &BTreeSet<String>,
@@ -117,6 +172,72 @@ fn runnable_backlog_candidates(
             external_refs: item.frontmatter.external_refs.clone(),
         })
         .collect()
+}
+
+fn backlog_inventory_items(
+    items: &[ParsedBacklogItem],
+    closed_ids: &BTreeSet<String>,
+) -> Vec<BacklogInventoryItem> {
+    let mut inventory: Vec<_> = items
+        .iter()
+        .map(|item| {
+            let id = &item.frontmatter.id;
+            let closed = closed_ids.contains(id);
+            let open_dependencies = item
+                .frontmatter
+                .depends_on
+                .iter()
+                .filter(|dependency| !closed_ids.contains(*dependency))
+                .cloned()
+                .collect::<Vec<_>>();
+            let runnable = !closed && open_dependencies.is_empty();
+            let reason = if closed {
+                "closed by reachable Platypus-Closes Git trailer".to_string()
+            } else if !open_dependencies.is_empty() {
+                format!(
+                    "blocked by open dependencies: {}",
+                    open_dependencies.join(", ")
+                )
+            } else {
+                "runnable".to_string()
+            };
+
+            BacklogInventoryItem {
+                item_id: id.clone(),
+                title: item.frontmatter.title.clone(),
+                priority: item.frontmatter.priority.clone(),
+                item_type: item.frontmatter.item_type.clone(),
+                area: item.frontmatter.area.clone(),
+                suggested_worker: item.frontmatter.suggested_worker.clone(),
+                owned_surfaces: item.frontmatter.owned_surfaces.clone(),
+                depends_on: item.frontmatter.depends_on.clone(),
+                open_dependencies,
+                closed,
+                runnable,
+                reason,
+            }
+        })
+        .collect();
+    inventory.sort_by_key(|item| {
+        (
+            inventory_state_rank(item),
+            priority_rank(&item.priority),
+            item.item_id.clone(),
+        )
+    });
+    inventory
+}
+
+fn inventory_state_rank(item: &BacklogInventoryItem) -> u8 {
+    if item.runnable {
+        0
+    } else if !item.open_dependencies.is_empty() {
+        1
+    } else if item.closed {
+        2
+    } else {
+        3
+    }
 }
 
 fn priority_rank(priority: &str) -> u8 {

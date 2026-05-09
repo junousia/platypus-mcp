@@ -374,6 +374,29 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Inspect Backlog Inventory",
+        description = "Inspect all backlog items with runnable, blocked, and Git-trailer closure reasons.",
+        annotations(
+            title = "Inspect Backlog Inventory",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn inspect_backlog_inventory(
+        &self,
+        Parameters(params): Parameters<LimitParams>,
+    ) -> Json<ActionResult<crate::models::BacklogInventoryData>> {
+        Json(backlog::inspect_backlog_inventory(
+            &self.default_root,
+            params.root.as_deref(),
+            params.limit,
+        ))
+    }
+
+    #[tool(
         title = "Validate Backlog",
         description = "Validate structured Platypus backlog files.",
         annotations(
@@ -1515,6 +1538,7 @@ mod tests {
             "inspect_work_queue",
             "classify_planning_needs",
             "list_backlog",
+            "inspect_backlog_inventory",
             "validate_backlog",
             "doctor_snapshot",
             "init_project",

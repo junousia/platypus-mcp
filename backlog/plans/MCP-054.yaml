@@ -1,0 +1,80 @@
+item_id: MCP-054
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: MCP hosts can inspect all backlog items, including closed and blocked items, without reading markdown files directly.
+- id: R2
+  text: Inventory output explains runnable, closed, and dependency-blocked states with backend-neutral typed fields.
+- id: R3
+  text: The existing runnable queue and list_backlog behavior remain backward compatible.
+design:
+  summary: Add a read-only backlog inventory MCP tool beside list_backlog. Keep list_backlog focused on runnable candidates, and expose a separate typed all-item view that computes closed status from Git trailers and blocked dependencies from parsed backlog metadata. Document when hosts should use inventory versus queue tools.
+  owned_surfaces:
+  - src/backlog
+  - src/models.rs
+  - src/server.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  notes: This avoids reintroducing manual index files while making an empty runnable queue explainable to hosts.
+tasks:
+- id: MCP-054-T01
+  title: Add backlog inventory data model and domain function
+  goal: Return typed item state for all parsed backlog items with closure and dependency explanations.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/backlog
+  - src/models.rs
+  suggested_worker: coder
+  verification:
+  - cargo test backlog::tests::backlog_inventory_explains_closed_and_blocked_items
+  acceptance:
+  - Inventory includes active, closed, and blocked items.
+  - Closed items report a Git-trailer-derived reason.
+  - Blocked items list open dependencies.
+  notes: null
+- id: MCP-054-T02
+  title: Expose inventory through MCP server and docs
+  goal: Add a read-only MCP tool and document host usage without changing list_backlog semantics.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-054-T01
+  owned_surfaces:
+  - src/server.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - cargo test stdio_server_inspects_backlog_inventory
+  acceptance:
+  - Tool router exposes the new read-only tool.
+  - Stdio protocol test covers closed and blocked inventory state.
+  - Documentation tells hosts to use inventory when list_backlog is empty.
+  notes: null
+- id: MCP-054-T03
+  title: Verify backlog inventory change
+  goal: Run full repository verification for the new tool surface.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-054-T01
+  - MCP-054-T02
+  owned_surfaces:
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - make check passes.
+  - The PR includes Platypus-Closes and Platypus-Verification trailers.
+  notes: null

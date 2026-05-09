@@ -25,7 +25,7 @@ model turns, and external worker execution.
 1. Inspect setup with `doctor_snapshot`, `inspect_status`, and
    `inspect_workflow_config`.
 2. Shape work with `draft_backlog_items`, `create_backlog_item`,
-   `validate_backlog`, and `list_backlog`.
+   `validate_backlog`, `list_backlog`, and `inspect_backlog_inventory`.
 3. Use `inspect_work_queue` or `classify_planning_needs` to choose executable
    backlog work and understand direct, standard, or full planning needs.
 4. For non-trivial work, use `draft_task_plan`, `write_task_plan`,
@@ -99,7 +99,9 @@ const BACKLOG_AUTHORING_TEXT: &str = r#"# Backlog Authoring Guidance
 
 Create concise, agent-readable backlog items. Use `draft_backlog_items` for
 candidates and `create_backlog_item` for accepted work. Validate with
-`validate_backlog`, then inspect runnable work with `list_backlog`.
+`validate_backlog`, inspect runnable work with `list_backlog`, and use
+`inspect_backlog_inventory` when the host needs to explain closed or blocked
+items.
 
 Backlog markdown should contain goal, implementation contract, acceptance
 criteria, dependencies, suggested worker, and owned surfaces. It should not
