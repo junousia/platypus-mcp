@@ -83,6 +83,15 @@ Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime
 status, task attempts, PR metadata, or closure state.
 
+When creating backlog items through tools, use the strict schema:
+
+- required fields: `title`, `goal`, `implementation_contract` or `contract`,
+  and at least one `acceptance` criterion
+- priority values: `P0`, `P1`, `P2`
+- type values: `foundation`, `feature`, `safety`, `ux`, `test`, `docs`
+- `suggested_worker` names a Platypus worker profile, not a host-specific
+  subagent type
+
 Backlog items may include `external_refs` for intake and reporting surfaces
 such as GitHub, Linear, Jira, GitLab, support tickets, specs, or local design
 documents. These references are metadata only: the local backlog item remains

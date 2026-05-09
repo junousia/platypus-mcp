@@ -54,10 +54,26 @@ pub fn create_backlog_item(
     let item_type =
         clean_optional(params.item_type.clone()).unwrap_or_else(|| "feature".to_string());
     if !VALID_PRIORITIES.contains(&priority.as_str()) {
-        return ActionResult::failed(action, "Could not create backlog item.", "invalid priority");
+        return ActionResult::failed(
+            action,
+            "Could not create backlog item.",
+            format!(
+                "invalid priority `{}`; expected one of: {}",
+                priority,
+                VALID_PRIORITIES.join(", ")
+            ),
+        );
     }
     if !VALID_TYPES.contains(&item_type.as_str()) {
-        return ActionResult::failed(action, "Could not create backlog item.", "invalid type");
+        return ActionResult::failed(
+            action,
+            "Could not create backlog item.",
+            format!(
+                "invalid type `{}`; expected one of: {}",
+                item_type,
+                VALID_TYPES.join(", ")
+            ),
+        );
     }
     let contract = params
         .implementation_contract
@@ -69,15 +85,16 @@ pub fn create_backlog_item(
     if let Err(error) = validate_external_refs(&params.external_refs) {
         return ActionResult::failed(action, "Could not create backlog item.", error);
     }
-    if params.title.trim().is_empty()
-        || params.goal.trim().is_empty()
-        || contract.is_none()
-        || acceptance.is_empty()
-    {
+    let missing_fields =
+        missing_required_fields(&params, contract.is_none(), acceptance.is_empty());
+    if !missing_fields.is_empty() {
         return ActionResult::failed(
             action,
             "Could not create backlog item.",
-            "title, goal, implementation_contract/contract, and acceptance are required",
+            format!(
+                "missing required field(s): {}. Required fields: title, goal, implementation_contract or contract, and at least one acceptance criterion.",
+                missing_fields.join(", ")
+            ),
         );
     }
     let text = match backlog_item_text(&item_id, &params, &priority, &item_type, &epic, &acceptance)
@@ -138,6 +155,27 @@ fn clean_optional(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn missing_required_fields(
+    params: &CreateBacklogItemParams,
+    missing_contract: bool,
+    missing_acceptance: bool,
+) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    if params.title.trim().is_empty() {
+        missing.push("title");
+    }
+    if params.goal.trim().is_empty() {
+        missing.push("goal");
+    }
+    if missing_contract {
+        missing.push("implementation_contract|contract");
+    }
+    if missing_acceptance {
+        missing.push("acceptance");
+    }
+    missing
 }
 
 fn clean_vec(values: Vec<String>) -> Vec<String> {

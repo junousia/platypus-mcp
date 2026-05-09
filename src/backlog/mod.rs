@@ -294,6 +294,102 @@ mod tests {
     }
 
     #[test]
+    fn create_backlog_item_reports_schema_guidance() {
+        let temp = project_fixture();
+
+        let omitted_required_fields: CreateBacklogItemParams =
+            serde_json::from_value(serde_json::json!({
+                "root": root_arg(temp.path()),
+                "id": "PROJ-001"
+            }))
+            .expect("missing required fields deserialize to validation defaults");
+        let missing_from_omitted = create_backlog_item(temp.path(), omitted_required_fields);
+        let missing_from_omitted_error = missing_from_omitted.error.unwrap();
+        assert!(missing_from_omitted_error.contains("title"));
+        assert!(missing_from_omitted_error.contains("goal"));
+        assert!(missing_from_omitted_error.contains("implementation_contract|contract"));
+        assert!(missing_from_omitted_error.contains("acceptance"));
+
+        let invalid_priority = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-001".to_string()),
+                id_prefix: None,
+                title: "Invalid priority".to_string(),
+                priority: Some("high".to_string()),
+                item_type: Some("feature".to_string()),
+                area: Some("general".to_string()),
+                epic: Some("general".to_string()),
+                depends_on: Vec::new(),
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: "Goal.".to_string(),
+                implementation_contract: Some("Contract.".to_string()),
+                contract: None,
+                acceptance: vec!["Done.".to_string()],
+                notes: None,
+            },
+        );
+        assert!(invalid_priority.error.unwrap().contains("P0, P1, P2"));
+
+        let invalid_type = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-001".to_string()),
+                id_prefix: None,
+                title: "Invalid type".to_string(),
+                priority: Some("P1".to_string()),
+                item_type: Some("bug".to_string()),
+                area: Some("general".to_string()),
+                epic: Some("general".to_string()),
+                depends_on: Vec::new(),
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: "Goal.".to_string(),
+                implementation_contract: Some("Contract.".to_string()),
+                contract: None,
+                acceptance: vec!["Done.".to_string()],
+                notes: None,
+            },
+        );
+        let invalid_type_error = invalid_type.error.unwrap();
+        assert!(invalid_type_error.contains("foundation"));
+        assert!(invalid_type_error.contains("docs"));
+
+        let missing = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-001".to_string()),
+                id_prefix: None,
+                title: " ".to_string(),
+                priority: Some("P1".to_string()),
+                item_type: Some("feature".to_string()),
+                area: Some("general".to_string()),
+                epic: Some("general".to_string()),
+                depends_on: Vec::new(),
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: String::new(),
+                implementation_contract: None,
+                contract: None,
+                acceptance: Vec::new(),
+                notes: None,
+            },
+        );
+        let missing_error = missing.error.unwrap();
+        assert!(missing_error.contains("title"));
+        assert!(missing_error.contains("goal"));
+        assert!(missing_error.contains("implementation_contract|contract"));
+        assert!(missing_error.contains("acceptance"));
+    }
+
+    #[test]
     fn draft_backlog_items_returns_three_candidates() {
         let result = draft_backlog_items(DraftBacklogItemsParams {
             goal: "Build MCP tools".to_string(),
