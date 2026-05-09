@@ -1,37 +1,16 @@
 use crate::{
-    backlog, git_trailers,
     models::{ActionResult, ReconcileParams, ReconciliationData, ReconciliationGap},
-    storage,
+    state::{sqlite::SqliteProjectState, ProjectState, ReconcileProjectQuery},
 };
-use rusqlite::params;
-use std::{
-    collections::BTreeSet,
-    path::Path,
-    process::{Command, Stdio},
-    time::{Duration, Instant},
-};
-
-const GIT_TIMEOUT: Duration = Duration::from_secs(10);
-
-#[derive(Debug)]
-struct CompletedTask {
-    id: String,
-    source_item_id: String,
-}
-
-#[derive(Debug)]
-struct RequiredFinding {
-    id: String,
-    title: String,
-}
+use std::path::Path;
 
 pub fn reconcile_project(
     default_root: &Path,
     params: ReconcileParams,
 ) -> ActionResult<ReconciliationData> {
     let action = "reconcile_project";
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(
                 action,
@@ -40,138 +19,33 @@ pub fn reconcile_project(
             )
         }
     };
-    let root = storage.storage.root;
-    let closed_item_ids = backlog::closed_item_ids(&root)
-        .into_iter()
-        .collect::<Vec<_>>();
-    let completed_tasks = match query_completed_tasks(&storage.connection) {
-        Ok(tasks) => tasks,
+    let snapshot = match state.reconcile_project(ReconcileProjectQuery {
+        include_closed_items: true,
+    }) {
+        Ok(snapshot) => snapshot,
         Err(error) => {
-            return ActionResult::failed(action, "Could not inspect tasks.", error.to_string())
+            return ActionResult::failed(
+                action,
+                "Could not inspect reconciliation state.",
+                error.to_string(),
+            )
         }
     };
-    let unresolved_required = match query_unresolved_required_findings(&storage.connection) {
-        Ok(findings) => findings,
-        Err(error) => {
-            return ActionResult::failed(action, "Could not inspect findings.", error.to_string())
-        }
-    };
-    let mut gaps = Vec::new();
-
-    for task in &completed_tasks {
-        let verification_count =
-            match query_evidence_count(&storage.connection, &task.id, "verification") {
-                Ok(count) => count,
-                Err(error) => {
-                    return ActionResult::failed(
-                        action,
-                        "Could not inspect verification evidence.",
-                        error.to_string(),
-                    )
-                }
-            };
-        if verification_count == 0 {
-            gaps.push(ReconciliationGap {
-                kind: "missing_verification_evidence".to_string(),
-                summary: format!(
-                    "Completed task `{}` for `{}` has no verification evidence.",
-                    task.id, task.source_item_id
-                ),
-                next_action: "Record verification evidence or rerun verification.".to_string(),
-            });
-        }
-        let integration_refs = match query_evidence_refs(&storage.connection, &task.id, "commit") {
-            Ok(refs) => refs,
-            Err(error) => {
-                return ActionResult::failed(
-                    action,
-                    "Could not inspect integration evidence.",
-                    error.to_string(),
-                )
-            }
-        };
-        if integration_refs.is_empty() {
-            gaps.push(ReconciliationGap {
-                kind: "missing_integration_evidence".to_string(),
-                summary: format!(
-                    "Completed task `{}` for `{}` has not been integrated.",
-                    task.id, task.source_item_id
-                ),
-                next_action: "Integrate the worker result with integrate_worker_result."
-                    .to_string(),
-            });
-            continue;
-        }
-
-        let mut closure_seen = false;
-        let mut verification_seen = false;
-        for commit in integration_refs
-            .iter()
-            .filter_map(|reference| commit_ref(reference))
-        {
-            match commit_trailers(&root, &commit) {
-                Ok(trailers) => {
-                    if trailers.closes.contains(&task.source_item_id) {
-                        closure_seen = true;
-                    }
-                    if trailers.verification_present {
-                        verification_seen = true;
-                    }
-                }
-                Err(error) => gaps.push(ReconciliationGap {
-                    kind: "invalid_integration_commit_ref".to_string(),
-                    summary: format!(
-                        "Integration evidence for task `{}` references commit `{commit}` that could not be inspected.",
-                        task.id
-                    ),
-                    next_action: format!("Inspect or replace the invalid commit evidence reference: {error}"),
-                }),
-            }
-        }
-        if !closure_seen {
-            gaps.push(ReconciliationGap {
-                kind: "missing_closure_trailer".to_string(),
-                summary: format!(
-                    "Integrated task `{}` for `{}` has no matching Platypus-Closes trailer.",
-                    task.id, task.source_item_id
-                ),
-                next_action:
-                    "Create or fix an integration commit with Platypus-Closes for the source item."
-                        .to_string(),
-            });
-        }
-        if !verification_seen {
-            gaps.push(ReconciliationGap {
-                kind: "missing_verification_trailer".to_string(),
-                summary: format!(
-                    "Integrated task `{}` for `{}` has no Platypus-Verification trailer.",
-                    task.id, task.source_item_id
-                ),
-                next_action:
-                    "Create or fix an integration commit with a Platypus-Verification trailer."
-                        .to_string(),
-            });
-        }
-    }
-
-    for finding in &unresolved_required {
-        gaps.push(ReconciliationGap {
-            kind: "unresolved_required_finding".to_string(),
-            summary: format!(
-                "Required finding `{}` is unresolved: {}.",
-                finding.id, finding.title
-            ),
-            next_action: "Resolve, reject, defer, or mark the finding duplicate.".to_string(),
-        });
-    }
-
     let data = ReconciliationData {
-        root: root.display().to_string(),
-        ok: gaps.is_empty(),
-        closed_item_ids,
-        completed_tasks: completed_tasks.len(),
-        unresolved_required_findings: unresolved_required.len(),
-        gaps,
+        root: state.root().display().to_string(),
+        ok: snapshot.ok,
+        closed_item_ids: snapshot.closed_item_ids.into_iter().collect(),
+        completed_tasks: snapshot.completed_tasks,
+        unresolved_required_findings: snapshot.unresolved_required_findings,
+        gaps: snapshot
+            .gaps
+            .into_iter()
+            .map(|gap| ReconciliationGap {
+                kind: gap.kind,
+                summary: gap.summary,
+                next_action: gap.next_action,
+            })
+            .collect(),
     };
     if data.ok {
         ActionResult::completed(action, "Reconciliation found no required gaps.", data)
@@ -187,144 +61,6 @@ pub fn reconcile_project(
             error: None,
         }
     }
-}
-
-fn query_completed_tasks(
-    connection: &rusqlite::Connection,
-) -> rusqlite::Result<Vec<CompletedTask>> {
-    let mut statement = connection.prepare(
-        r#"
-        SELECT id, source_item_id
-        FROM tasks
-        WHERE status = 'completed'
-        ORDER BY updated_at ASC, id ASC
-        "#,
-    )?;
-    let rows = statement.query_map([], |row| {
-        Ok(CompletedTask {
-            id: row.get("id")?,
-            source_item_id: row.get("source_item_id")?,
-        })
-    })?;
-    rows.collect()
-}
-
-fn query_unresolved_required_findings(
-    connection: &rusqlite::Connection,
-) -> rusqlite::Result<Vec<RequiredFinding>> {
-    let mut statement = connection.prepare(
-        r#"
-        SELECT id, title
-        FROM findings
-        WHERE required = 1
-          AND status NOT IN ('resolved', 'rejected', 'duplicate')
-        ORDER BY updated_at ASC, id ASC
-        "#,
-    )?;
-    let rows = statement.query_map([], |row| {
-        Ok(RequiredFinding {
-            id: row.get("id")?,
-            title: row.get("title")?,
-        })
-    })?;
-    rows.collect()
-}
-
-fn query_evidence_refs(
-    connection: &rusqlite::Connection,
-    task_id: &str,
-    kind: &str,
-) -> rusqlite::Result<Vec<String>> {
-    let mut statement = connection.prepare(
-        r#"
-            SELECT refs_json
-            FROM evidence
-            WHERE source_task_id = ?1 AND kind = ?2
-            ORDER BY created_at ASC, id ASC
-            "#,
-    )?;
-    let rows = statement.query_map(params![task_id, kind], |row| {
-        row.get::<_, Option<String>>("refs_json")
-    })?;
-    let mut refs = Vec::new();
-    for row in rows {
-        if let Some(refs_json) = row? {
-            refs.extend(serde_json::from_str::<Vec<String>>(&refs_json).unwrap_or_default());
-        }
-    }
-    Ok(refs)
-}
-
-fn query_evidence_count(
-    connection: &rusqlite::Connection,
-    task_id: &str,
-    kind: &str,
-) -> rusqlite::Result<i64> {
-    connection.query_row(
-        r#"
-        SELECT COUNT(*)
-        FROM evidence
-        WHERE source_task_id = ?1 AND kind = ?2
-        "#,
-        params![task_id, kind],
-        |row| row.get(0),
-    )
-}
-
-fn commit_ref(reference: &str) -> Option<String> {
-    reference
-        .trim()
-        .strip_prefix("commit:")
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-#[derive(Debug)]
-struct CommitTrailers {
-    closes: BTreeSet<String>,
-    verification_present: bool,
-}
-
-fn commit_trailers(root: &Path, commit: &str) -> Result<CommitTrailers, String> {
-    let message = run_git(root, &["show", "-s", "--format=%B", commit])?;
-    let trailers = git_trailers::parse_platypus_trailers(&message);
-    Ok(CommitTrailers {
-        closes: trailers.closes,
-        verification_present: trailers.verification_present,
-    })
-}
-
-fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
-    let mut child = Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("could not run git: {error}"))?;
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) if started.elapsed() < GIT_TIMEOUT => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                return Err("git command timed out".to_string());
-            }
-            Err(error) => return Err(format!("could not wait for git: {error}")),
-        }
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("could not collect git output: {error}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 #[cfg(test)]

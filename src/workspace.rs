@@ -6,10 +6,12 @@ use crate::{
         WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffFile, WorktreeDiffParams,
         WorktreeStatusParams,
     },
-    storage,
+    state::{
+        sqlite::SqliteProjectState, ClearWorkspaceCommand, EvidenceQuery, ProjectState,
+        ProjectStateError, RecordWorkspaceCommand, TaskQuery, TaskSnapshot,
+    },
     tasks::{self, NewTaskEvent},
 };
-use rusqlite::{params, OptionalExtension};
 use std::{
     collections::BTreeMap,
     fs,
@@ -57,8 +59,8 @@ pub fn worktree_create(
         Ok(base_ref) => base_ref,
         Err(error) => return ActionResult::failed(action, "Could not create worktree.", error),
     };
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(
                 action,
@@ -67,23 +69,23 @@ pub fn worktree_create(
             )
         }
     };
-    let root = storage.storage.root;
+    let root = state.root().to_path_buf();
     let root_string = root.display().to_string();
     if let Err(error) = ensure_git_project_root(&root) {
         return ActionResult::failed(action, "Could not create worktree.", error);
     }
 
-    let task = match load_task(&storage.connection, &task_id) {
-        Ok(Some(task)) => task,
-        Ok(None) => {
+    let task = match load_task(&state, &task_id) {
+        Ok(task) => task,
+        Err(WorkspaceLoadError::Missing) => {
             return ActionResult::skipped(
                 action,
                 format!("Task `{task_id}` was not found."),
                 "Dispatch work before creating a task worktree.",
             )
         }
-        Err(error) => {
-            return ActionResult::failed(action, "Could not inspect task.", error.to_string())
+        Err(WorkspaceLoadError::Backend(error)) => {
+            return ActionResult::failed(action, "Could not inspect task.", error)
         }
     };
     if let Some(existing) = existing_workspace_data(action, &root, &task, false, true) {
@@ -161,13 +163,12 @@ pub fn worktree_create(
         );
     }
 
-    if let Err(error) = persist_workspace(
-        &storage.connection,
-        &task_id,
-        &canonical_worktree,
-        &branch,
-        &commit,
-    ) {
+    if let Err(error) = state.record_workspace(RecordWorkspaceCommand {
+        task_id: task_id.clone(),
+        path: canonical_worktree.display().to_string(),
+        branch: branch.clone(),
+        base_ref: commit.clone(),
+    }) {
         return ActionResult::failed(
             action,
             "Could not persist worktree metadata.",
@@ -215,8 +216,8 @@ pub fn worktree_status(
         Ok(task_id) => task_id,
         Err(error) => return ActionResult::failed(action, "Could not inspect worktree.", error),
     };
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(
                 action,
@@ -225,18 +226,18 @@ pub fn worktree_status(
             )
         }
     };
-    let root = storage.storage.root;
-    let task = match load_task(&storage.connection, &task_id) {
-        Ok(Some(task)) => task,
-        Ok(None) => {
+    let root = state.root().to_path_buf();
+    let task = match load_task(&state, &task_id) {
+        Ok(task) => task,
+        Err(WorkspaceLoadError::Missing) => {
             return ActionResult::skipped(
                 action,
                 format!("Task `{task_id}` was not found."),
                 "Dispatch work before inspecting a task worktree.",
             )
         }
-        Err(error) => {
-            return ActionResult::failed(action, "Could not inspect task.", error.to_string())
+        Err(WorkspaceLoadError::Backend(error)) => {
+            return ActionResult::failed(action, "Could not inspect task.", error)
         }
     };
     existing_workspace_data(action, &root, &task, false, false).unwrap_or_else(|| {
@@ -259,8 +260,8 @@ pub fn worktree_diff(
             return ActionResult::failed(action, "Could not inspect worktree diff.", error)
         }
     };
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(
                 action,
@@ -269,8 +270,8 @@ pub fn worktree_diff(
             )
         }
     };
-    let root = storage.storage.root;
-    let worktree = match recorded_worktree(action, &storage.connection, &root, &task_id) {
+    let root = state.root().to_path_buf();
+    let worktree = match recorded_worktree(action, &state, &root, &task_id) {
         Ok(worktree) => worktree,
         Err(result) => return result,
     };
@@ -315,8 +316,8 @@ pub fn worktree_cleanup(
         Err(error) => return ActionResult::failed(action, "Could not clean up worktree.", error),
     };
     let force = params.force.unwrap_or(false);
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(
                 action,
@@ -325,9 +326,9 @@ pub fn worktree_cleanup(
             )
         }
     };
-    let root = storage.storage.root;
+    let root = state.root().to_path_buf();
     let root_string = root.display().to_string();
-    let worktree = match recorded_worktree(action, &storage.connection, &root, &task_id) {
+    let worktree = match recorded_worktree(action, &state, &root, &task_id) {
         Ok(worktree) => worktree,
         Err(result) => return result,
     };
@@ -358,7 +359,9 @@ pub fn worktree_cleanup(
     if let Err(error) = remove {
         return ActionResult::failed(action, "Could not remove worktree.", error);
     }
-    if let Err(error) = clear_workspace(&storage.connection, &task_id) {
+    if let Err(error) = state.clear_workspace(ClearWorkspaceCommand {
+        task_id: task_id.clone(),
+    }) {
         return ActionResult::failed(
             action,
             "Could not clear worktree metadata.",
@@ -408,8 +411,8 @@ pub fn integrate_worker_result(
             return ActionResult::failed(action, "Could not integrate worker result.", error)
         }
     };
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(
                 action,
@@ -418,7 +421,7 @@ pub fn integrate_worker_result(
             )
         }
     };
-    let root = storage.storage.root;
+    let root = state.root().to_path_buf();
     let root_string = root.display().to_string();
     if let Err(error) = ensure_git_project_root(&root) {
         return ActionResult::failed(action, "Could not integrate worker result.", error);
@@ -429,7 +432,7 @@ pub fn integrate_worker_result(
             return ActionResult::failed(action, "Could not inspect workflow config.", error)
         }
     };
-    let worktree = match recorded_worktree(action, &storage.connection, &root, &task_id) {
+    let worktree = match recorded_worktree(action, &state, &root, &task_id) {
         Ok(worktree) => worktree,
         Err(result) => return result,
     };
@@ -440,23 +443,16 @@ pub fn integrate_worker_result(
             "Complete the worker task before integrating its result.",
         );
     }
-    let verification = match latest_verification_summary(&storage.connection, &task_id) {
-        Ok(Some(summary)) => summary,
-        Ok(None) if config.require_verification_evidence => {
+    let verification = match latest_verification_summary(&state, &task_id) {
+        Some(summary) => summary,
+        None if config.require_verification_evidence => {
             return ActionResult::skipped(
                 action,
                 format!("Task `{task_id}` has no verification evidence."),
                 "Record verification evidence before integrating worker results.",
             )
         }
-        Ok(None) => "verification not recorded".to_string(),
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not inspect verification evidence.",
-                error.to_string(),
-            )
-        }
+        None => "verification not recorded".to_string(),
     };
     if config.require_clean_manager_workspace {
         match manager_status_without_platypus_state(&root) {
@@ -603,23 +599,17 @@ pub fn integrate_worker_result(
     )
 }
 
-fn latest_verification_summary(
-    connection: &rusqlite::Connection,
-    task_id: &str,
-) -> rusqlite::Result<Option<String>> {
-    connection
-        .query_row(
-            r#"
-            SELECT summary
-            FROM evidence
-            WHERE source_task_id = ?1 AND kind = 'verification'
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1
-            "#,
-            [task_id],
-            |row| row.get("summary"),
-        )
-        .optional()
+fn latest_verification_summary(state: &SqliteProjectState, task_id: &str) -> Option<String> {
+    state
+        .list_evidence(EvidenceQuery {
+            source_item_id: None,
+            source_task_id: Some(task_id.to_string()),
+            kind: Some("verification".to_string()),
+            limit: Some(200),
+        })
+        .ok()
+        .and_then(|snapshot| snapshot.evidence.into_iter().last())
+        .map(|evidence| evidence.summary)
 }
 
 fn manager_status_without_platypus_state(root: &Path) -> Result<String, String> {
@@ -809,27 +799,27 @@ fn existing_workspace_data(
 
 fn recorded_worktree<T>(
     action: &str,
-    connection: &rusqlite::Connection,
+    state: &SqliteProjectState,
     root: &Path,
     task_id: &str,
 ) -> Result<RecordedWorktree, ActionResult<T>>
 where
     T: serde::Serialize + schemars::JsonSchema,
 {
-    let task = match load_task(connection, task_id) {
-        Ok(Some(task)) => task,
-        Ok(None) => {
+    let task = match load_task(state, task_id) {
+        Ok(task) => task,
+        Err(WorkspaceLoadError::Missing) => {
             return Err(ActionResult::skipped(
                 action,
                 format!("Task `{task_id}` was not found."),
                 "Dispatch work before inspecting a task worktree.",
             ))
         }
-        Err(error) => {
+        Err(WorkspaceLoadError::Backend(error)) => {
             return Err(ActionResult::failed(
                 action,
                 "Could not inspect task.",
-                error.to_string(),
+                error,
             ))
         }
     };
@@ -896,67 +886,45 @@ where
     })
 }
 
+#[derive(Debug)]
+enum WorkspaceLoadError {
+    Missing,
+    Backend(String),
+}
+
 fn load_task(
-    connection: &rusqlite::Connection,
+    state: &SqliteProjectState,
     task_id: &str,
-) -> rusqlite::Result<Option<WorkspaceTask>> {
-    connection
-        .query_row(
-            r#"
-            SELECT id, source_item_id, title, status, workspace_path, workspace_branch, workspace_base_ref
-            FROM tasks
-            WHERE id = ?1
-            "#,
-            [task_id],
-            |row| {
-                Ok(WorkspaceTask {
-                    id: row.get("id")?,
-                    source_item_id: row.get("source_item_id")?,
-                    title: row.get("title")?,
-                    status: row.get("status")?,
-                    workspace_path: row.get("workspace_path")?,
-                    workspace_branch: row.get("workspace_branch")?,
-                    workspace_base_ref: row.get("workspace_base_ref")?,
-                })
-            },
-        )
-        .optional()
+) -> Result<WorkspaceTask, WorkspaceLoadError> {
+    let task = state
+        .inspect_task(TaskQuery {
+            task_id: task_id.to_string(),
+        })
+        .map_err(|error| match error {
+            ProjectStateError::NotFound { .. } => WorkspaceLoadError::Missing,
+            other => WorkspaceLoadError::Backend(other.to_string()),
+        })?;
+    Ok(workspace_task(task))
 }
 
-fn persist_workspace(
-    connection: &rusqlite::Connection,
-    task_id: &str,
-    path: &Path,
-    branch: &str,
-    base_ref: &str,
-) -> rusqlite::Result<()> {
-    connection.execute(
-        r#"
-        UPDATE tasks
-        SET workspace_path = ?2,
-            workspace_branch = ?3,
-            workspace_base_ref = ?4,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?1
-        "#,
-        params![task_id, path.display().to_string(), branch, base_ref],
-    )?;
-    Ok(())
-}
-
-fn clear_workspace(connection: &rusqlite::Connection, task_id: &str) -> rusqlite::Result<()> {
-    connection.execute(
-        r#"
-        UPDATE tasks
-        SET workspace_path = NULL,
-            workspace_branch = NULL,
-            workspace_base_ref = NULL,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?1
-        "#,
-        [task_id],
-    )?;
-    Ok(())
+fn workspace_task(task: TaskSnapshot) -> WorkspaceTask {
+    let (workspace_path, workspace_branch, workspace_base_ref) = match task.worker_workspace {
+        Some(workspace) => (
+            Some(workspace.path),
+            Some(workspace.branch),
+            Some(workspace.base_ref),
+        ),
+        None => (None, None, None),
+    };
+    WorkspaceTask {
+        id: task.id,
+        source_item_id: task.source_item_id,
+        title: task.title,
+        status: task.status,
+        workspace_path,
+        workspace_branch,
+        workspace_base_ref,
+    }
 }
 
 fn ensure_git_project_root(root: &Path) -> Result<(), String> {

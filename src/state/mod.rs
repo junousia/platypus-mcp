@@ -61,6 +61,12 @@ pub trait ProjectState {
     fn integrate_result(&self, command: IntegrateResultCommand)
         -> StateResult<IntegrationSnapshot>;
 
+    /// Attach worker workspace metadata to a task.
+    fn record_workspace(&self, command: RecordWorkspaceCommand) -> StateResult<TaskSnapshot>;
+
+    /// Remove worker workspace metadata from a task.
+    fn clear_workspace(&self, command: ClearWorkspaceCommand) -> StateResult<TaskSnapshot>;
+
     /// Inspect the next safe domain operation for the current project state.
     fn next_safe_action(&self, query: NextSafeActionQuery) -> StateResult<SafeActionSnapshot>;
 
@@ -73,6 +79,15 @@ pub trait ProjectState {
     /// Replay durable project, task, worker, approval, and integration events.
     fn replay_events(&self, query: ReplayEventsQuery) -> StateResult<EventReplaySnapshot>;
 
+    /// Record verification, integration, or audit evidence.
+    fn record_evidence(&self, command: RecordEvidenceCommand) -> StateResult<EvidenceSnapshot>;
+
+    /// List verification, integration, or audit evidence.
+    fn list_evidence(&self, query: EvidenceQuery) -> StateResult<EvidenceListSnapshot>;
+
+    /// Record a worker, manager, or external finding.
+    fn record_finding(&self, command: RecordFindingCommand) -> StateResult<FindingSnapshot>;
+
     /// List findings attached to backlog items or tasks.
     fn list_findings(&self, query: FindingsQuery) -> StateResult<FindingsSnapshot>;
 
@@ -81,6 +96,12 @@ pub trait ProjectState {
         &self,
         query: ValidateFindingsQuery,
     ) -> StateResult<FindingsValidationSnapshot>;
+
+    /// Update the disposition of a worker, manager, or external finding.
+    fn update_finding_disposition(
+        &self,
+        command: UpdateFindingDispositionCommand,
+    ) -> StateResult<FindingSnapshot>;
 
     /// Reconcile backlog closure, task state, findings, evidence, and
     /// integration proof into one project health snapshot.

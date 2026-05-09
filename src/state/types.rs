@@ -194,6 +194,23 @@ pub struct ProjectEventSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct EvidenceListSnapshot {
+    pub evidence: Vec<EvidenceSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct EvidenceSnapshot {
+    pub id: String,
+    pub source_item_id: Option<String>,
+    pub source_task_id: Option<String>,
+    pub kind: String,
+    pub summary: String,
+    pub refs: Vec<String>,
+    pub metadata: BTreeMap<String, Value>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct FindingsSnapshot {
     pub findings: Vec<FindingSnapshot>,
 }
@@ -201,12 +218,21 @@ pub struct FindingsSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct FindingSnapshot {
     pub id: String,
-    pub source_item_id: String,
+    pub source_item_id: Option<String>,
     pub source_task_id: Option<String>,
+    pub source_finding_ref: Option<String>,
     pub title: String,
+    pub status: String,
     pub severity: String,
     pub required: bool,
+    pub summary: String,
+    pub owner: Option<String>,
+    pub disposition_reason: Option<String>,
+    pub evidence_refs: Vec<String>,
+    pub metadata: BTreeMap<String, Value>,
     pub disposition: Option<FindingDispositionSnapshot>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -216,10 +242,10 @@ pub struct FindingDispositionSnapshot {
     pub evidence_refs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct FindingsValidationSnapshot {
     pub ok: bool,
-    pub unresolved_required: Vec<String>,
+    pub unresolved_required: Vec<FindingSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -227,15 +253,17 @@ pub struct ReconcileSnapshot {
     pub ok: bool,
     pub closed_item_ids: BTreeSet<String>,
     pub completed_tasks: usize,
+    pub unresolved_required_findings: usize,
     pub gaps: Vec<ReconcileGap>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ReconcileGap {
+    pub kind: String,
     pub source_item_id: Option<String>,
     pub source_task_id: Option<String>,
     pub summary: String,
-    pub recovery: String,
+    pub next_action: String,
 }
 
 #[cfg(test)]

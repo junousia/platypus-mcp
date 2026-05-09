@@ -74,6 +74,59 @@ pub struct IntegrateResultCommand {
     pub evidence_refs: Vec<String>,
 }
 
+/// Command to attach worker workspace metadata to one task.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct RecordWorkspaceCommand {
+    pub task_id: String,
+    pub path: String,
+    pub branch: String,
+    pub base_ref: String,
+}
+
+/// Command to remove worker workspace metadata from one task.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct ClearWorkspaceCommand {
+    pub task_id: String,
+}
+
+/// Command to record audit or verification evidence.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct RecordEvidenceCommand {
+    pub id: Option<String>,
+    pub source_item_id: Option<String>,
+    pub source_task_id: Option<String>,
+    pub kind: String,
+    pub summary: String,
+    pub refs: Vec<String>,
+    pub metadata: BTreeMap<String, Value>,
+}
+
+/// Command to record an implementation finding or follow-up.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct RecordFindingCommand {
+    pub id: Option<String>,
+    pub source_item_id: Option<String>,
+    pub source_task_id: Option<String>,
+    pub source_finding_ref: Option<String>,
+    pub title: String,
+    pub summary: String,
+    pub severity: Option<String>,
+    pub required: Option<bool>,
+    pub evidence_refs: Vec<String>,
+    pub metadata: BTreeMap<String, Value>,
+}
+
+/// Command to update the disposition of one finding.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct UpdateFindingDispositionCommand {
+    pub finding_id: String,
+    pub status: String,
+    pub owner: Option<String>,
+    pub disposition_reason: Option<String>,
+    pub evidence_refs: Vec<String>,
+    pub metadata: BTreeMap<String, Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalResponse {
@@ -121,9 +174,18 @@ pub struct ReplayEventsQuery {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+pub struct EvidenceQuery {
+    pub source_item_id: Option<String>,
+    pub source_task_id: Option<String>,
+    pub kind: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 pub struct FindingsQuery {
     pub source_item_id: Option<String>,
     pub source_task_id: Option<String>,
+    pub status: Option<String>,
     pub limit: Option<usize>,
 }
 

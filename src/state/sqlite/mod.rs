@@ -6,22 +6,25 @@ use crate::{
         },
         validation::validate_changed_files,
     },
-    backlog, bundle,
+    backlog, bundle, git_trailers,
     models::{
-        ActionResult, ActionStatus, BacklogCandidate, BacklogListData, EventRecord,
-        GenerateTaskBundleParams, RuntimeTransitionRecord, TaskBundleData, TaskEventRecord,
-        TaskRecord, WorkerAssignment, WorktreeCreateParams,
+        ActionResult, ActionStatus, BacklogCandidate, BacklogListData, EventRecord, EvidenceRecord,
+        FindingRecord, GenerateTaskBundleParams, RuntimeTransitionRecord, TaskBundleData,
+        TaskEventRecord, TaskRecord, WorkerAssignment, WorktreeCreateParams,
     },
     state::{
         AcquireLeaseCommand, AppendWorkerEventCommand, ApprovalSnapshot, AssignmentLifecycleState,
         AssignmentQuery, AssignmentSnapshot, BackendCapabilities, BackendInfo,
-        BacklogCandidateSnapshot, CompleteExecutionCommand, DispatchWorkCommand,
-        DispatchWorkOutcome, EventReplaySnapshot, FindingsQuery, FindingsSnapshot,
-        FindingsValidationSnapshot, IntegrateResultCommand, LeaseSnapshot, NextSafeActionQuery,
-        PrepareAssignmentCommand, ProjectEventSnapshot, ProjectState, ProjectStateError,
-        ReconcileProjectQuery, ReconcileSnapshot, ReplayEventsQuery, ResolveApprovalCommand,
-        SafeActionSnapshot, StartExecutionCommand, StateResult, TaskLifecycleState, TaskQuery,
-        TaskSnapshot, ValidateFindingsQuery, WorkerEventSnapshot, WorkerWorkspaceSnapshot,
+        BacklogCandidateSnapshot, ClearWorkspaceCommand, CompleteExecutionCommand,
+        DispatchWorkCommand, DispatchWorkOutcome, EventReplaySnapshot, EvidenceListSnapshot,
+        EvidenceQuery, EvidenceSnapshot, FindingDispositionSnapshot, FindingSnapshot,
+        FindingsQuery, FindingsSnapshot, FindingsValidationSnapshot, IntegrateResultCommand,
+        LeaseSnapshot, NextSafeActionQuery, PrepareAssignmentCommand, ProjectEventSnapshot,
+        ProjectState, ProjectStateError, ReconcileGap, ReconcileProjectQuery, ReconcileSnapshot,
+        RecordEvidenceCommand, RecordFindingCommand, RecordWorkspaceCommand, ReplayEventsQuery,
+        ResolveApprovalCommand, SafeActionSnapshot, StartExecutionCommand, StateResult,
+        TaskLifecycleState, TaskQuery, TaskSnapshot, UpdateFindingDispositionCommand,
+        ValidateFindingsQuery, WorkerEventSnapshot, WorkerWorkspaceSnapshot,
     },
     storage::{
         self, EventStore, LeaseStore, StorageConnection, TaskEventInsert, TaskInsert, TaskStore,
@@ -30,11 +33,38 @@ use crate::{
     workspace,
 };
 use rusqlite::{params, OptionalExtension, Row};
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
+
+const EVIDENCE_DEFAULT_LIMIT: usize = 50;
+const EVIDENCE_MAX_LIMIT: usize = 200;
+const FINDINGS_DEFAULT_LIMIT: usize = 20;
+const FINDINGS_MAX_LIMIT: usize = 200;
+const GIT_TIMEOUT: Duration = Duration::from_secs(10);
+const VALID_EVIDENCE_KINDS: &[&str] = &[
+    "commit",
+    "verification",
+    "file_summary",
+    "worker_finding",
+    "manager_disposition",
+    "external_report",
+    "note",
+];
+const VALID_FINDING_STATUSES: &[&str] = &[
+    "open",
+    "accepted",
+    "resolved",
+    "rejected",
+    "deferred",
+    "duplicate",
+];
 
 /// SQLite-backed ProjectState implementation shell.
 ///
@@ -569,6 +599,51 @@ impl ProjectState for SqliteProjectState {
         self.unsupported("integrate_result")
     }
 
+    fn record_workspace(&self, command: RecordWorkspaceCommand) -> StateResult<TaskSnapshot> {
+        self.connection
+            .connection
+            .execute(
+                r#"
+                UPDATE tasks
+                SET workspace_path = ?2,
+                    workspace_branch = ?3,
+                    workspace_base_ref = ?4,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?1
+                "#,
+                params![
+                    command.task_id,
+                    command.path,
+                    command.branch,
+                    command.base_ref
+                ],
+            )
+            .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        self.inspect_task(TaskQuery {
+            task_id: command.task_id,
+        })
+    }
+
+    fn clear_workspace(&self, command: ClearWorkspaceCommand) -> StateResult<TaskSnapshot> {
+        self.connection
+            .connection
+            .execute(
+                r#"
+                UPDATE tasks
+                SET workspace_path = NULL,
+                    workspace_branch = NULL,
+                    workspace_base_ref = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?1
+                "#,
+                [command.task_id.as_str()],
+            )
+            .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        self.inspect_task(TaskQuery {
+            task_id: command.task_id,
+        })
+    }
+
     fn next_safe_action(&self, _query: NextSafeActionQuery) -> StateResult<SafeActionSnapshot> {
         let root = self.root_string();
         let closed_item_ids = backlog::closed_item_ids(&self.root);
@@ -760,19 +835,349 @@ impl ProjectState for SqliteProjectState {
         })
     }
 
-    fn list_findings(&self, _query: FindingsQuery) -> StateResult<FindingsSnapshot> {
-        self.unsupported("list_findings")
+    fn record_evidence(&self, command: RecordEvidenceCommand) -> StateResult<EvidenceSnapshot> {
+        let kind = command.kind.trim();
+        let summary = command.summary.trim();
+        if !VALID_EVIDENCE_KINDS.contains(&kind) {
+            return Err(ProjectStateError::invalid_command("invalid evidence kind"));
+        }
+        if summary.is_empty() {
+            return Err(ProjectStateError::invalid_command("summary is required"));
+        }
+        let id = match clean_optional(command.id) {
+            Some(id) => id,
+            None => next_evidence_id(&self.connection.connection)
+                .map_err(|error| ProjectStateError::backend(error.to_string()))?,
+        };
+        self.connection
+            .connection
+            .execute(
+                r#"
+                INSERT INTO evidence(
+                    id, source_item_id, source_task_id, kind, summary, refs_json, metadata_json
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "#,
+                params![
+                    id,
+                    clean_optional(command.source_item_id),
+                    clean_optional(command.source_task_id),
+                    kind,
+                    summary,
+                    json_string(&clean_vec(command.refs)),
+                    json_string(&command.metadata)
+                ],
+            )
+            .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        get_evidence(&self.connection.connection, &id)
+            .map(evidence_snapshot)
+            .map_err(|error| ProjectStateError::backend(error.to_string()))
+    }
+
+    fn list_evidence(&self, query: EvidenceQuery) -> StateResult<EvidenceListSnapshot> {
+        let evidence = query_evidence(
+            &self.connection.connection,
+            query.source_item_id.as_deref(),
+            query.source_task_id.as_deref(),
+            query.kind.as_deref(),
+            query
+                .limit
+                .unwrap_or(EVIDENCE_DEFAULT_LIMIT)
+                .clamp(1, EVIDENCE_MAX_LIMIT),
+        )
+        .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        Ok(EvidenceListSnapshot {
+            evidence: evidence.into_iter().map(evidence_snapshot).collect(),
+        })
+    }
+
+    fn record_finding(&self, command: RecordFindingCommand) -> StateResult<FindingSnapshot> {
+        let title = command.title.trim();
+        let summary = command.summary.trim();
+        if title.is_empty() {
+            return Err(ProjectStateError::invalid_command("title is required"));
+        }
+        if summary.is_empty() {
+            return Err(ProjectStateError::invalid_command("summary is required"));
+        }
+        let id = match clean_optional(command.id) {
+            Some(id) => id,
+            None => next_finding_id(
+                &self.connection.connection,
+                command.source_item_id.as_deref(),
+                command.source_task_id.as_deref(),
+            )
+            .map_err(|error| ProjectStateError::backend(error.to_string()))?,
+        };
+        if finding_exists(&self.connection.connection, &id)
+            .map_err(|error| ProjectStateError::backend(error.to_string()))?
+        {
+            return Err(ProjectStateError::conflict(format!(
+                "finding `{id}` already exists"
+            )));
+        }
+        let required = command.required.unwrap_or(true);
+        self.connection
+            .connection
+            .execute(
+                r#"
+                INSERT INTO findings(
+                    id,
+                    source_item_id,
+                    source_task_id,
+                    source_finding_ref,
+                    title,
+                    status,
+                    severity,
+                    required,
+                    summary,
+                    evidence_json,
+                    metadata_json
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, 'open', ?6, ?7, ?8, ?9, ?10)
+                "#,
+                params![
+                    id,
+                    clean_optional(command.source_item_id),
+                    clean_optional(command.source_task_id),
+                    clean_optional(command.source_finding_ref),
+                    title,
+                    clean_optional(command.severity),
+                    bool_to_i64(required),
+                    summary,
+                    json_string(&command.evidence_refs),
+                    json_string(&command.metadata)
+                ],
+            )
+            .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        get_finding(&self.connection.connection, &id)
+            .map(finding_snapshot)
+            .map_err(|error| ProjectStateError::backend(error.to_string()))
+    }
+
+    fn list_findings(&self, query: FindingsQuery) -> StateResult<FindingsSnapshot> {
+        let findings = query_findings(
+            &self.connection.connection,
+            query.source_item_id.as_deref(),
+            query.source_task_id.as_deref(),
+            query.status.as_deref(),
+            query
+                .limit
+                .unwrap_or(FINDINGS_DEFAULT_LIMIT)
+                .clamp(1, FINDINGS_MAX_LIMIT),
+        )
+        .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        Ok(FindingsSnapshot {
+            findings: findings.into_iter().map(finding_snapshot).collect(),
+        })
     }
 
     fn validate_findings(
         &self,
-        _query: ValidateFindingsQuery,
+        query: ValidateFindingsQuery,
     ) -> StateResult<FindingsValidationSnapshot> {
-        self.unsupported("validate_findings")
+        let unresolved_required = query_unresolved_required_findings(
+            &self.connection.connection,
+            query.source_item_id.as_deref(),
+            query.source_task_id.as_deref(),
+        )
+        .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        Ok(FindingsValidationSnapshot {
+            ok: unresolved_required.is_empty(),
+            unresolved_required: unresolved_required
+                .into_iter()
+                .map(finding_snapshot)
+                .collect(),
+        })
     }
 
-    fn reconcile_project(&self, _query: ReconcileProjectQuery) -> StateResult<ReconcileSnapshot> {
-        self.unsupported("reconcile_project")
+    fn update_finding_disposition(
+        &self,
+        command: UpdateFindingDispositionCommand,
+    ) -> StateResult<FindingSnapshot> {
+        let status = command.status.trim().to_ascii_lowercase();
+        if !VALID_FINDING_STATUSES.contains(&status.as_str()) {
+            return Err(ProjectStateError::invalid_command(format!(
+                "invalid status `{}`",
+                command.status
+            )));
+        }
+        if !finding_exists(&self.connection.connection, &command.finding_id)
+            .map_err(|error| ProjectStateError::backend(error.to_string()))?
+        {
+            return Err(ProjectStateError::not_found(format!(
+                "finding `{}` does not exist",
+                command.finding_id
+            )));
+        }
+        self.connection
+            .connection
+            .execute(
+                r#"
+                UPDATE findings
+                SET status = ?2,
+                    owner = ?3,
+                    disposition_reason = ?4,
+                    evidence_json = ?5,
+                    metadata_json = ?6,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?1
+                "#,
+                params![
+                    command.finding_id,
+                    status,
+                    clean_optional(command.owner),
+                    clean_optional(command.disposition_reason),
+                    json_string(&command.evidence_refs),
+                    json_string(&command.metadata)
+                ],
+            )
+            .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        get_finding(&self.connection.connection, &command.finding_id)
+            .map(finding_snapshot)
+            .map_err(|error| ProjectStateError::backend(error.to_string()))
+    }
+
+    fn reconcile_project(&self, query: ReconcileProjectQuery) -> StateResult<ReconcileSnapshot> {
+        let closed_item_ids = if query.include_closed_items {
+            backlog::closed_item_ids(&self.root)
+        } else {
+            BTreeSet::new()
+        };
+        let completed_tasks = query_completed_tasks(&self.connection.connection)
+            .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        let unresolved_required =
+            query_unresolved_required_finding_summaries(&self.connection.connection)
+                .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        let mut gaps = Vec::new();
+
+        for task in &completed_tasks {
+            let verification = query_evidence(
+                &self.connection.connection,
+                None,
+                Some(task.id.as_str()),
+                Some("verification"),
+                EVIDENCE_MAX_LIMIT,
+            )
+            .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+            if verification.is_empty() {
+                gaps.push(ReconcileGap {
+                    kind: "missing_verification_evidence".to_string(),
+                    source_item_id: Some(task.source_item_id.clone()),
+                    source_task_id: Some(task.id.clone()),
+                    summary: format!(
+                        "Completed task `{}` for `{}` has no verification evidence.",
+                        task.id, task.source_item_id
+                    ),
+                    next_action: "Record verification evidence or rerun verification.".to_string(),
+                });
+            }
+
+            let integration_refs = query_evidence(
+                &self.connection.connection,
+                None,
+                Some(task.id.as_str()),
+                Some("commit"),
+                EVIDENCE_MAX_LIMIT,
+            )
+            .map_err(|error| ProjectStateError::backend(error.to_string()))?
+            .into_iter()
+            .flat_map(|evidence| evidence.refs)
+            .collect::<Vec<_>>();
+            if integration_refs.is_empty() {
+                gaps.push(ReconcileGap {
+                    kind: "missing_integration_evidence".to_string(),
+                    source_item_id: Some(task.source_item_id.clone()),
+                    source_task_id: Some(task.id.clone()),
+                    summary: format!(
+                        "Completed task `{}` for `{}` has not been integrated.",
+                        task.id, task.source_item_id
+                    ),
+                    next_action: "Integrate the worker result with integrate_worker_result."
+                        .to_string(),
+                });
+                continue;
+            }
+
+            let mut closure_seen = false;
+            let mut verification_seen = false;
+            for commit in integration_refs
+                .iter()
+                .filter_map(|reference| commit_ref(reference))
+            {
+                match commit_trailers(&self.root, &commit) {
+                    Ok(trailers) => {
+                        if trailers.closes.contains(&task.source_item_id) {
+                            closure_seen = true;
+                        }
+                        if trailers.verification_present {
+                            verification_seen = true;
+                        }
+                    }
+                    Err(error) => gaps.push(ReconcileGap {
+                        kind: "invalid_integration_commit_ref".to_string(),
+                        source_item_id: Some(task.source_item_id.clone()),
+                        source_task_id: Some(task.id.clone()),
+                        summary: format!(
+                            "Integration evidence for task `{}` references commit `{commit}` that could not be inspected.",
+                            task.id
+                        ),
+                        next_action: format!(
+                            "Inspect or replace the invalid commit evidence reference: {error}"
+                        ),
+                    }),
+                }
+            }
+            if !closure_seen {
+                gaps.push(ReconcileGap {
+                    kind: "missing_closure_trailer".to_string(),
+                    source_item_id: Some(task.source_item_id.clone()),
+                    source_task_id: Some(task.id.clone()),
+                    summary: format!(
+                        "Integrated task `{}` for `{}` has no matching Platypus-Closes trailer.",
+                        task.id, task.source_item_id
+                    ),
+                    next_action:
+                        "Create or fix an integration commit with Platypus-Closes for the source item."
+                            .to_string(),
+                });
+            }
+            if !verification_seen {
+                gaps.push(ReconcileGap {
+                    kind: "missing_verification_trailer".to_string(),
+                    source_item_id: Some(task.source_item_id.clone()),
+                    source_task_id: Some(task.id.clone()),
+                    summary: format!(
+                        "Integrated task `{}` for `{}` has no Platypus-Verification trailer.",
+                        task.id, task.source_item_id
+                    ),
+                    next_action:
+                        "Create or fix an integration commit with a Platypus-Verification trailer."
+                            .to_string(),
+                });
+            }
+        }
+
+        for finding in &unresolved_required {
+            gaps.push(ReconcileGap {
+                kind: "unresolved_required_finding".to_string(),
+                source_item_id: finding.source_item_id.clone(),
+                source_task_id: finding.source_task_id.clone(),
+                summary: format!(
+                    "Required finding `{}` is unresolved: {}.",
+                    finding.id, finding.title
+                ),
+                next_action: "Resolve, reject, defer, or mark the finding duplicate.".to_string(),
+            });
+        }
+
+        Ok(ReconcileSnapshot {
+            ok: gaps.is_empty(),
+            closed_item_ids,
+            completed_tasks: completed_tasks.len(),
+            unresolved_required_findings: unresolved_required.len(),
+            gaps,
+        })
     }
 }
 
@@ -1093,6 +1498,354 @@ fn project_event_snapshot(event: EventRecord) -> ProjectEventSnapshot {
     }
 }
 
+fn evidence_snapshot(evidence: EvidenceRecord) -> EvidenceSnapshot {
+    EvidenceSnapshot {
+        id: evidence.id,
+        source_item_id: evidence.source_item_id,
+        source_task_id: evidence.source_task_id,
+        kind: evidence.kind,
+        summary: evidence.summary,
+        refs: evidence.refs,
+        metadata: evidence.metadata,
+        created_at: evidence.created_at,
+    }
+}
+
+fn finding_snapshot(finding: FindingRecord) -> FindingSnapshot {
+    let disposition =
+        finding
+            .disposition_reason
+            .as_ref()
+            .map(|reason| FindingDispositionSnapshot {
+                state: finding.status.clone(),
+                reason: reason.clone(),
+                evidence_refs: finding.evidence_refs.clone(),
+            });
+    FindingSnapshot {
+        id: finding.id,
+        source_item_id: finding.source_item_id,
+        source_task_id: finding.source_task_id,
+        source_finding_ref: finding.source_finding_ref,
+        title: finding.title,
+        status: finding.status,
+        severity: finding.severity.unwrap_or_else(|| "medium".to_string()),
+        required: finding.required,
+        summary: finding.summary,
+        owner: finding.owner,
+        disposition_reason: finding.disposition_reason,
+        evidence_refs: finding.evidence_refs,
+        metadata: finding.metadata,
+        disposition,
+        created_at: finding.created_at,
+        updated_at: finding.updated_at,
+    }
+}
+
+fn query_evidence(
+    connection: &rusqlite::Connection,
+    source_item_id: Option<&str>,
+    source_task_id: Option<&str>,
+    kind: Option<&str>,
+    limit: usize,
+) -> rusqlite::Result<Vec<EvidenceRecord>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT id, source_item_id, source_task_id, kind, summary, refs_json, metadata_json, created_at
+        FROM evidence
+        WHERE (?1 IS NULL OR source_item_id = ?1)
+          AND (?2 IS NULL OR source_task_id = ?2)
+          AND (?3 IS NULL OR kind = ?3)
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?4
+        "#,
+    )?;
+    let rows = statement.query_map(
+        params![source_item_id, source_task_id, kind, limit],
+        row_to_evidence,
+    )?;
+    rows.collect()
+}
+
+fn get_evidence(connection: &rusqlite::Connection, id: &str) -> rusqlite::Result<EvidenceRecord> {
+    connection.query_row(
+        r#"
+        SELECT id, source_item_id, source_task_id, kind, summary, refs_json, metadata_json, created_at
+        FROM evidence
+        WHERE id = ?1
+        "#,
+        [id],
+        row_to_evidence,
+    )
+}
+
+fn next_evidence_id(connection: &rusqlite::Connection) -> rusqlite::Result<String> {
+    let existing: i64 =
+        connection.query_row("SELECT COUNT(*) FROM evidence", [], |row| row.get(0))?;
+    Ok(format!("EVD-{:03}", existing + 1))
+}
+
+fn row_to_evidence(row: &Row<'_>) -> rusqlite::Result<EvidenceRecord> {
+    let refs_json: Option<String> = row.get("refs_json")?;
+    let metadata_json: Option<String> = row.get("metadata_json")?;
+    Ok(EvidenceRecord {
+        id: row.get("id")?,
+        source_item_id: row.get("source_item_id")?,
+        source_task_id: row.get("source_task_id")?,
+        kind: row.get("kind")?,
+        summary: row.get("summary")?,
+        refs: parse_json(refs_json),
+        metadata: parse_json(metadata_json),
+        created_at: row.get("created_at")?,
+    })
+}
+
+fn query_findings(
+    connection: &rusqlite::Connection,
+    source_item_id: Option<&str>,
+    source_task_id: Option<&str>,
+    status: Option<&str>,
+    limit: usize,
+) -> rusqlite::Result<Vec<FindingRecord>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT *
+        FROM findings
+        WHERE (?1 IS NULL OR source_item_id = ?1)
+          AND (?2 IS NULL OR source_task_id = ?2)
+          AND (?3 IS NULL OR status = ?3)
+        ORDER BY updated_at DESC, id DESC
+        LIMIT ?4
+        "#,
+    )?;
+    let rows = statement.query_map(
+        params![source_item_id, source_task_id, status, limit],
+        row_to_finding,
+    )?;
+    rows.collect()
+}
+
+fn query_unresolved_required_findings(
+    connection: &rusqlite::Connection,
+    source_item_id: Option<&str>,
+    source_task_id: Option<&str>,
+) -> rusqlite::Result<Vec<FindingRecord>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT *
+        FROM findings
+        WHERE required = 1
+          AND status NOT IN ('resolved', 'rejected', 'duplicate')
+          AND (?1 IS NULL OR source_item_id = ?1)
+          AND (?2 IS NULL OR source_task_id = ?2)
+        ORDER BY updated_at DESC, id DESC
+        "#,
+    )?;
+    let rows = statement.query_map(params![source_item_id, source_task_id], row_to_finding)?;
+    rows.collect()
+}
+
+fn get_finding(connection: &rusqlite::Connection, id: &str) -> rusqlite::Result<FindingRecord> {
+    connection.query_row("SELECT * FROM findings WHERE id = ?1", [id], row_to_finding)
+}
+
+fn finding_exists(connection: &rusqlite::Connection, id: &str) -> rusqlite::Result<bool> {
+    connection
+        .query_row("SELECT 1 FROM findings WHERE id = ?1", [id], |_| Ok(()))
+        .optional()
+        .map(|value| value.is_some())
+}
+
+fn next_finding_id(
+    connection: &rusqlite::Connection,
+    source_item_id: Option<&str>,
+    source_task_id: Option<&str>,
+) -> rusqlite::Result<String> {
+    let scope_prefix = source_item_id.or(source_task_id).unwrap_or("FIND");
+    let prefix = safe_id_prefix(scope_prefix);
+    let existing: i64 = connection.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM findings
+        WHERE (?1 IS NULL OR source_item_id = ?1)
+          AND (?2 IS NULL OR source_task_id = ?2)
+        "#,
+        params![source_item_id, source_task_id],
+        |row| row.get(0),
+    )?;
+    Ok(format!("{prefix}-F{:03}", existing + 1))
+}
+
+fn row_to_finding(row: &Row<'_>) -> rusqlite::Result<FindingRecord> {
+    let evidence_json: Option<String> = row.get("evidence_json")?;
+    let metadata_json: Option<String> = row.get("metadata_json")?;
+    let required: i64 = row.get("required")?;
+    Ok(FindingRecord {
+        id: row.get("id")?,
+        source_item_id: row.get("source_item_id")?,
+        source_task_id: row.get("source_task_id")?,
+        source_finding_ref: row.get("source_finding_ref")?,
+        title: row.get("title")?,
+        status: row.get("status")?,
+        severity: row.get("severity")?,
+        required: required != 0,
+        summary: row.get("summary")?,
+        owner: row.get("owner")?,
+        disposition_reason: row.get("disposition_reason")?,
+        evidence_refs: parse_json(evidence_json),
+        metadata: parse_json(metadata_json),
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+#[derive(Debug)]
+struct CompletedTask {
+    id: String,
+    source_item_id: String,
+}
+
+fn query_completed_tasks(
+    connection: &rusqlite::Connection,
+) -> rusqlite::Result<Vec<CompletedTask>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT id, source_item_id
+        FROM tasks
+        WHERE status = 'completed'
+        ORDER BY updated_at ASC, id ASC
+        "#,
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(CompletedTask {
+            id: row.get("id")?,
+            source_item_id: row.get("source_item_id")?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn query_unresolved_required_finding_summaries(
+    connection: &rusqlite::Connection,
+) -> rusqlite::Result<Vec<FindingRecord>> {
+    query_unresolved_required_findings(connection, None, None)
+}
+
+fn commit_ref(reference: &str) -> Option<String> {
+    reference
+        .trim()
+        .strip_prefix("commit:")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+#[derive(Debug)]
+struct CommitTrailers {
+    closes: BTreeSet<String>,
+    verification_present: bool,
+}
+
+fn commit_trailers(root: &Path, commit: &str) -> Result<CommitTrailers, String> {
+    let message = run_git(root, &["show", "-s", "--format=%B", commit])?;
+    let trailers = git_trailers::parse_platypus_trailers(&message);
+    Ok(CommitTrailers {
+        closes: trailers.closes,
+        verification_present: trailers.verification_present,
+    })
+}
+
+fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
+    let mut child = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("could not run git: {error}"))?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,
+            Ok(None) if started.elapsed() < GIT_TIMEOUT => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                return Err("git command timed out".to_string());
+            }
+            Err(error) => return Err(format!("could not wait for git: {error}")),
+        }
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("could not collect git output: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn clean_optional(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn clean_vec(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn bool_to_i64(value: bool) -> i64 {
+    if value {
+        1
+    } else {
+        0
+    }
+}
+
+fn json_string<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+}
+
+fn parse_json<T>(raw: Option<String>) -> T
+where
+    T: DeserializeOwned + Default,
+{
+    raw.and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn safe_id_prefix(value: &str) -> String {
+    let prefix: String = value
+        .chars()
+        .filter_map(|character| {
+            if character.is_ascii_alphanumeric() {
+                Some(character.to_ascii_uppercase())
+            } else if character == '-' || character == '_' {
+                Some('-')
+            } else {
+                None
+            }
+        })
+        .collect();
+    let prefix = prefix.trim_matches('-');
+    if prefix.is_empty() {
+        "FIND".to_string()
+    } else {
+        prefix.to_string()
+    }
+}
+
 fn task_state(status: &str) -> TaskLifecycleState {
     match status {
         "claimed" => TaskLifecycleState::Claimed,
@@ -1108,7 +1861,7 @@ fn task_state(status: &str) -> TaskLifecycleState {
 mod tests {
     use super::*;
     use crate::tasks::{create_task_record, NewTask};
-    use std::{fs, process::Command};
+    use std::{collections::BTreeMap, fs, process::Command};
     use tempfile::TempDir;
 
     #[test]
@@ -1145,6 +1898,62 @@ mod tests {
 
         assert_eq!(snapshot.source_item_id, "PROJ-001");
         assert_eq!(snapshot.state, TaskLifecycleState::Queued);
+    }
+
+    #[test]
+    fn records_evidence_and_findings_through_project_state() {
+        let project = TempDir::new().expect("temp dir");
+        let state = SqliteProjectState::open(project.path(), None).expect("state");
+
+        let evidence = state
+            .record_evidence(RecordEvidenceCommand {
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: Some("task-1".to_string()),
+                kind: "verification".to_string(),
+                summary: "make check passed".to_string(),
+                refs: vec!["log:1".to_string()],
+                metadata: BTreeMap::new(),
+            })
+            .expect("evidence");
+        assert_eq!(evidence.id, "EVD-001");
+
+        let finding = state
+            .record_finding(RecordFindingCommand {
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: Some("task-1".to_string()),
+                source_finding_ref: None,
+                title: "Follow-up".to_string(),
+                summary: "Document the follow-up.".to_string(),
+                severity: Some("medium".to_string()),
+                required: Some(true),
+                evidence_refs: vec![format!("evidence:{}", evidence.id)],
+                metadata: BTreeMap::new(),
+            })
+            .expect("finding");
+        assert_eq!(finding.id, "PROJ-001-F001");
+
+        let validation = state
+            .validate_findings(ValidateFindingsQuery {
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: None,
+            })
+            .expect("validation");
+        assert!(!validation.ok);
+        assert_eq!(validation.unresolved_required[0].id, finding.id);
+
+        let updated = state
+            .update_finding_disposition(UpdateFindingDispositionCommand {
+                finding_id: finding.id,
+                status: "resolved".to_string(),
+                owner: Some("manager".to_string()),
+                disposition_reason: Some("covered".to_string()),
+                evidence_refs: vec!["commit:HEAD".to_string()],
+                metadata: BTreeMap::new(),
+            })
+            .expect("updated");
+        assert_eq!(updated.status, "resolved");
     }
 
     #[test]

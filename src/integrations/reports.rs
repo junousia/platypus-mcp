@@ -7,8 +7,8 @@ use crate::{
     models::{
         ActionResult, ActionStatus, DraftExternalReportParams, EvidenceRecord, ExternalRef,
         ExternalReportApprovalData, ExternalReportDispatchData, ExternalReportDraft,
-        ExternalReportDraftData, RecordEvidenceParams, RecordExternalReportDispatchParams,
-        RequestExternalReportApprovalParams,
+        ExternalReportDraftData, ListEvidenceParams, RecordEvidenceParams,
+        RecordExternalReportDispatchParams, RequestExternalReportApprovalParams,
     },
     storage::{self, ApprovalStore, RepositoryError},
     tasks,
@@ -75,27 +75,28 @@ pub fn draft_external_report(
         }
         _ => None,
     };
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
-        Err(error) => {
+    let evidence_limit = bounded_limit(params.evidence_limit);
+    let evidence = match evidence::list_evidence(
+        default_root,
+        ListEvidenceParams {
+            root: params.root.clone(),
+            source_item_id: Some(source_item_id.clone()),
+            source_task_id: params.source_task_id.clone(),
+            kind: None,
+            limit: Some(evidence_limit),
+        },
+    ) {
+        ActionResult {
+            status: ActionStatus::Completed | ActionStatus::Skipped,
+            data: Some(data),
+            ..
+        } => data.evidence,
+        ActionResult { error, summary, .. } => {
             return ActionResult::failed(
                 action,
-                "Could not inspect evidence storage.",
-                error.to_string(),
+                "Could not inspect evidence.",
+                error.unwrap_or(summary),
             )
-        }
-    };
-    let evidence_limit = bounded_limit(params.evidence_limit);
-    let evidence = match evidence::query_evidence(
-        &storage.connection,
-        Some(&source_item_id),
-        params.source_task_id.as_deref(),
-        None,
-        evidence_limit,
-    ) {
-        Ok(evidence) => evidence,
-        Err(error) => {
-            return ActionResult::failed(action, "Could not inspect evidence.", error.to_string())
         }
     };
     let evidence_refs = evidence
