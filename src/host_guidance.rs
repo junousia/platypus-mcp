@@ -109,6 +109,16 @@ contain runtime status, assignment attempts, task IDs, PR metadata, closure
 state, or blocked/done fields. Closure is derived from Git trailers such as
 `Platypus-Closes` and `Platypus-Verification`.
 
+Backlog schema quick reference:
+
+- Required create fields: `title`, `goal`, `implementation_contract` or
+  `contract`, and at least one `acceptance` criterion.
+- Priorities: `P0` critical/next, `P1` normal important work, `P2` refinement.
+- Types: `foundation`, `feature`, `safety`, `ux`, `test`, `docs`.
+- Defaults: priority `P1`, type `feature`, epic `general`, worker `coder`.
+- `suggested_worker` is a Platypus worker profile name, not necessarily a
+  host-specific subagent type.
+
 There is no manual `backlog/index.md`; hosts should compute queue state through
 `list_backlog`, `inspect_work_queue`, `inspect_status`, and `next_safe_action`.
 

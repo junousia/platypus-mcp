@@ -203,6 +203,7 @@ pub struct CreateBacklogItemParams {
     pub root: Option<String>,
     pub id: Option<String>,
     pub id_prefix: Option<String>,
+    #[serde(default)]
     pub title: String,
     pub priority: Option<String>,
     #[serde(rename = "type")]
@@ -216,6 +217,7 @@ pub struct CreateBacklogItemParams {
     pub owned_surfaces: Vec<String>,
     #[serde(default)]
     pub external_refs: Vec<ExternalRef>,
+    #[serde(default)]
     pub goal: String,
     pub implementation_contract: Option<String>,
     pub contract: Option<String>,

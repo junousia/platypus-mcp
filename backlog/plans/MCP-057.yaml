@@ -1,0 +1,56 @@
+item_id: MCP-057
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: create_backlog_item validation errors identify invalid values and list accepted enum values.
+- id: R2
+  text: Missing required fields are reported individually with host-readable recovery guidance.
+- id: R3
+  text: Documentation and MCP host guidance include a concise backlog authoring schema reference.
+design:
+  summary: Keep the strict backlog schema unchanged, but make failures and docs self-describing. Reuse the existing validation constants for accepted priorities and item types so docs and errors cannot drift inside code paths.
+  owned_surfaces:
+  - src/backlog
+  - src/host_guidance.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - tests
+  notes: This is a usability change, not a schema relaxation.
+tasks:
+- id: MCP-057-T01
+  title: Improve create_backlog_item validation errors
+  goal: Return precise errors for invalid priority/type and missing required fields.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/backlog
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test backlog::tests::create_backlog_item_reports_schema_guidance
+  acceptance:
+  - Invalid priority errors include accepted values.
+  - Invalid type errors include accepted values.
+  - Missing fields are listed individually.
+  notes: null
+- id: MCP-057-T02
+  title: Document backlog schema quick reference
+  goal: Add host-visible quick reference text for priorities, item types, required fields, defaults, and worker-name caveats.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-057-T01
+  owned_surfaces:
+  - src/host_guidance.rs
+  - docs/tools.md
+  - docs/workflow.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - docs/tools.md includes the quick reference.
+  - backlog authoring guidance mentions valid enum values and required fields.
+  notes: null

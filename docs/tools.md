@@ -126,6 +126,18 @@ make smoke-storage
   dependency-blocked, or ready. Without `limit`, the tool returns the full
   inventory; limited calls include `returned` and `truncated` fields.
 
+Backlog schema quick reference:
+
+- Required `create_backlog_item` fields: `title`, `goal`,
+  `implementation_contract` or `contract`, and at least one `acceptance`
+  criterion.
+- Priority values: `P0`, `P1`, `P2`.
+- Type values: `foundation`, `feature`, `safety`, `ux`, `test`, `docs`.
+- Defaults when omitted: priority `P1`, type `feature`, epic `general`,
+  suggested worker `coder`.
+- `suggested_worker` is a Platypus worker profile name. It is not guaranteed
+  to match a host-specific subagent type such as `explore` or `general`.
+
 Backlog item frontmatter may include provider-neutral `external_refs`. Use them
 to preserve where work came from or where results should be reported without
 making an external tracker the execution contract.
