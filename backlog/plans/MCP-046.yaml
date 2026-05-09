@@ -1,0 +1,81 @@
+item_id: MCP-046
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Guidance and inspection-oriented MCP tools use ProjectState query methods instead of direct SQLite reads.
+- id: R2
+  text: next_safe_action preserves existing recommendations for running, prepared, queued, claimed, verification, integration, and empty states.
+- id: R3
+  text: Event and bundle inspection responses are built from backend-independent snapshots while public MCP schemas stay stable.
+design:
+  summary: Move read-side lifecycle queries behind ProjectState in small slices. First add domain-shaped query snapshots for active assignments, queued or claimed tasks, completed task gaps, task events, and bundle data. Then make guidance, event replay, task inspection, and bundle inspection adapters translate those snapshots back to existing response models.
+  owned_surfaces:
+  - src/state
+  - src/guidance.rs
+  - src/tasks.rs
+  - src/events.rs
+  - src/bundle.rs
+  - tests
+  notes: Keep direct write helpers unchanged unless they are already migrated. Avoid exposing SQL-like list-by-table methods in ProjectState; use domain query names that describe product decisions.
+tasks:
+- id: MCP-046-T01
+  title: Add ProjectState read snapshots
+  goal: Extend the ProjectState boundary and SQLite implementation with query methods needed by guidance and inspection reads.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/state
+  suggested_worker: coder
+  verification:
+  - cargo test state::sqlite
+  acceptance:
+  - State queries expose active assignment and task lifecycle guidance inputs without SQL-shaped APIs.
+  - State queries can replay task/project/transition events through EventReplaySnapshot.
+  - State queries can return task bundle input data for existing bundle response models.
+  notes: null
+- id: MCP-046-T02
+  title: Route guidance and inspection adapters
+  goal: Update next_safe_action, task/assignment inspection, event replay, and bundle reads to call ProjectState where practical.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-046-T01
+  owned_surfaces:
+  - src/guidance.rs
+  - src/tasks.rs
+  - src/events.rs
+  - src/bundle.rs
+  suggested_worker: coder
+  verification:
+  - cargo test guidance::tests
+  - cargo test events::tests
+  acceptance:
+  - guidance.rs no longer imports rusqlite.
+  - next_safe_action decisions are derived from ProjectState snapshots.
+  - Public inspection response shapes remain compatible with existing tests.
+  notes: null
+- id: MCP-046-T03
+  title: Preserve external behavior with smoke coverage
+  goal: Verify read migration does not change stdio-visible behavior or safe-action recommendations.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-046-T01
+  - MCP-046-T02
+  owned_surfaces:
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test stdio_server
+  - make check
+  acceptance:
+  - Existing next_safe_action tests pass against the ProjectState-backed implementation.
+  - Stdio event, task, assignment, bundle, and queue inspection tests pass.
+  - Full make check passes.
+  notes: null

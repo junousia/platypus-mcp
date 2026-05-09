@@ -4,6 +4,10 @@ use crate::{
         InspectTaskParams, TaskEventListData, TaskEventRecord, TaskRecord, TaskRecordData,
         WorkerGuidanceData,
     },
+    state::{
+        sqlite::SqliteProjectState, ProjectEventSnapshot, ProjectState, ReplayEventsQuery,
+        TaskQuery, TaskSnapshot,
+    },
     storage::{self, TaskEventInsert, TaskInsert},
     storage::{RepositoryError, TaskStore},
 };
@@ -220,22 +224,24 @@ pub fn inspect_task(
     if task_id.is_empty() {
         return ActionResult::failed(action, "Could not inspect task.", "task_id is required");
     }
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(action, "Could not open task storage.", error.to_string())
         }
     };
-    match storage.repository().tasks().get(task_id) {
-        Ok(task) => ActionResult::completed(
+    match state.inspect_task(TaskQuery {
+        task_id: task_id.to_string(),
+    }) {
+        Ok(snapshot) => ActionResult::completed(
             action,
-            format!("Task `{}` inspected.", task.id),
+            format!("Task `{}` inspected.", snapshot.id),
             TaskRecordData {
-                root: storage.storage.root.display().to_string(),
-                task,
+                root: state.root().display().to_string(),
+                task: task_record(snapshot),
             },
         ),
-        Err(RepositoryError::NotFound) => ActionResult {
+        Err(crate::state::ProjectStateError::NotFound { .. }) => ActionResult {
             action: action.to_string(),
             status: ActionStatus::Skipped,
             summary: format!("Task `{task_id}` was not found."),
@@ -384,8 +390,8 @@ pub fn inspect_task_events(
         );
     }
 
-    let storage = match storage::connect(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
         Err(error) => {
             return ActionResult::failed(
                 action,
@@ -396,8 +402,19 @@ pub fn inspect_task_events(
     };
     let limit = bounded_limit(params.limit);
 
-    let events = match storage.repository().tasks().list_events(task_id, limit) {
-        Ok(events) => events,
+    let mut events = match state.replay_events(ReplayEventsQuery {
+        task_id: Some(task_id.to_string()),
+        scope: Some("task".to_string()),
+        limit: Some(MAX_LIMIT),
+    }) {
+        Ok(snapshot) => snapshot
+            .events
+            .into_iter()
+            .filter(|event| {
+                event.task_id.as_deref() == Some(task_id) && event.cursor.starts_with("task:")
+            })
+            .map(task_event_record)
+            .collect::<Vec<_>>(),
         Err(error) => {
             return ActionResult::failed(
                 action,
@@ -406,9 +423,13 @@ pub fn inspect_task_events(
             );
         }
     };
+    events.sort_by_key(|event| event.sequence);
+    if events.len() > limit {
+        events.truncate(limit);
+    }
     let returned = events.len();
     let data = TaskEventListData {
-        root: storage.storage.root.display().to_string(),
+        root: state.root().display().to_string(),
         task_id: task_id.to_string(),
         events,
         returned,
@@ -497,6 +518,47 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
     })
 }
 
+fn task_record(task: TaskSnapshot) -> TaskRecord {
+    let (workspace_path, workspace_branch, workspace_base_ref) = match task.worker_workspace {
+        Some(workspace) => (
+            Some(workspace.path),
+            Some(workspace.branch),
+            Some(workspace.base_ref),
+        ),
+        None => (None, None, None),
+    };
+    TaskRecord {
+        id: task.id,
+        source_item_id: task.source_item_id,
+        title: task.title,
+        status: task.status,
+        worker: task.worker,
+        claimed_by: task.claimed_by,
+        claimed_at: task.claimed_at,
+        started_at: task.started_at,
+        finished_at: task.finished_at,
+        workspace_path,
+        workspace_branch,
+        workspace_base_ref,
+        created_at: task.created_at,
+        updated_at: task.updated_at,
+    }
+}
+
+fn task_event_record(event: ProjectEventSnapshot) -> TaskEventRecord {
+    TaskEventRecord {
+        task_id: event.task_id.unwrap_or_default(),
+        sequence: event.sequence,
+        event_type: event.event_type,
+        summary: event.summary,
+        payload: event
+            .payload
+            .map(|payload| Value::Object(payload.into_iter().collect())),
+        created_at: event.created_at,
+        replay_order: event.sequence,
+    }
+}
+
 fn clean_required(field: &str, value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -579,6 +641,48 @@ mod tests {
         assert_eq!(data.returned, 2);
         assert_eq!(data.events[0].sequence, 1);
         assert_eq!(data.events[1].sequence, 2);
+        assert!(data.events[0].payload.is_none());
+    }
+
+    #[test]
+    fn inspect_task_events_applies_limit_after_dropping_transitions() {
+        let project = TempDir::new().expect("temp dir");
+        create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Queued task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        record_task_event(
+            project.path(),
+            None,
+            NewTaskEvent {
+                task_id: "PROJ-001-T001".to_string(),
+                sequence: None,
+                event_type: "worker_started".to_string(),
+                summary: "Worker started.".to_string(),
+                payload: None,
+            },
+        )
+        .expect("task event");
+
+        let inspected = inspect_task_events(
+            project.path(),
+            InspectTaskEventsParams {
+                root: None,
+                task_id: "PROJ-001-T001".to_string(),
+                limit: Some(1),
+            },
+        );
+        let data = inspected.data.expect("event data");
+
+        assert!(matches!(inspected.status, ActionStatus::Completed));
+        assert_eq!(data.returned, 1);
+        assert_eq!(data.events[0].event_type, "worker_started");
     }
 
     #[test]

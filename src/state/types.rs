@@ -170,6 +170,7 @@ pub struct IntegrationSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct SafeActionSnapshot {
     pub recommended_tool: String,
+    pub summary: String,
     pub reason: String,
     pub params: BTreeMap<String, Value>,
 }
@@ -182,12 +183,13 @@ pub struct EventReplaySnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct ProjectEventSnapshot {
+    pub cursor: String,
     pub sequence: i64,
     pub scope: String,
     pub task_id: Option<String>,
     pub event_type: String,
     pub summary: String,
-    pub payload: BTreeMap<String, Value>,
+    pub payload: Option<BTreeMap<String, Value>>,
     pub created_at: String,
 }
 
