@@ -135,6 +135,13 @@ platypus-mcp bootstrap opencode
 platypus-mcp bootstrap pi
 ```
 
+For a fresh project, configure the host and initialize repo-local guidance in
+one step:
+
+```bash
+platypus-mcp bootstrap codex --root /path/to/project --init-project
+```
+
 Inspect before writing or check an existing setup:
 
 ```bash
@@ -189,6 +196,10 @@ platypus-mcp bootstrap claude
 platypus-mcp bootstrap opencode
 platypus-mcp bootstrap pi
 ```
+
+Add `--init-project` for fresh repositories so `AGENTS.md`, `CLAUDE.md`,
+`WORKFLOW.md`, `platy.yaml`, and `backlog/` are created alongside host MCP
+configuration.
 
 Codex-style configuration:
 

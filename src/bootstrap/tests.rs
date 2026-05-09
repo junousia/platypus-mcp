@@ -23,6 +23,114 @@ fn codex_bootstrap_creates_project_config() {
 }
 
 #[test]
+fn bootstrap_init_project_creates_repo_guidance() {
+    let temp = TempDir::new().expect("temp dir");
+    let args = vec![
+        "codex".to_string(),
+        "--config".to_string(),
+        temp.path().join("config.toml").display().to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+        "--project-name".to_string(),
+        "Bootstrap Test".to_string(),
+    ];
+
+    assert_eq!(run_cli(&args).expect("bootstrap"), 0);
+
+    assert!(temp.path().join("config.toml").is_file());
+    assert!(temp.path().join("AGENTS.md").is_file());
+    assert!(temp.path().join("CLAUDE.md").is_file());
+    assert!(temp.path().join("WORKFLOW.md").is_file());
+    assert!(temp.path().join("backlog/README.md").is_file());
+    let config = fs::read_to_string(temp.path().join("platy.yaml")).expect("project config");
+    assert!(config.contains("Bootstrap Test"));
+}
+
+#[test]
+fn bootstrap_init_project_dry_run_does_not_create_repo_guidance() {
+    let temp = TempDir::new().expect("temp dir");
+    let args = vec![
+        "codex".to_string(),
+        "--dry-run".to_string(),
+        "--config".to_string(),
+        temp.path().join("config.toml").display().to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+    ];
+
+    assert_eq!(run_cli(&args).expect("dry run"), 0);
+
+    assert!(!temp.path().join("config.toml").exists());
+    assert!(!temp.path().join("AGENTS.md").exists());
+}
+
+#[test]
+fn bootstrap_check_with_init_project_requires_repo_guidance() {
+    let temp = TempDir::new().expect("temp dir");
+    let config = temp.path().join("config.toml");
+    let apply = vec![
+        "codex".to_string(),
+        "--config".to_string(),
+        config.display().to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+    ];
+    assert_eq!(run_cli(&apply).expect("bootstrap"), 0);
+
+    let check = vec![
+        "codex".to_string(),
+        "--check".to_string(),
+        "--config".to_string(),
+        config.display().to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+    ];
+    assert_eq!(run_cli(&check).expect("check missing project"), 1);
+
+    let init = vec![
+        "codex".to_string(),
+        "--config".to_string(),
+        config.display().to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+    ];
+    assert_eq!(run_cli(&init).expect("init project"), 0);
+    assert_eq!(run_cli(&check).expect("check initialized project"), 0);
+}
+
+#[test]
+fn bootstrap_check_with_init_project_requires_scaffold_directories() {
+    let temp = TempDir::new().expect("temp dir");
+    let config = temp.path().join("config.toml");
+    let apply = vec![
+        "codex".to_string(),
+        "--config".to_string(),
+        config.display().to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+    ];
+    assert_eq!(run_cli(&apply).expect("bootstrap"), 0);
+    fs::remove_dir_all(temp.path().join("backlog/items")).expect("remove items");
+
+    let check = vec![
+        "codex".to_string(),
+        "--check".to_string(),
+        "--config".to_string(),
+        config.display().to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+    ];
+
+    assert_eq!(run_cli(&check).expect("check missing directory"), 1);
+}
+
+#[test]
 fn codex_bootstrap_preserves_tool_sections() {
     let temp = TempDir::new().expect("temp dir");
     let config = temp.path().join("config.toml");

@@ -47,11 +47,16 @@ Equivalent prompts are available as `platypus-workflow`,
 
 ## Bootstrap
 
-1. Run `init_project` for missing scaffold files.
-2. Run `doctor_snapshot` to check config, backlog directories, Git metadata,
+1. For a fresh project, run `platypus-mcp bootstrap <host> --root <project>
+   --init-project` so host MCP configuration and repository guidance files are
+   created in one step.
+2. For an already initialized project, run `bootstrap <host>` for host config
+   only, or call `init_project` from the MCP host if scaffold files are
+   missing.
+3. Run `doctor_snapshot` to check config, backlog directories, Git metadata,
    and recovery guidance.
-3. Configure manager and worker profiles with `configure_agent_profile`.
-4. Inspect workflow policy with `inspect_workflow_config`.
+4. Configure manager and worker profiles with `configure_agent_profile`.
+5. Inspect workflow policy with `inspect_workflow_config`.
 
 `init_project` also installs project-local agent and workflow guidance. That is
 intentional: once an MCP host enters an initialized directory, normal goal

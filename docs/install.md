@@ -36,6 +36,16 @@ platypus-mcp bootstrap opencode
 platypus-mcp bootstrap pi
 ```
 
+For a fresh project, initialize the repository guidance at the same time:
+
+```bash
+platypus-mcp bootstrap codex --root /path/to/project --init-project
+```
+
+That writes host MCP configuration and creates project-local guidance such as
+`AGENTS.md`, `CLAUDE.md`, `WORKFLOW.md`, `platy.yaml`, and `backlog/` in the
+target root. Existing files are preserved by default.
+
 Useful bootstrap options:
 
 ```bash
@@ -43,13 +53,14 @@ platypus-mcp bootstrap codex --dry-run
 platypus-mcp bootstrap codex --check
 platypus-mcp bootstrap codex --global
 platypus-mcp bootstrap codex --root /path/to/project
+platypus-mcp bootstrap codex --root /path/to/project --init-project
+platypus-mcp bootstrap codex --root /path/to/project --init-project --project-name "My App"
 ```
 
-`bootstrap <host>` only wires the MCP server into the selected host. Run
-`init_project` in each project to install the transparent steering layer that
-coding harnesses can discover in the repository: `AGENTS.md` for generic agent
-guidance and Codex-style clients, `CLAUDE.md` for Claude Code, plus
-`WORKFLOW.md` and backlog templates. Hosts without a verified local
+By default `bootstrap <host>` only wires the MCP server into the selected host.
+Add `--init-project` when you also want the repository guidance files created.
+Use host-only bootstrap for already initialized repositories or when you only
+want to update MCP client configuration. Hosts without a verified local
 instruction-file convention are steered through MCP server instructions,
 resources, prompts, and tool descriptions.
 
@@ -112,11 +123,13 @@ Claude uses the same stdio command shape:
 
 After configuring the client, ask the MCP host to:
 
-1. Call `init_project`.
-2. Call `doctor_snapshot`.
-3. Call `inspect_status`.
-4. Call `storage_capability_probe`.
-5. Draft or import backlog work, then call `validate_backlog`.
+1. Call `doctor_snapshot`.
+2. Call `inspect_status`.
+3. Call `storage_capability_probe`.
+4. Draft or import backlog work, then call `validate_backlog`.
+
+If you did not use `--init-project`, first ask the host to call
+`init_project`.
 
 These tools should return structured JSON envelopes with `status`, `summary`,
 and `next_action` when recovery guidance is needed.

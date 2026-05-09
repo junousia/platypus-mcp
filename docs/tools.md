@@ -35,8 +35,9 @@ deterministic and references the current public tool names.
 
 ## Recommended Host Flow
 
-1. Bootstrap and inspect: `init_project`, `doctor_snapshot`,
-   `inspect_status`, `inspect_workflow_config`.
+1. Bootstrap and inspect: `platypus-mcp bootstrap <host> --init-project` for
+   fresh projects, or `init_project`, `doctor_snapshot`, `inspect_status`,
+   `inspect_workflow_config` from an MCP host.
 2. Shape backlog: `draft_backlog_items`, `draft_external_backlog_items`,
    `import_github_issues`, `create_backlog_item`, `validate_backlog`,
    `list_backlog`.
@@ -72,7 +73,8 @@ flowchart LR
 ### Project And Configuration
 
 - `ping`: health check.
-- `init_project`: create missing project scaffold files.
+- `init_project`: create missing project scaffold files. Fresh CLI bootstrap
+  can also run this through `bootstrap <host> --init-project`.
 - `doctor_snapshot`: inspect setup issues and recovery guidance.
 - `inspect_status` / `project_status`: inspect project shape and runnable work.
 - `inspect_workflow_config`: inspect effective workflow integration defaults.
