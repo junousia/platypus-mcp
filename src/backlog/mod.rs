@@ -13,7 +13,7 @@ pub use draft::draft_backlog_items;
 pub use plan::{
     draft_task_plan, inspect_task_plan, list_task_plans, validate_task_plan, write_task_plan,
 };
-pub use status::{inspect_status, list_backlog};
+pub use status::{inspect_backlog_inventory, inspect_status, list_backlog};
 pub use validate::validate_backlog;
 
 pub(crate) use closure::closed_item_ids;
@@ -172,6 +172,72 @@ mod tests {
 
         assert_eq!(data.candidates.len(), 1);
         assert_eq!(data.candidates[0].item_id, "PROJ-002");
+    }
+
+    #[test]
+    fn backlog_inventory_explains_closed_and_blocked_items() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "First task", "P1", &[]);
+        write_item(temp.path(), "PROJ-002", "Second task", "P1", &["PROJ-001"]);
+        write_item(temp.path(), "PROJ-003", "Third task", "P2", &["PROJ-002"]);
+        git(temp.path(), &["init"]);
+        git(temp.path(), &["config", "user.name", "Platypus Test"]);
+        git(
+            temp.path(),
+            &["config", "user.email", "platypus@example.invalid"],
+        );
+        git(temp.path(), &["add", "--all"]);
+        git(
+            temp.path(),
+            &[
+                "commit",
+                "-m",
+                "Complete first task",
+                "-m",
+                "Platypus-Closes: PROJ-001",
+                "-m",
+                "Platypus-Verification: make check",
+            ],
+        );
+
+        let inventory =
+            inspect_backlog_inventory(temp.path(), Some(root_arg(temp.path()).as_str()), Some(10));
+        let data = inventory.data.expect("inventory data");
+
+        assert_eq!(data.total, 3);
+        assert_eq!(data.returned, 3);
+        assert!(!data.truncated);
+        assert_eq!(data.closed, 1);
+        assert_eq!(data.runnable, 1);
+        assert_eq!(data.blocked, 1);
+        assert_eq!(data.items[0].item_id, "PROJ-002");
+        let closed = data
+            .items
+            .iter()
+            .find(|item| item.item_id == "PROJ-001")
+            .expect("closed item");
+        assert!(closed.closed);
+        assert!(closed.reason.contains("Platypus-Closes"));
+        let runnable = data
+            .items
+            .iter()
+            .find(|item| item.item_id == "PROJ-002")
+            .expect("runnable item");
+        assert!(runnable.runnable);
+        let blocked = data
+            .items
+            .iter()
+            .find(|item| item.item_id == "PROJ-003")
+            .expect("blocked item");
+        assert_eq!(blocked.open_dependencies, vec!["PROJ-002"]);
+        assert!(blocked.reason.contains("PROJ-002"));
+
+        let limited =
+            inspect_backlog_inventory(temp.path(), Some(root_arg(temp.path()).as_str()), Some(2));
+        let limited = limited.data.expect("limited inventory data");
+        assert_eq!(limited.total, 3);
+        assert_eq!(limited.returned, 2);
+        assert!(limited.truncated);
     }
 
     #[test]

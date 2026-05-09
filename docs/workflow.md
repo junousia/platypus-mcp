@@ -68,7 +68,10 @@ mechanism is verified.
 2. Persist selected work with `create_backlog_item`.
 3. Run `validate_backlog`.
 4. Use `list_backlog` to see runnable candidates.
-5. Use `inspect_work_queue` to combine runnable candidates, task-plan state,
+5. Use `inspect_backlog_inventory` when the runnable queue is empty or unclear;
+   it explains closed items from Git trailers and blocked items from open
+   dependencies without requiring hosts to read markdown directly.
+6. Use `inspect_work_queue` to combine runnable candidates, task-plan state,
    and the recommended next tool.
 
 Backlog files should contain goal, implementation contract, acceptance

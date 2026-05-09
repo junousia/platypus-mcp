@@ -118,6 +118,11 @@ make smoke-storage
 - `create_backlog_item`: write one structured backlog item.
 - `validate_backlog`: validate backlog item and epic files.
 - `list_backlog`: list runnable backlog candidates.
+- `inspect_backlog_inventory`: inspect all backlog items with runnable,
+  blocked, and Git-trailer closure reasons. Use this when `list_backlog` says
+  no work is runnable but the host needs to explain whether items are closed,
+  dependency-blocked, or ready. Without `limit`, the tool returns the full
+  inventory; limited calls include `returned` and `truncated` fields.
 
 Backlog item frontmatter may include provider-neutral `external_refs`. Use them
 to preserve where work came from or where results should be reported without

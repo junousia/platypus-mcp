@@ -756,6 +756,35 @@ pub struct BacklogListData {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
+pub struct BacklogInventoryData {
+    pub root: String,
+    pub items: Vec<BacklogInventoryItem>,
+    pub total: usize,
+    pub returned: usize,
+    pub truncated: bool,
+    pub runnable: usize,
+    pub closed: usize,
+    pub blocked: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct BacklogInventoryItem {
+    pub item_id: String,
+    pub title: String,
+    pub priority: String,
+    #[serde(rename = "type")]
+    pub item_type: String,
+    pub area: String,
+    pub suggested_worker: Option<String>,
+    pub owned_surfaces: Vec<String>,
+    pub depends_on: Vec<String>,
+    pub open_dependencies: Vec<String>,
+    pub closed: bool,
+    pub runnable: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct BacklogValidationData {
     pub root: String,
     pub ok: bool,

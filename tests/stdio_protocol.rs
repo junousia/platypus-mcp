@@ -455,6 +455,87 @@ async fn stdio_server_inspects_workflow_config() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn stdio_server_inspects_backlog_inventory() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    git(project.path(), &["init"]);
+    git(project.path(), &["config", "user.name", "Platypus Test"]);
+    git(
+        project.path(),
+        &["config", "user.email", "platypus@example.invalid"],
+    );
+    fs::write(project.path().join("platy.yaml"), "project: test\n")?;
+    fs::create_dir_all(project.path().join("backlog/items"))?;
+    fs::create_dir_all(project.path().join("backlog/epics"))?;
+    fs::write(
+        project.path().join("backlog/epics/general.md"),
+        r#"---
+id: general
+title: General
+status: active
+priority: P1
+area: general
+---
+
+# General
+"#,
+    )?;
+    write_backlog_item(project.path(), "PROJ-001", "First item", &[])?;
+    write_backlog_item(project.path(), "PROJ-002", "Second item", &["PROJ-001"])?;
+    write_backlog_item(project.path(), "PROJ-003", "Third item", &["PROJ-002"])?;
+    git(project.path(), &["add", "--all"]);
+    git(
+        project.path(),
+        &[
+            "commit",
+            "-m",
+            "Complete first item",
+            "-m",
+            "Platypus-Closes: PROJ-001",
+            "-m",
+            "Platypus-Verification: make check",
+        ],
+    );
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let result = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "inspect_backlog_inventory".into(),
+            arguments: Some(json_args(json!({ "limit": 10 }))),
+            task: None,
+        })
+        .await?;
+    let response = result.structured_content.expect("inventory content");
+
+    assert_eq!(response["action"], "inspect_backlog_inventory");
+    assert_eq!(response["status"], "completed");
+    assert_eq!(response["data"]["total"], 3);
+    assert_eq!(response["data"]["returned"], 3);
+    assert_eq!(response["data"]["truncated"], false);
+    assert_eq!(response["data"]["closed"], 1);
+    assert_eq!(response["data"]["runnable"], 1);
+    assert_eq!(response["data"]["blocked"], 1);
+    let items = response["data"]["items"].as_array().expect("items");
+    let closed = items
+        .iter()
+        .find(|item| item["item_id"] == "PROJ-001")
+        .expect("closed item");
+    assert_eq!(closed["closed"], true);
+    assert!(closed["reason"]
+        .as_str()
+        .expect("closed reason")
+        .contains("Platypus-Closes"));
+    let blocked = items
+        .iter()
+        .find(|item| item["item_id"] == "PROJ-003")
+        .expect("blocked item");
+    assert_eq!(blocked["open_dependencies"][0], "PROJ-002");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_initializes_project_scaffold() -> anyhow::Result<()> {
     let project = TempDir::new()?;
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
@@ -2065,6 +2146,58 @@ fn project_fixture() -> TempDir {
     fs::create_dir_all(temp.path().join("backlog/epics")).expect("epics dir");
     fs::write(temp.path().join("backlog/items/PROJ-001.md"), "# item\n").expect("item");
     temp
+}
+
+fn write_backlog_item(
+    root: &std::path::Path,
+    id: &str,
+    title: &str,
+    depends_on: &[&str],
+) -> anyhow::Result<()> {
+    let depends = if depends_on.is_empty() {
+        "[]".to_string()
+    } else {
+        format!(
+            "\n{}",
+            depends_on
+                .iter()
+                .map(|dependency| format!("  - {}", dependency))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+    fs::write(
+        root.join(format!("backlog/items/{id}.md")),
+        format!(
+            r#"---
+id: {id}
+title: {title}
+priority: P1
+type: feature
+area: general
+epic: general
+depends_on: {depends}
+suggested_worker: coder
+owned_surfaces: []
+---
+
+# {id} {title}
+
+## Goal
+
+Goal.
+
+## Implementation Contract
+
+Contract.
+
+## Acceptance
+
+- Done.
+"#
+        ),
+    )?;
+    Ok(())
 }
 
 fn dispatch_project_fixture() -> TempDir {
