@@ -33,6 +33,14 @@ pub struct ClassifyPlanningNeedsParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ClassifyWorkflowFitParams {
+    pub root: Option<String>,
+    pub goal: String,
+    #[serde(default)]
+    pub owned_surfaces: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct InitProjectParams {
     pub root: Option<String>,
     pub project_name: Option<String>,
@@ -689,6 +697,17 @@ pub struct PlanningClassificationData {
     pub root: String,
     pub classifications: Vec<PlanningClassification>,
     pub returned: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkflowFitData {
+    pub root: String,
+    pub recommended_mode: String,
+    pub summary: String,
+    pub reasons: Vec<String>,
+    pub next_action: String,
+    pub backlog_items: usize,
+    pub runnable_backlog_items: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

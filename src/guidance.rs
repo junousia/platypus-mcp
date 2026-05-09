@@ -3,14 +3,14 @@ use crate::{
     git_readiness::inspect_git_readiness,
     models::{
         ActionResult, ActionStatus, BacklogCandidate, BacklogListData, ClassifyPlanningNeedsParams,
-        InspectWorkQueueParams, NextSafeActionData, NextSafeActionParams, PlanningClassification,
-        PlanningClassificationData, TaskPlanQueryParams, WorkQueueData, WorkQueueItem,
-        WorkQueuePlanState,
+        ClassifyWorkflowFitParams, InspectWorkQueueParams, NextSafeActionData,
+        NextSafeActionParams, PlanningClassification, PlanningClassificationData,
+        TaskPlanQueryParams, WorkQueueData, WorkQueueItem, WorkQueuePlanState, WorkflowFitData,
     },
     state::{sqlite::SqliteProjectState, NextSafeActionQuery, ProjectState},
 };
 use serde_json::Value;
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
 pub fn next_safe_action(
     default_root: &Path,
@@ -191,6 +191,147 @@ pub fn classify_planning_needs(
     )
 }
 
+pub fn classify_workflow_fit(
+    default_root: &Path,
+    params: ClassifyWorkflowFitParams,
+) -> ActionResult<WorkflowFitData> {
+    let action = "classify_workflow_fit";
+    let root = match crate::project::paths::resolve_root(default_root, params.root.as_deref()) {
+        Ok(root) => root,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not classify workflow fit.",
+                error.to_string(),
+            )
+        }
+    };
+    let goal = params.goal.trim();
+    if goal.is_empty() {
+        return ActionResult::failed(
+            action,
+            "Could not classify workflow fit.",
+            "goal is required",
+        );
+    }
+
+    let inventory =
+        backlog::inspect_backlog_inventory(&root, Some(root.to_string_lossy().as_ref()), None);
+    let (backlog_items, runnable_backlog_items) = match inventory {
+        ActionResult {
+            data: Some(data),
+            status: ActionStatus::Completed,
+            ..
+        } => (data.total, data.runnable),
+        _ => (0, 0),
+    };
+    let meaningful_files = meaningful_project_entries(&root);
+    let goal_lower = goal.to_ascii_lowercase();
+    let owned_surfaces = params
+        .owned_surfaces
+        .iter()
+        .map(|surface| surface.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let touches_high_risk_surface = high_risk_surface(&owned_surfaces);
+    let scaffold_score = keyword_score(
+        &goal_lower,
+        &[
+            "scaffold",
+            "starter",
+            "new project",
+            "new app",
+            "simple webapp",
+            "simple web app",
+            "hello world",
+            "vite",
+            "create react",
+            "fastapi/react",
+            "fastapi react",
+            "bootstrap",
+            "minimal app",
+        ],
+    );
+    let structured_score = keyword_score(
+        &goal_lower,
+        &[
+            "backlog",
+            "roadmap",
+            "traceability",
+            "evidence",
+            "worker",
+            "approval",
+            "security",
+            "migration",
+            "refactor",
+            "production",
+            "ci",
+            "integration",
+            "multi-step",
+            "multiple",
+        ],
+    ) + owned_surfaces.len();
+
+    let mut reasons = Vec::new();
+    if scaffold_score > 0 {
+        reasons.push("goal looks like initial scaffolding or starter-app creation".to_string());
+    }
+    if structured_score > 0 {
+        reasons.push("goal asks for structured, multi-step, or traceable work".to_string());
+    }
+    if touches_high_risk_surface {
+        reasons.push("goal touches high-risk lifecycle or persistence surfaces".to_string());
+    }
+    if backlog_items > 0 {
+        reasons.push(format!("{backlog_items} backlog item(s) already exist"));
+    }
+    if meaningful_files <= 2 {
+        reasons.push("project root has little existing product surface".to_string());
+    } else {
+        reasons.push(format!(
+            "project root already has {meaningful_files} meaningful top-level entries"
+        ));
+    }
+
+    let recommended_mode =
+        if backlog_items > 0 || structured_score >= 2 || touches_high_risk_surface {
+            "platypus_workflow"
+        } else if scaffold_score > 0 && meaningful_files <= 2 {
+            "direct_scaffold"
+        } else if scaffold_score > 0 {
+            "hybrid"
+        } else {
+            "platypus_workflow"
+        };
+    let (summary, next_action) = match recommended_mode {
+        "direct_scaffold" => (
+            "Direct scaffold is the best first step.".to_string(),
+            "Use the host's native scaffold command first, then run Platypus initialization/bootstrap and create backlog items for follow-up work.".to_string(),
+        ),
+        "hybrid" => (
+            "Use a hybrid flow: direct scaffold for the first files, then Platypus for follow-up work.".to_string(),
+            "Create the scaffold directly, commit it, then use Platypus backlog and task tools for the next implementation slices.".to_string(),
+        ),
+        _ => (
+            "Use the full Platypus workflow.".to_string(),
+            "Create or inspect backlog items, classify planning needs, validate task plans when required, then dispatch through worktrees.".to_string(),
+        ),
+    };
+
+    ActionResult::completed(
+        action,
+        summary.clone(),
+        WorkflowFitData {
+            root: root.display().to_string(),
+            recommended_mode: recommended_mode.to_string(),
+            summary,
+            reasons,
+            next_action,
+            backlog_items,
+            runnable_backlog_items,
+        },
+    )
+}
+
 fn work_queue_item(
     default_root: &Path,
     root: &str,
@@ -228,6 +369,29 @@ fn work_queue_item(
         recommended_tool,
         reason,
     }
+}
+
+fn keyword_score(text: &str, keywords: &[&str]) -> usize {
+    keywords
+        .iter()
+        .filter(|keyword| text.contains(**keyword))
+        .count()
+}
+
+fn meaningful_project_entries(root: &Path) -> usize {
+    fs::read_dir(root)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            !matches!(
+                name.as_ref(),
+                ".git" | ".platy" | "target" | "node_modules" | ".DS_Store"
+            )
+        })
+        .count()
 }
 
 fn classify_candidate(candidate: &BacklogCandidate) -> PlanningClassification {
@@ -614,6 +778,87 @@ mod tests {
             data.classifications[0].required_artifact.as_deref(),
             Some("backlog/plans/PROJ-001.yaml")
         );
+    }
+
+    #[test]
+    fn classifies_workflow_fit_for_greenfield_scaffold() {
+        let project = TempDir::new().expect("temp dir");
+
+        let result = classify_workflow_fit(
+            project.path(),
+            ClassifyWorkflowFitParams {
+                root: None,
+                goal: "Create a simple FastAPI React web app scaffold".to_string(),
+                owned_surfaces: Vec::new(),
+            },
+        );
+        let data = result.data.expect("workflow fit");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert_eq!(data.recommended_mode, "direct_scaffold");
+        assert!(data.next_action.contains("native scaffold command"));
+    }
+
+    #[test]
+    fn classifies_workflow_fit_for_existing_traceable_work() {
+        let project = backlog_project();
+        write_item(project.path(), "PROJ-001", "First item");
+
+        let result = classify_workflow_fit(
+            project.path(),
+            ClassifyWorkflowFitParams {
+                root: None,
+                goal: "Implement the next roadmap item with evidence and CI validation".to_string(),
+                owned_surfaces: vec!["src/server.rs".to_string(), "src/guidance.rs".to_string()],
+            },
+        );
+        let data = result.data.expect("workflow fit");
+
+        assert_eq!(data.recommended_mode, "platypus_workflow");
+        assert_eq!(data.backlog_items, 1);
+        assert!(data.next_action.contains("dispatch through worktrees"));
+    }
+
+    #[test]
+    fn classifies_workflow_fit_high_risk_surface_as_platypus_workflow() {
+        let project = TempDir::new().expect("temp dir");
+
+        let result = classify_workflow_fit(
+            project.path(),
+            ClassifyWorkflowFitParams {
+                root: None,
+                goal: "Scaffold approval handling".to_string(),
+                owned_surfaces: vec!["src/approvals.rs".to_string()],
+            },
+        );
+        let data = result.data.expect("workflow fit");
+
+        assert_eq!(data.recommended_mode, "platypus_workflow");
+        assert!(data
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("high-risk")));
+    }
+
+    #[test]
+    fn classifies_workflow_fit_for_hybrid_scaffold_in_existing_project() {
+        let project = TempDir::new().expect("temp dir");
+        fs::write(project.path().join("README.md"), "# Existing\n").expect("readme");
+        fs::write(project.path().join("package.json"), "{}\n").expect("package");
+        fs::write(project.path().join("src.txt"), "src\n").expect("src");
+
+        let result = classify_workflow_fit(
+            project.path(),
+            ClassifyWorkflowFitParams {
+                root: None,
+                goal: "Add a Vite starter UI".to_string(),
+                owned_surfaces: Vec::new(),
+            },
+        );
+        let data = result.data.expect("workflow fit");
+
+        assert_eq!(data.recommended_mode, "hybrid");
+        assert!(data.next_action.contains("commit it"));
     }
 
     #[test]

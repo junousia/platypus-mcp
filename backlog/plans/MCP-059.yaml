@@ -1,0 +1,61 @@
+item_id: MCP-059
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Hosts can classify a user goal as direct scaffold, Platypus workflow, or hybrid before forcing backlog ceremony.
+- id: R2
+  text: Classification output is deterministic, transparent, and includes concrete next action guidance.
+- id: R3
+  text: Documentation and host guidance describe when to scaffold directly and when to use full Platypus structure.
+design:
+  summary: Add a small MCP tool backed by conservative heuristics over the requested goal and local project state. The tool only advises; it does not execute scaffold commands, mutate project state, or replace backlog/task validation.
+  owned_surfaces:
+  - src/guidance.rs
+  - src/models.rs
+  - src/server.rs
+  - src/host_guidance.rs
+  - docs/workflow.md
+  - docs/tools.md
+  - tests
+  notes: Keep the first version simple and explainable so hosts can override it with user intent.
+tasks:
+- id: MCP-059-T01
+  title: Add workflow-fit classifier tool
+  goal: Implement typed params/data, deterministic classification, MCP registration, and tests.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/guidance.rs
+  - src/models.rs
+  - src/server.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test guidance::tests::classifies_workflow_fit
+  - cargo test server::tests::tool_router_exposes_basic_tool_set
+  acceptance:
+  - Greenfield scaffold goals classify as direct_scaffold or hybrid.
+  - Existing structured project or traceability-heavy goals classify as platypus_workflow.
+  - Output includes reasons and next action.
+  notes: null
+- id: MCP-059-T02
+  title: Document workflow-fit guidance
+  goal: Teach hosts when to use direct scaffolding before entering Platypus workflow.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-059-T01
+  owned_surfaces:
+  - src/host_guidance.rs
+  - docs/workflow.md
+  - docs/tools.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Host guidance references the classifier.
+  - Docs distinguish quick scaffolding from sustained controlled development.
+  notes: null

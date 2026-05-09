@@ -209,6 +209,8 @@ trailers.
 ### Task And Workspace Lifecycle
 
 - `next_safe_action`: recommend the next safe tool call and parameters.
+- `classify_workflow_fit`: classify broad user goals as `direct_scaffold`,
+  `platypus_workflow`, or `hybrid` before forcing backlog ceremony.
 - `inspect_work_queue`: inspect runnable backlog candidates with task-plan
   state and a recommended next tool.
 - `classify_planning_needs`: classify runnable items as `direct`, `standard`,
