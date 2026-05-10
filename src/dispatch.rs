@@ -11,7 +11,7 @@ use crate::{
         ProjectStateError, TaskSnapshot,
     },
 };
-use std::{path::Path, process::Command};
+use std::{collections::BTreeSet, path::Path, process::Command};
 
 pub fn dispatch_next_work(
     default_root: &Path,
@@ -78,8 +78,9 @@ pub fn dispatch_ready_work(
     };
     let root = state.root().display().to_string();
     let requested = params.max_tasks.unwrap_or(10).clamp(1, 10);
+    let active_source_items = active_source_item_ids(state.root());
     if params.dry_run.unwrap_or(false) {
-        let listed = backlog::list_backlog(default_root, Some(root.as_str()), Some(requested));
+        let listed = backlog::list_backlog(default_root, Some(root.as_str()), Some(100));
         let candidates = match listed {
             ActionResult {
                 status: ActionStatus::Completed | ActionStatus::Skipped,
@@ -94,7 +95,11 @@ pub fn dispatch_ready_work(
                 )
             }
         };
-        let candidates = filter_candidates_for_dispatch(candidates, params.item_id.as_deref());
+        let candidates = filter_candidates_for_dispatch(
+            candidates,
+            params.item_id.as_deref(),
+            &active_source_items,
+        );
         let selected = candidates.into_iter().take(requested).collect::<Vec<_>>();
         let items = selected
             .iter()
@@ -148,7 +153,12 @@ pub fn dispatch_ready_work(
         backlog::list_backlog(default_root, params.root.as_deref(), Some(100))
             .data
             .map(|data| {
-                filter_candidates_for_dispatch(data.candidates, params.item_id.as_deref()).len()
+                filter_candidates_for_dispatch(
+                    data.candidates,
+                    params.item_id.as_deref(),
+                    &active_source_items,
+                )
+                .len()
             })
             .unwrap_or(0);
     let requested = params
@@ -569,13 +579,23 @@ fn state_error<T: schemars::JsonSchema + serde::Serialize>(
 fn filter_candidates_for_dispatch(
     candidates: Vec<BacklogCandidate>,
     item_id: Option<&str>,
+    active_source_items: &BTreeSet<String>,
 ) -> Vec<BacklogCandidate> {
-    match item_id {
-        Some(item_id) => candidates
-            .into_iter()
-            .filter(|candidate| candidate.item_id == item_id)
-            .collect(),
-        None => candidates,
+    candidates
+        .into_iter()
+        .filter(|candidate| item_id.is_none_or(|item_id| candidate.item_id == item_id))
+        .filter(|candidate| !active_source_items.contains(&candidate.item_id))
+        .collect()
+}
+
+fn active_source_item_ids(root: &Path) -> BTreeSet<String> {
+    let storage = match crate::storage::connect_existing_read_only(root, None) {
+        Ok(Some(storage)) => storage,
+        Ok(None) | Err(_) => return BTreeSet::new(),
+    };
+    match storage.repository().tasks().active_source_items() {
+        Ok(items) => items.into_iter().collect(),
+        Err(_) => BTreeSet::new(),
     }
 }
 
@@ -715,6 +735,36 @@ mod tests {
         assert_eq!(data.dispatched, 1);
         assert_eq!(data.items[0].item_id, "PROJ-002");
         assert_eq!(data.items[0].status, "queued");
+    }
+
+    #[test]
+    fn dispatch_ready_work_dry_run_skips_active_items_like_real_dispatch() {
+        let project = backlog_project(true);
+        let first = dispatch_next_work(project.path(), RootParams { root: None });
+        assert!(matches!(first.status, ActionStatus::Completed));
+
+        let result = dispatch_ready_work(
+            project.path(),
+            DispatchReadyWorkParams {
+                root: None,
+                item_id: None,
+                max_tasks: Some(1),
+                worker: Some("coder".to_string()),
+                claimant: Some("tester".to_string()),
+                prepare_handoffs: Some(false),
+                auto_start: None,
+                auto_commit_artifacts: None,
+                dry_run: Some(true),
+                verification_command: Vec::new(),
+            },
+        );
+        let data = result.data.expect("dry-run data");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert_eq!(data.dispatched, 0);
+        assert_eq!(data.items.len(), 1);
+        assert_eq!(data.items[0].item_id, "PROJ-002");
+        assert_eq!(data.items[0].status, "preview");
     }
 
     #[test]
