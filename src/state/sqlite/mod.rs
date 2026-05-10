@@ -320,6 +320,20 @@ impl ProjectState for SqliteProjectState {
                 )));
             }
         };
+        if let Err(error) = crate::assignments::ensure_owned_surface_dirs_for(
+            &worktree.path,
+            &bundle.owned_surfaces,
+        ) {
+            self.record_handoff_failure(
+                &task.id,
+                claimant.as_str(),
+                "preparing owned-surface directories",
+                &error,
+            );
+            return Err(ProjectStateError::backend(format!(
+                "owned-surface preparation failed: {error}"
+            )));
+        }
         let storage = self.connect_storage().inspect_err(|error| {
             self.record_handoff_failure(
                 &task.id,

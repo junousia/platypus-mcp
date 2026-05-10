@@ -677,7 +677,7 @@ Edit only the assigned owned surface.
         project.path(),
         PrepareWorkerAssignmentParams {
             root: None,
-            task_id: Some(task.id),
+            task_id: Some(task.id.clone()),
             worker: Some("coder".to_string()),
             claimant: Some("parent-agent".to_string()),
             base_ref: None,
@@ -692,6 +692,8 @@ Edit only the assigned owned surface.
         .unwrap_or_default()
         .contains("escapes the assignment worktree"));
     assert!(!outside.path().join("generated").exists());
+    let task = tasks::get_task_by_id(project.path(), None, &task.id).expect("task after failure");
+    assert_eq!(task.status, "queued");
 }
 
 #[test]

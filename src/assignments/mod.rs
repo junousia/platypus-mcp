@@ -74,13 +74,6 @@ pub fn prepare_worker_assignment(
         },
         Ok(snapshot) => {
             let assignment = worker_assignment(snapshot);
-            if let Err(error) = ensure_owned_surface_dirs(&assignment) {
-                return ActionResult::failed(
-                    action,
-                    "Could not prepare owned-surface directories.",
-                    error,
-                );
-            }
             ActionResult::completed(
                 action,
                 format!("Prepared worker assignment `{}`.", assignment.id),
@@ -109,15 +102,18 @@ pub fn prepare_worker_assignment(
     }
 }
 
-fn ensure_owned_surface_dirs(assignment: &WorkerAssignment) -> Result<(), String> {
-    let worktree = Path::new(&assignment.worktree_path);
+pub(crate) fn ensure_owned_surface_dirs_for(
+    worktree_path: &str,
+    owned_surfaces: &[String],
+) -> Result<(), String> {
+    let worktree = Path::new(worktree_path);
     let canonical_worktree = fs::canonicalize(worktree).map_err(|error| {
         format!(
             "could not resolve assignment worktree `{}`: {error}",
             worktree.display()
         )
     })?;
-    for surface in &assignment.bundle.owned_surfaces {
+    for surface in owned_surfaces {
         let Some(create_target) = owned_surface_create_target(worktree, surface)? else {
             continue;
         };
