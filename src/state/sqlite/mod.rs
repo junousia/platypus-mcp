@@ -162,6 +162,12 @@ impl ProjectState for SqliteProjectState {
                     .as_deref()
                     .is_none_or(|worker| candidate.suggested_worker.as_deref() == Some(worker))
             })
+            .filter(|candidate| {
+                command
+                    .source_item_id
+                    .as_deref()
+                    .is_none_or(|item_id| candidate.item_id == item_id)
+            })
             .collect::<Vec<_>>();
         if candidates.is_empty() {
             return Err(ProjectStateError::not_found(
@@ -2037,6 +2043,7 @@ mod tests {
             .dispatch_work(DispatchWorkCommand {
                 summary: None,
                 preferred_worker: None,
+                source_item_id: None,
             })
             .expect("first dispatch");
         assert_eq!(first.task.source_item_id, "PROJ-001");
@@ -2045,6 +2052,7 @@ mod tests {
             .dispatch_work(DispatchWorkCommand {
                 summary: None,
                 preferred_worker: None,
+                source_item_id: None,
             })
             .expect_err("all active items should be skipped");
 

@@ -702,18 +702,20 @@ pub fn run_task_verification(
         },
     );
 
-    let _ = evidence::record_verification_evidence(
-        default_root,
-        RecordVerificationEvidenceParams {
-            root: Some(state.root().display().to_string()),
-            id: None,
-            source_item_id: Some(task.source_item_id),
-            source_task_id: Some(task.id.clone()),
-            summary: event_summary,
-            refs: vec![format!("assignment:{}", snapshot.id)],
-            metadata: std::collections::BTreeMap::new(),
-        },
-    );
+    if status == "passed" {
+        let _ = evidence::record_verification_evidence(
+            default_root,
+            RecordVerificationEvidenceParams {
+                root: Some(state.root().display().to_string()),
+                id: None,
+                source_item_id: Some(task.source_item_id),
+                source_task_id: Some(task.id.clone()),
+                summary: event_summary,
+                refs: vec![format!("assignment:{}", snapshot.id)],
+                metadata: std::collections::BTreeMap::new(),
+            },
+        );
+    }
 
     let mut result = ActionResult::completed(
         action,

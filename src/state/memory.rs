@@ -146,9 +146,14 @@ impl ProjectState for MemoryProjectState {
             )));
         }
         let item_id = command
-            .preferred_worker
-            .as_deref()
-            .map(|worker| format!("MEM-{worker}"))
+            .source_item_id
+            .clone()
+            .or_else(|| {
+                command
+                    .preferred_worker
+                    .as_deref()
+                    .map(|worker| format!("MEM-{worker}"))
+            })
             .unwrap_or_else(|| "MEM-001".to_string());
         if inner.tasks.values().any(|task| {
             task.source_item_id == item_id

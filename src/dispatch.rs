@@ -28,6 +28,7 @@ pub fn dispatch_next_work(
     match state.dispatch_work(DispatchWorkCommand {
         summary: None,
         preferred_worker: None,
+        source_item_id: None,
     }) {
         Ok(outcome) => {
             let task = task_record(outcome.task);
@@ -93,6 +94,7 @@ pub fn dispatch_ready_work(
                 )
             }
         };
+        let candidates = filter_candidates_for_dispatch(candidates, params.item_id.as_deref());
         let selected = candidates.into_iter().take(requested).collect::<Vec<_>>();
         let items = selected
             .iter()
@@ -145,7 +147,9 @@ pub fn dispatch_ready_work(
     let available_before_dispatch =
         backlog::list_backlog(default_root, params.root.as_deref(), Some(100))
             .data
-            .map(|data| data.candidates.len())
+            .map(|data| {
+                filter_candidates_for_dispatch(data.candidates, params.item_id.as_deref()).len()
+            })
             .unwrap_or(0);
     let requested = params
         .max_tasks
@@ -175,6 +179,7 @@ pub fn dispatch_ready_work(
         let outcome = match state.dispatch_work(DispatchWorkCommand {
             summary: None,
             preferred_worker: params.worker.clone(),
+            source_item_id: params.item_id.clone(),
         }) {
             Ok(outcome) => outcome,
             Err(ProjectStateError::NotFound { .. }) => {
@@ -561,6 +566,19 @@ fn state_error<T: schemars::JsonSchema + serde::Serialize>(
     ActionResult::failed(action, summary, error.to_string())
 }
 
+fn filter_candidates_for_dispatch(
+    candidates: Vec<BacklogCandidate>,
+    item_id: Option<&str>,
+) -> Vec<BacklogCandidate> {
+    match item_id {
+        Some(item_id) => candidates
+            .into_iter()
+            .filter(|candidate| candidate.item_id == item_id)
+            .collect(),
+        None => candidates,
+    }
+}
+
 fn backlog_candidate(candidate: BacklogCandidateSnapshot) -> BacklogCandidate {
     BacklogCandidate {
         source: candidate.source,
@@ -640,6 +658,7 @@ mod tests {
             project.path(),
             DispatchReadyWorkParams {
                 root: None,
+                item_id: None,
                 max_tasks: Some(2),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
@@ -680,6 +699,7 @@ mod tests {
             project.path(),
             DispatchReadyWorkParams {
                 root: None,
+                item_id: None,
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
@@ -695,6 +715,36 @@ mod tests {
         assert_eq!(data.dispatched, 1);
         assert_eq!(data.items[0].item_id, "PROJ-002");
         assert_eq!(data.items[0].status, "queued");
+    }
+
+    #[test]
+    fn dispatch_ready_work_can_target_specific_item() {
+        let project = backlog_project(true);
+
+        let result = dispatch_ready_work(
+            project.path(),
+            DispatchReadyWorkParams {
+                root: None,
+                item_id: Some("PROJ-002".to_string()),
+                max_tasks: Some(1),
+                worker: Some("coder".to_string()),
+                claimant: Some("tester".to_string()),
+                prepare_handoffs: Some(false),
+                auto_start: None,
+                auto_commit_artifacts: None,
+                dry_run: None,
+                verification_command: Vec::new(),
+            },
+        );
+        let data = result.data.expect("batch data");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert_eq!(data.dispatched, 1);
+        assert_eq!(data.items[0].item_id, "PROJ-002");
+        assert_eq!(
+            data.items[0].task.as_ref().unwrap().source_item_id,
+            "PROJ-002"
+        );
     }
 
     #[test]
@@ -722,6 +772,7 @@ mod tests {
             project.path(),
             DispatchReadyWorkParams {
                 root: None,
+                item_id: None,
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
@@ -750,6 +801,7 @@ mod tests {
             project.path(),
             DispatchReadyWorkParams {
                 root: None,
+                item_id: None,
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
@@ -778,6 +830,7 @@ mod tests {
             project.path(),
             DispatchReadyWorkParams {
                 root: None,
+                item_id: None,
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),

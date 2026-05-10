@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 pub struct DispatchWorkCommand {
     pub summary: Option<String>,
     pub preferred_worker: Option<String>,
+    pub source_item_id: Option<String>,
 }
 
 /// Command to prepare a worker handoff for a queued or claimed task.

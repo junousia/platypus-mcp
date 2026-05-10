@@ -281,6 +281,10 @@ pub fn start_goal_work(
     let mut dispatched_tasks = Vec::new();
     let mut dispatched_assignment_ids = Vec::new();
     let mut blocked_items = Vec::new();
+    let target_item_id = created_items
+        .first()
+        .map(|item| item.item_id.clone())
+        .or_else(|| reused_item_id.clone());
     if effective_dispatch_requested {
         if let Some(worker_warning) =
             dispatch_agent_profile_warning(default_root, params.root.as_deref(), &fit.root)
@@ -306,6 +310,7 @@ pub fn start_goal_work(
             default_root,
             DispatchReadyWorkParams {
                 root: params.root.clone(),
+                item_id: target_item_id.clone(),
                 max_tasks: params.max_tasks.or(Some(1)),
                 worker: params.suggested_worker.clone(),
                 claimant: Some("start_goal_work".to_string()),
@@ -371,10 +376,7 @@ pub fn start_goal_work(
         root: fit.root,
         recommended_mode: recommended_mode.clone(),
         summary: fit.summary,
-        created_item_id: created_items
-            .first()
-            .map(|item| item.item_id.clone())
-            .or(reused_item_id),
+        created_item_id: target_item_id,
         created_items,
         created_plans: Vec::new(),
         dispatched_tasks,
@@ -839,6 +841,61 @@ mod tests {
         assert!(data.created_plans.is_empty());
         assert_eq!(data.dispatched_tasks.len(), 1);
         assert!(data.next_action.contains("start_worker_task"));
+    }
+
+    #[test]
+    fn start_goal_work_dispatches_the_goal_tracking_item() {
+        let project = initialized_git_project();
+
+        let existing = start_goal_work(
+            project.path(),
+            StartGoalWorkParams {
+                root: None,
+                goal: "Refine unrelated documentation backlog".to_string(),
+                mode: Some("platypus_workflow".to_string()),
+                dispatch: Some(false),
+                prepare_handoffs: None,
+                auto_start: None,
+                auto_commit_artifacts: None,
+                also_track: Some(true),
+                scaffold_in_place: None,
+                max_tasks: None,
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: vec!["docs/".to_string()],
+                verification_command: Vec::new(),
+            },
+        );
+        assert_eq!(existing.status, ActionStatus::Completed);
+        git(project.path(), &["add", "backlog/items"]);
+        git(
+            project.path(),
+            &["commit", "-m", "Add unrelated backlog item"],
+        );
+
+        let result = start_goal_work(
+            project.path(),
+            StartGoalWorkParams {
+                root: None,
+                goal: "Implement the requested API slice".to_string(),
+                mode: Some("platypus_workflow".to_string()),
+                dispatch: Some(true),
+                prepare_handoffs: Some(false),
+                auto_start: Some(false),
+                auto_commit_artifacts: Some(true),
+                also_track: None,
+                scaffold_in_place: None,
+                max_tasks: Some(1),
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: vec!["src/api/".to_string()],
+                verification_command: Vec::new(),
+            },
+        );
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        let data = result.data.expect("goal data");
+        let created_item_id = data.created_item_id.expect("created item");
+        assert_eq!(data.dispatched_tasks.len(), 1);
+        assert_eq!(data.dispatched_tasks[0].item_id, created_item_id);
     }
 
     #[test]

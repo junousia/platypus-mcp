@@ -416,7 +416,7 @@ fn run_task_verification_executes_command_and_records_event() {
         project.path(),
         crate::models::InspectTaskEventsParams {
             root: None,
-            task_id: task.id,
+            task_id: task.id.clone(),
             limit: Some(50),
         },
     )
@@ -426,6 +426,19 @@ fn run_task_verification_executes_command_and_records_event() {
         .events
         .iter()
         .any(|event| event.event_type == "verification_run"));
+    let evidence = crate::evidence::list_evidence(
+        project.path(),
+        crate::models::ListEvidenceParams {
+            root: None,
+            source_item_id: None,
+            source_task_id: Some(task.id),
+            kind: Some("verification".to_string()),
+            limit: Some(10),
+        },
+    )
+    .data
+    .expect("evidence");
+    assert_eq!(evidence.evidence.len(), 1);
 }
 
 #[test]
@@ -470,6 +483,19 @@ fn run_task_verification_reports_actual_exit_code() {
     let data = verification.data.expect("verification data");
     assert_eq!(data.status, "failed");
     assert_eq!(data.exit_code, Some(2));
+    let evidence = crate::evidence::list_evidence(
+        project.path(),
+        crate::models::ListEvidenceParams {
+            root: None,
+            source_item_id: None,
+            source_task_id: Some(task.id),
+            kind: Some("verification".to_string()),
+            limit: Some(10),
+        },
+    )
+    .data
+    .expect("evidence");
+    assert!(evidence.evidence.is_empty());
 }
 
 #[test]

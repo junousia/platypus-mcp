@@ -40,6 +40,7 @@ fn exercise_lifecycle_contract(state: &impl ProjectState) {
         .dispatch_work(platypus_mcp::state::DispatchWorkCommand {
             summary: Some("contract dispatch".to_string()),
             preferred_worker: Some("coder".to_string()),
+            source_item_id: None,
         })
         .expect("dispatch");
     assert_eq!(dispatched.task.state, TaskLifecycleState::Queued);
@@ -106,6 +107,7 @@ fn exercise_evidence_findings_and_reconcile_contract(state: &impl ProjectState) 
         .dispatch_work(platypus_mcp::state::DispatchWorkCommand {
             summary: None,
             preferred_worker: Some("verifier".to_string()),
+            source_item_id: None,
         })
         .expect("dispatch");
     let assignment = state

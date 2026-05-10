@@ -207,6 +207,10 @@ pub enum FindingDispositionStatusSchema {
 pub struct DispatchReadyWorkParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
+    /// Restrict dispatch to this backlog item id instead of selecting from the
+    /// global runnable queue.
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    pub item_id: Option<String>,
     /// Maximum number of tasks to include or process.
     #[schemars(range(min = 1, max = 10))]
     pub max_tasks: Option<usize>,
