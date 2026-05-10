@@ -675,7 +675,7 @@ fn mode_next_action(mode: &str) -> String {
 mod tests {
     use super::*;
     use crate::models::InitProjectParams;
-    use std::process::Command;
+    use std::{fs, process::Command};
     use tempfile::TempDir;
 
     #[test]
@@ -848,6 +848,40 @@ mod tests {
         assert!(data.created_plans.is_empty());
         assert_eq!(data.dispatched_tasks.len(), 1);
         assert!(data.next_action.contains("start_worker_task"));
+    }
+
+    #[test]
+    fn start_goal_work_dispatches_after_auto_bootstrap_on_clean_git_repo() {
+        let project = git_project_without_platypus_scaffold();
+
+        let result = start_goal_work(
+            project.path(),
+            StartGoalWorkParams {
+                root: None,
+                goal: "Implement the first tracked API slice".to_string(),
+                mode: Some("platypus_workflow".to_string()),
+                dispatch: Some(true),
+                prepare_handoffs: Some(true),
+                auto_start: Some(false),
+                auto_commit_artifacts: None,
+                also_track: None,
+                scaffold_in_place: None,
+                max_tasks: Some(1),
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: vec!["src/api/".to_string()],
+                verification_command: Vec::new(),
+            },
+        );
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        let data = result.data.expect("goal data");
+        assert_eq!(data.created_items.len(), 1);
+        assert_eq!(data.dispatched_tasks.len(), 1);
+        assert!(data
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Project scaffold was initialized")));
+        assert_clean_git_status(project.path());
     }
 
     #[test]
@@ -1084,6 +1118,35 @@ mod tests {
         git(project.path(), &["add", "."]);
         git(project.path(), &["commit", "-m", "Initial project"]);
         project
+    }
+
+    fn git_project_without_platypus_scaffold() -> TempDir {
+        let project = TempDir::new().expect("temp dir");
+        git(project.path(), &["init"]);
+        git(project.path(), &["config", "user.name", "Platypus Test"]);
+        git(
+            project.path(),
+            &["config", "user.email", "platypus@example.invalid"],
+        );
+        fs::write(project.path().join("README.md"), "# Test\n").expect("readme");
+        git(project.path(), &["add", "README.md"]);
+        git(project.path(), &["commit", "-m", "Initial commit"]);
+        project
+    }
+
+    fn assert_clean_git_status(root: &Path) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["status", "--porcelain=v1", "--untracked-files=all"])
+            .output()
+            .expect("git status");
+        assert!(output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stdout).trim().is_empty(),
+            "workspace should be clean after start_goal_work dispatch: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
 
     fn git(root: &Path, args: &[&str]) {

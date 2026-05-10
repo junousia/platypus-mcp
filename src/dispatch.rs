@@ -100,6 +100,7 @@ pub fn dispatch_ready_work(
             params.item_id.as_deref(),
             &active_source_items,
         );
+        let available_before_dispatch = candidates.len();
         let selected = candidates.into_iter().take(requested).collect::<Vec<_>>();
         let items = selected
             .iter()
@@ -123,7 +124,7 @@ pub fn dispatch_ready_work(
             data: Some(DispatchReadyWorkData {
                 root,
                 requested,
-                available_before_dispatch: selected.len(),
+                available_before_dispatch,
                 selected: selected.len(),
                 dispatched: 0,
                 prepared: 0,
@@ -427,7 +428,7 @@ fn dispatch_readiness_result<T: schemars::JsonSchema + serde::Serialize>(
 ) -> Option<ActionResult<T>> {
     if !auto_commit_artifacts {
         if let Some(paths) = manager_dirty_paths(root) {
-            if !paths.is_empty() && planning_artifact_paths_only(&paths) {
+            if !paths.is_empty() && dispatch_artifact_paths_only(&paths) {
                 let listed = paths
                     .iter()
                     .take(5)
@@ -441,9 +442,9 @@ fn dispatch_readiness_result<T: schemars::JsonSchema + serde::Serialize>(
                 };
                 return Some(ActionResult::failed(
                     action,
-                    "Manager workspace has uncommitted backlog artifacts.",
+                    "Manager workspace has uncommitted Platypus dispatch artifacts.",
                     format!(
-                        "Pending artifact paths: {listed}{suffix}. Set auto_commit_artifacts=true on dispatch_ready_work, or run `git add backlog/items/*.md backlog/plans/*.yaml && git commit -m \"Track planning artifacts\"` before dispatch."
+                        "Pending artifact paths: {listed}{suffix}. Set auto_commit_artifacts=true on dispatch_ready_work, or stage and commit the Platypus scaffold/backlog artifacts before dispatch."
                     ),
                 ));
             }
@@ -456,7 +457,7 @@ fn dispatch_readiness_result<T: schemars::JsonSchema + serde::Serialize>(
             crate::git_readiness::GitReadinessStatus::Dirty
         )
     {
-        match auto_commit_planning_artifacts(root) {
+        match auto_commit_dispatch_artifacts(root) {
             Ok(true) => {
                 readiness = inspect_git_readiness(root, true);
             }
@@ -464,7 +465,7 @@ fn dispatch_readiness_result<T: schemars::JsonSchema + serde::Serialize>(
             Err(error) => {
                 return Some(ActionResult::failed(
                     action,
-                    "Could not auto-commit planning artifacts.",
+                    "Could not auto-commit Platypus dispatch artifacts.",
                     error,
                 ));
             }
@@ -529,30 +530,44 @@ fn push_dirty_path(paths: &mut Vec<String>, path: &[u8]) {
     paths.push(path);
 }
 
-fn planning_artifact_paths_only(paths: &[String]) -> bool {
-    paths.iter().all(|path| {
-        (path.starts_with("backlog/items/") && path.ends_with(".md"))
-            || (path.starts_with("backlog/plans/") && path.ends_with(".yaml"))
-    })
+fn dispatch_artifact_paths_only(paths: &[String]) -> bool {
+    paths.iter().all(|path| is_dispatch_artifact_path(path))
 }
 
-fn auto_commit_planning_artifacts(root: &Path) -> Result<bool, String> {
+fn is_dispatch_artifact_path(path: &str) -> bool {
+    matches!(
+        path,
+        ".gitignore" | "AGENTS.md" | "CLAUDE.md" | "WORKFLOW.md" | "platy.yaml"
+    ) || path == "backlog/README.md"
+        || (path.starts_with("backlog/items/") && path.ends_with(".md"))
+        || (path.starts_with("backlog/plans/") && path.ends_with(".yaml"))
+        || (path.starts_with("backlog/epics/") && path.ends_with(".md"))
+        || (path.starts_with("backlog/templates/")
+            && (path.ends_with(".md") || path.ends_with(".yaml")))
+}
+
+fn auto_commit_dispatch_artifacts(root: &Path) -> Result<bool, String> {
     let paths = git_dirty_paths(root)?;
     if paths.is_empty() {
         return Ok(false);
     }
-    if !paths.iter().all(|path| {
-        path.starts_with("backlog/items/") && path.ends_with(".md")
-            || path.starts_with("backlog/plans/") && path.ends_with(".yaml")
-    }) {
+    if !dispatch_artifact_paths_only(&paths) {
         return Ok(false);
     }
     let mut staging_paths = Vec::new();
-    if paths.iter().any(|path| path.starts_with("backlog/items/")) {
-        staging_paths.push("backlog/items");
+    for path in [
+        ".gitignore",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "WORKFLOW.md",
+        "platy.yaml",
+    ] {
+        if paths.iter().any(|dirty| dirty == path) {
+            staging_paths.push(path);
+        }
     }
-    if paths.iter().any(|path| path.starts_with("backlog/plans/")) {
-        staging_paths.push("backlog/plans");
+    if paths.iter().any(|path| path.starts_with("backlog/")) {
+        staging_paths.push("backlog");
     }
 
     let add = Command::new("git")
@@ -571,9 +586,9 @@ fn auto_commit_planning_artifacts(root: &Path) -> Result<bool, String> {
     let commit = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["commit", "-m", "Commit planning artifacts for dispatch"])
+        .args(["commit", "-m", "Commit Platypus artifacts for dispatch"])
         .output()
-        .map_err(|error| format!("failed to commit planning artifacts: {error}"))?;
+        .map_err(|error| format!("failed to commit dispatch artifacts: {error}"))?;
     if !commit.status.success() {
         return Err(String::from_utf8_lossy(&commit.stderr).trim().to_string());
     }
@@ -909,6 +924,8 @@ mod tests {
         assert_eq!(data.dispatched, 0);
         assert_eq!(data.prepared, 0);
         assert_eq!(data.started, 0);
+        assert_eq!(data.available_before_dispatch, 2);
+        assert_eq!(data.selected, 1);
         assert_eq!(data.items.len(), 1);
         assert_eq!(data.items[0].status, "preview");
 
@@ -938,7 +955,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_commit_planning_artifacts_handles_backlog_renames() {
+    fn auto_commit_dispatch_artifacts_handles_backlog_renames() {
         let project = backlog_project(true);
         git(
             project.path(),
@@ -954,7 +971,7 @@ mod tests {
             .replace("PROJ-001", "PROJ-010");
         fs::write(&item_path, item).expect("update renamed item");
 
-        let committed = auto_commit_planning_artifacts(project.path()).expect("auto commit");
+        let committed = auto_commit_dispatch_artifacts(project.path()).expect("auto commit");
 
         assert!(committed);
         let status = Command::new("git")
