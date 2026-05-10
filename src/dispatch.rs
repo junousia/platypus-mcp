@@ -484,27 +484,49 @@ fn dispatch_readiness_result<T: schemars::JsonSchema + serde::Serialize>(
 }
 
 fn manager_dirty_paths(root: &Path) -> Option<Vec<String>> {
+    git_dirty_paths(root).ok()
+}
+
+fn git_dirty_paths(root: &Path) -> Result<Vec<String>, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["status", "--porcelain=v1", "--untracked-files=all"])
+        .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
         .output()
-        .ok()?;
+        .map_err(|error| format!("failed to inspect git status: {error}"))?;
     if !output.status.success() {
-        return None;
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
+    Ok(parse_porcelain_z_paths(&output.stdout))
+}
+
+fn parse_porcelain_z_paths(output: &[u8]) -> Vec<String> {
     let mut paths = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if line.len() < 4 {
+    let mut entries = output
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty());
+    while let Some(entry) = entries.next() {
+        if entry.len() < 4 {
             continue;
         }
-        let path = line[3..].trim();
-        if path.starts_with(".platy/") {
-            continue;
+        let status = &entry[..2];
+        push_dirty_path(&mut paths, &entry[3..]);
+        if matches!(status.first(), Some(b'R' | b'C')) || matches!(status.get(1), Some(b'R' | b'C'))
+        {
+            if let Some(source) = entries.next() {
+                push_dirty_path(&mut paths, source);
+            }
         }
-        paths.push(path.to_string());
     }
-    Some(paths)
+    paths
+}
+
+fn push_dirty_path(paths: &mut Vec<String>, path: &[u8]) {
+    let path = String::from_utf8_lossy(path).trim().to_string();
+    if path.is_empty() || path.starts_with(".platy/") {
+        return;
+    }
+    paths.push(path);
 }
 
 fn planning_artifact_paths_only(paths: &[String]) -> bool {
@@ -515,26 +537,7 @@ fn planning_artifact_paths_only(paths: &[String]) -> bool {
 }
 
 fn auto_commit_planning_artifacts(root: &Path) -> Result<bool, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["status", "--porcelain=v1", "--untracked-files=all"])
-        .output()
-        .map_err(|error| format!("failed to inspect git status: {error}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    let mut paths = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if line.len() < 4 {
-            continue;
-        }
-        let path = line[3..].trim();
-        if path.starts_with(".platy/") {
-            continue;
-        }
-        paths.push(path.to_string());
-    }
+    let paths = git_dirty_paths(root)?;
     if paths.is_empty() {
         return Ok(false);
     }
@@ -544,12 +547,21 @@ fn auto_commit_planning_artifacts(root: &Path) -> Result<bool, String> {
     }) {
         return Ok(false);
     }
+    let mut staging_paths = Vec::new();
+    if paths.iter().any(|path| path.starts_with("backlog/items/")) {
+        staging_paths.push("backlog/items");
+    }
+    if paths.iter().any(|path| path.starts_with("backlog/plans/")) {
+        staging_paths.push("backlog/plans");
+    }
 
     let add = Command::new("git")
         .arg("-C")
         .arg(root)
         .arg("add")
-        .args(paths.iter().map(String::as_str))
+        .arg("--all")
+        .arg("--")
+        .args(staging_paths)
         .output()
         .map_err(|error| format!("failed to stage planning artifacts: {error}"))?;
     if !add.status.success() {
@@ -908,6 +920,53 @@ mod tests {
         .data
         .expect("queue");
         assert_eq!(queue.candidates.len(), 2);
+    }
+
+    #[test]
+    fn porcelain_parser_splits_rename_records() {
+        let paths = parse_porcelain_z_paths(
+            b"R  backlog/items/PROJ-002.md\0backlog/items/PROJ-001.md\0?? .platy/runtime.sqlite3\0",
+        );
+
+        assert_eq!(
+            paths,
+            vec![
+                "backlog/items/PROJ-002.md".to_string(),
+                "backlog/items/PROJ-001.md".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn auto_commit_planning_artifacts_handles_backlog_renames() {
+        let project = backlog_project(true);
+        git(
+            project.path(),
+            &[
+                "mv",
+                "backlog/items/PROJ-001.md",
+                "backlog/items/PROJ-010.md",
+            ],
+        );
+        let item_path = project.path().join("backlog/items/PROJ-010.md");
+        let item = fs::read_to_string(&item_path)
+            .expect("renamed item")
+            .replace("PROJ-001", "PROJ-010");
+        fs::write(&item_path, item).expect("update renamed item");
+
+        let committed = auto_commit_planning_artifacts(project.path()).expect("auto commit");
+
+        assert!(committed);
+        let status = Command::new("git")
+            .args(["status", "--porcelain=v1", "--untracked-files=all"])
+            .current_dir(project.path())
+            .output()
+            .expect("git status");
+        assert!(status.status.success());
+        assert!(
+            String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+            "workspace should be clean after auto-commit"
+        );
     }
 
     fn backlog_project(with_git: bool) -> TempDir {
