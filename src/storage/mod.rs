@@ -4,10 +4,11 @@ mod repository;
 mod schema;
 mod traits;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use std::{
     error::Error,
     fmt::{self, Display, Formatter},
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -158,6 +159,55 @@ pub fn connect(default_root: &Path, root: Option<&str>) -> StorageResult<Storage
     })
 }
 
+pub fn connect_existing_read_only(
+    default_root: &Path,
+    root: Option<&str>,
+) -> StorageResult<Option<StorageConnection>> {
+    let project_root = paths::resolve_project_root(default_root, root)?;
+    let state_dir = project_root.join(".platy");
+    if !state_dir.exists() {
+        return Ok(None);
+    }
+    let canonical_state =
+        fs::canonicalize(&state_dir).map_err(|error| StorageError::InvalidRoot {
+            path: state_dir.clone(),
+            message: error.to_string(),
+        })?;
+    ensure_inside_root(&project_root, &canonical_state)?;
+    if !canonical_state.is_dir() {
+        return Err(StorageError::InvalidRoot {
+            path: canonical_state,
+            message: "state path is not a directory".to_string(),
+        });
+    }
+
+    let db_path = canonical_state.join("platypus.sqlite3");
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let canonical_db = fs::canonicalize(&db_path).map_err(|error| StorageError::InvalidRoot {
+        path: db_path.clone(),
+        message: error.to_string(),
+    })?;
+    ensure_inside_root(&project_root, &canonical_db)?;
+    let connection = Connection::open_with_flags(&canonical_db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|source| StorageError::OpenDatabase {
+        path: canonical_db.clone(),
+        source,
+    })?;
+    let schema_version = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap_or(0);
+    Ok(Some(StorageConnection {
+        storage: Storage {
+            root: project_root,
+            db_path: canonical_db,
+            schema_version,
+        },
+        connection,
+    }))
+}
+
 fn connect_inner(
     default_root: &Path,
     root: Option<&str>,
@@ -184,6 +234,17 @@ fn connect_inner(
         schema_version: SCHEMA_VERSION,
     };
     Ok((init, connection))
+}
+
+fn ensure_inside_root(root: &Path, path: &Path) -> StorageResult<()> {
+    if path.starts_with(root) {
+        Ok(())
+    } else {
+        Err(StorageError::PathEscapedRoot {
+            root: root.to_path_buf(),
+            path: path.to_path_buf(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -222,6 +283,26 @@ mod tests {
         ] {
             assert!(table_exists(&connection, table), "missing table {table}");
         }
+    }
+
+    #[test]
+    fn connect_existing_read_only_does_not_create_state() {
+        let project = TempDir::new().expect("temp dir");
+
+        let existing = connect_existing_read_only(project.path(), None).expect("read-only open");
+
+        assert!(existing.is_none());
+        assert!(!project.path().join(".platy").exists());
+    }
+
+    #[test]
+    fn connect_existing_read_only_opens_initialized_state() {
+        let project = TempDir::new().expect("temp dir");
+        initialize(project.path(), None).expect("storage init");
+
+        let existing = connect_existing_read_only(project.path(), None).expect("read-only open");
+
+        assert!(existing.is_some());
     }
 
     #[test]

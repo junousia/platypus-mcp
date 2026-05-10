@@ -608,6 +608,20 @@ fn truncate_output_does_not_split_utf8_characters() {
     assert_eq!(truncated, "a".repeat(MAX_CAPTURE_BYTES - 1));
 }
 
+#[test]
+fn owned_surface_create_target_treats_extensionless_files_as_files() {
+    let worktree = Path::new("/tmp/worktree");
+
+    assert_eq!(
+        owned_surface_create_target(worktree, "Makefile").expect("target"),
+        Some(worktree.to_path_buf())
+    );
+    assert_eq!(
+        owned_surface_create_target(worktree, "src/").expect("target"),
+        Some(worktree.join("src"))
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn prepare_worker_assignment_rejects_owned_surface_symlink_escape() {

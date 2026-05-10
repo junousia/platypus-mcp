@@ -247,9 +247,9 @@ pub fn inspect_work_queue(
 }
 
 fn active_source_item_ids(root: &Path) -> BTreeSet<String> {
-    let storage = match crate::storage::connect(root, None) {
-        Ok(storage) => storage,
-        Err(_) => return BTreeSet::new(),
+    let storage = match crate::storage::connect_existing_read_only(root, None) {
+        Ok(Some(storage)) => storage,
+        Ok(None) | Err(_) => return BTreeSet::new(),
     };
     match storage.repository().tasks().active_source_items() {
         Ok(items) => items.into_iter().collect(),
@@ -1016,6 +1016,27 @@ acceptance:
         let data = result.data.expect("next action");
         assert_eq!(data.recommended_tool, "inspect_work_queue");
         assert!(data.summary.contains("Backlog has 1 item"));
+    }
+
+    #[test]
+    fn inspect_work_queue_does_not_create_runtime_state() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "Ready item");
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: None,
+            },
+        );
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert!(
+            !project.path().join(".platy").exists(),
+            "read-only queue inspection must not create runtime state"
+        );
     }
 
     #[test]

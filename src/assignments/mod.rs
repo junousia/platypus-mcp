@@ -157,13 +157,11 @@ fn owned_surface_create_target(worktree: &Path, surface: &str) -> Result<Option<
     let target = worktree.join(relative);
     let create_target = if trimmed.ends_with('/') {
         target
-    } else if relative.extension().is_some() {
+    } else {
         target
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| worktree.to_path_buf())
-    } else {
-        target
     };
     Ok(Some(create_target))
 }
