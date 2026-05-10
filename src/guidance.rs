@@ -155,29 +155,54 @@ pub fn inspect_work_queue(
         .collect();
     let mut preflight_warnings = Vec::new();
     let readiness = inspect_git_readiness(Path::new(&root), true);
-    let mut dispatch_blocked_by_workspace = false;
-    if matches!(readiness.status, GitReadinessStatus::Dirty) {
-        let artifact_only_dirty = manager_dirty_paths(Path::new(&root))
-            .is_some_and(|paths| paths_are_backlog_artifacts(&paths));
-        if artifact_only_dirty {
-            preflight_warnings.push(
-                "Info: manager workspace has only backlog artifacts pending. Enable auto_commit_artifacts=true if you want dispatch_ready_work to auto-commit these artifacts."
-                    .to_string(),
-            );
+    let mut dispatch_blocker: Option<(String, String)> = None;
+    let mut dispatch_blocker_applies = false;
+    if !readiness.ready() {
+        if matches!(readiness.status, GitReadinessStatus::Dirty) {
+            let artifact_only_dirty = manager_dirty_paths(Path::new(&root))
+                .is_some_and(|paths| paths_are_backlog_artifacts(&paths));
+            if artifact_only_dirty {
+                preflight_warnings.push(
+                    "Info: manager workspace has only backlog artifacts pending. Enable auto_commit_artifacts=true if you want dispatch_ready_work to auto-commit these artifacts."
+                        .to_string(),
+                );
+            } else {
+                let warning = readiness.next_action.clone().unwrap_or_else(|| {
+                    "Commit, stash, or discard local changes before dispatch.".to_string()
+                });
+                let reason = format!(
+                    "{warning} Dispatch will be blocked until the manager workspace is clean."
+                );
+                preflight_warnings.push(reason.clone());
+                dispatch_blocker = Some((
+                    "next_safe_action".to_string(),
+                    format!(
+                        "{reason} After cleanup, rerun inspect_work_queue or dispatch_ready_work."
+                    ),
+                ));
+                for item in &mut items {
+                    if item.ready_to_dispatch {
+                        dispatch_blocker_applies = true;
+                        item.ready_to_dispatch = false;
+                        item.recommended_tool = "next_safe_action".to_string();
+                        item.reason = "Planning is ready, but dispatch is currently blocked by local manager workspace changes.".to_string();
+                    }
+                }
+            }
         } else {
-            dispatch_blocked_by_workspace = true;
-            let warning = readiness.next_action.clone().unwrap_or_else(|| {
-                "Commit, stash, or discard local changes before dispatch.".to_string()
-            });
-            preflight_warnings.push(format!(
-                "{} Dispatch will be blocked until the manager workspace is clean.",
-                warning
-            ));
+            let warning = readiness
+                .next_action
+                .clone()
+                .unwrap_or_else(|| readiness.summary.clone());
+            let reason = format!("{warning} Dispatch will be blocked until Git is ready.");
+            preflight_warnings.push(reason.clone());
+            dispatch_blocker = Some(("doctor_snapshot".to_string(), reason));
             for item in &mut items {
                 if item.ready_to_dispatch {
+                    dispatch_blocker_applies = true;
                     item.ready_to_dispatch = false;
-                    item.recommended_tool = "next_safe_action".to_string();
-                    item.reason = "Planning is ready, but dispatch is currently blocked by local manager workspace changes.".to_string();
+                    item.recommended_tool = "doctor_snapshot".to_string();
+                    item.reason = "Planning is ready, but dispatch is currently blocked because Git is not ready.".to_string();
                 }
             }
         }
@@ -190,12 +215,11 @@ pub fn inspect_work_queue(
         ));
     }
     let (mut recommended_tool, mut reason, mut params) = recommended_queue_action(&root, &items);
-    if dispatch_blocked_by_workspace {
-        recommended_tool = "next_safe_action".to_string();
-        reason = format!(
-            "{} After cleanup, rerun inspect_work_queue or dispatch_ready_work.",
-            preflight_warnings[0]
-        );
+    if let Some((blocked_tool, blocked_reason)) =
+        dispatch_blocker.filter(|_| dispatch_blocker_applies)
+    {
+        recommended_tool = blocked_tool;
+        reason = blocked_reason;
         params = map_params([("root", root.as_str())]);
     } else if items.is_empty() && active_filtered > 0 {
         recommended_tool = "next_safe_action".to_string();
@@ -1042,6 +1066,49 @@ acceptance:
     }
 
     #[test]
+    fn inspect_work_queue_reports_missing_git_before_dispatch() {
+        let project = backlog_project();
+        write_item(project.path(), "PROJ-001", "Ready item");
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: None,
+            },
+        );
+        let data = result.data.expect("queue");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.recommended_tool, "doctor_snapshot");
+        assert!(!data.items[0].ready_to_dispatch);
+        assert!(data.reason.contains("git init"));
+    }
+
+    #[test]
+    fn inspect_work_queue_reports_unborn_head_before_dispatch() {
+        let project = backlog_project();
+        git(project.path(), &["init"]);
+        write_item(project.path(), "PROJ-001", "Ready item");
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: None,
+            },
+        );
+        let data = result.data.expect("queue");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.recommended_tool, "doctor_snapshot");
+        assert!(!data.items[0].ready_to_dispatch);
+        assert!(data.reason.contains("initial commit"));
+    }
+
+    #[test]
     fn inspects_work_queue_with_missing_required_task_plan() {
         let project = backlog_project();
         write_item(project.path(), "PROJ-001", "First item");
@@ -1067,6 +1134,7 @@ acceptance:
     #[test]
     fn direct_items_do_not_require_task_plan() {
         let project = backlog_project();
+        init_git(project.path());
         write_item_with(
             project.path(),
             ItemFixture {
@@ -1077,6 +1145,8 @@ acceptance:
                 owned_surfaces: &["README.md"],
             },
         );
+        git(project.path(), &["add", "backlog"]);
+        git(project.path(), &["commit", "-m", "Add backlog item"]);
 
         let result = inspect_work_queue(
             project.path(),
@@ -1130,6 +1200,7 @@ acceptance:
     #[test]
     fn simple_single_surface_scaffolds_do_not_require_task_plan() {
         let project = backlog_project();
+        init_git(project.path());
         write_item_with(
             project.path(),
             ItemFixture {
@@ -1140,6 +1211,8 @@ acceptance:
                 owned_surfaces: &["frontend"],
             },
         );
+        git(project.path(), &["add", "backlog"]);
+        git(project.path(), &["commit", "-m", "Add backlog item"]);
 
         let result = inspect_work_queue(
             project.path(),
@@ -1161,6 +1234,7 @@ acceptance:
     #[test]
     fn simple_dual_surface_foundation_scaffold_stays_direct() {
         let project = backlog_project();
+        init_git(project.path());
         write_item_with(
             project.path(),
             ItemFixture {
@@ -1171,6 +1245,8 @@ acceptance:
                 owned_surfaces: &["backend/", "frontend/"],
             },
         );
+        git(project.path(), &["add", "backlog"]);
+        git(project.path(), &["commit", "-m", "Add backlog item"]);
 
         let result = inspect_work_queue(
             project.path(),
@@ -1332,6 +1408,7 @@ acceptance:
     #[test]
     fn inspects_work_queue_and_recommends_dispatch_with_valid_plan() {
         let project = backlog_project();
+        init_git(project.path());
         write_item(project.path(), "PROJ-001", "First item");
         fs::create_dir_all(project.path().join("backlog/plans")).expect("plans");
         fs::write(
@@ -1365,6 +1442,11 @@ tasks:
 "#,
         )
         .expect("plan");
+        git(project.path(), &["add", "backlog"]);
+        git(
+            project.path(),
+            &["commit", "-m", "Add planned backlog item"],
+        );
 
         let result = inspect_work_queue(
             project.path(),
