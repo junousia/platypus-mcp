@@ -208,7 +208,7 @@ pub struct DispatchReadyWorkParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
     /// Maximum number of tasks to include or process.
-    #[schemars(range(min = 1, max = 50))]
+    #[schemars(range(min = 1, max = 10))]
     pub max_tasks: Option<usize>,
     /// Worker name associated with this item.
     pub worker: Option<String>,
@@ -335,7 +335,7 @@ pub struct StartGoalWorkParams {
     #[schemars(skip)]
     pub scaffold_in_place: Option<bool>,
     /// Maximum number of tasks to include or process.
-    #[schemars(range(min = 1, max = 50))]
+    #[schemars(range(min = 1, max = 10))]
     pub max_tasks: Option<usize>,
     /// Suggested worker name for this item.
     pub suggested_worker: Option<String>,
@@ -1009,7 +1009,7 @@ pub struct RunnerPrepareParams {
     /// Name recorded as the task claimant.
     pub claimant: Option<String>,
     /// Maximum number of tasks to include or process.
-    #[schemars(range(min = 1, max = 50))]
+    #[schemars(range(min = 1, max = 10))]
     pub max_tasks: Option<usize>,
     /// Whether to inspect the operation without mutating state.
     pub dry_run: Option<bool>,

@@ -393,7 +393,7 @@ fn run_task_verification_executes_command_and_records_event() {
             worker: Some("coder".to_string()),
             claimant: None,
             base_ref: None,
-            verification_command: vec!["sh".to_string(), "-c".to_string(), "echo ok".to_string()],
+            verification_command: vec!["make".to_string(), "check".to_string()],
         },
     );
     assert!(matches!(prepared.status, ActionStatus::Completed));
@@ -449,7 +449,7 @@ fn run_task_verification_reports_actual_exit_code() {
             worker: Some("coder".to_string()),
             claimant: Some("parent-agent".to_string()),
             base_ref: None,
-            verification_command: vec!["sh".to_string(), "-c".to_string(), "exit 2".to_string()],
+            verification_command: vec!["make".to_string(), "fail2".to_string()],
         },
     )
     .data
@@ -493,7 +493,7 @@ fn run_task_verification_splits_single_string_command() {
             worker: Some("coder".to_string()),
             claimant: Some("parent-agent".to_string()),
             base_ref: None,
-            verification_command: vec!["sh -c 'exit 2'".to_string()],
+            verification_command: vec!["make fail2".to_string()],
         },
     )
     .data
@@ -512,9 +512,64 @@ fn run_task_verification_splits_single_string_command() {
 
     assert!(matches!(verification.status, ActionStatus::Completed));
     let data = verification.data.expect("verification data");
-    assert_eq!(data.verification_command, vec!["sh", "-c", "exit 2"]);
+    assert_eq!(data.verification_command, vec!["make", "fail2"]);
     assert_eq!(data.status, "failed");
     assert_eq!(data.exit_code, Some(2));
+}
+
+#[test]
+fn run_task_verification_rejects_non_allowlisted_executable() {
+    let project = project_with_backlog();
+    let task = create_task_record(
+        project.path(),
+        None,
+        NewTask {
+            source_item_id: "PROJ-001".to_string(),
+            title: "External assignment".to_string(),
+            worker: Some("coder".to_string()),
+        },
+    )
+    .expect("task");
+    let assignment = prepare_worker_assignment(
+        project.path(),
+        PrepareWorkerAssignmentParams {
+            root: None,
+            task_id: Some(task.id.clone()),
+            worker: Some("coder".to_string()),
+            claimant: Some("parent-agent".to_string()),
+            base_ref: None,
+            verification_command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "echo unsafe".to_string(),
+            ],
+        },
+    )
+    .data
+    .expect("assignment data")
+    .assignment;
+
+    let verification = run_task_verification(
+        project.path(),
+        RunTaskVerificationParams {
+            root: None,
+            assignment_id: Some(assignment.id),
+            task_id: None,
+            timeout_seconds: Some(5),
+        },
+    );
+
+    assert!(matches!(verification.status, ActionStatus::Failed));
+    assert!(verification
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("not in the allowlist"));
+    assert!(verification
+        .next_action
+        .as_deref()
+        .unwrap_or_default()
+        .contains("make, cargo"));
 }
 
 #[test]
@@ -734,7 +789,12 @@ fn project_with_backlog() -> TempDir {
         &["config", "user.email", "platypus@example.invalid"],
     );
     fs::write(project.path().join("README.md"), "# Test\n").expect("readme");
-    git(&project, &["add", "README.md"]);
+    fs::write(
+        project.path().join("Makefile"),
+        "check:\n\t@echo ok\n\nfail2:\n\t@exit 2\n",
+    )
+    .expect("makefile");
+    git(&project, &["add", "README.md", "Makefile"]);
     git(&project, &["commit", "-m", "Initial commit"]);
     fs::create_dir_all(project.path().join("backlog/items")).expect("items");
     fs::create_dir_all(project.path().join("backlog/epics")).expect("epics");

@@ -2040,7 +2040,7 @@ mod tests {
             &input_schema(&tools, "dispatch_ready_work"),
             "max_tasks",
             1,
-            50,
+            10,
         );
         assert_property_numeric_bounds(&input_schema(&tools, "approval_list"), "limit", 1, 200);
         assert_property_numeric_bounds(

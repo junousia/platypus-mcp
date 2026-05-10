@@ -33,6 +33,8 @@ use validation::{
 const DEFAULT_CLAIMANT: &str = "external-worker";
 const DEFAULT_VERIFICATION_TIMEOUT_SECONDS: u64 = 60;
 const MAX_CAPTURE_BYTES: usize = 8192;
+const ALLOWED_VERIFICATION_EXECUTABLES: &[&str] =
+    &["make", "cargo", "npm", "pnpm", "yarn", "bun", "deno", "uv"];
 
 pub fn prepare_worker_assignment(
     default_root: &Path,
@@ -631,6 +633,18 @@ pub fn run_task_verification(
         );
     }
     let executable = command[0].clone();
+    if let Err(error) = ensure_verification_command_allowed(&executable) {
+        let mut result = ActionResult::failed(
+            action,
+            "Verification command executable is not allowed.",
+            error,
+        );
+        result.next_action = Some(format!(
+            "Use one of the allowed verification executables: {}.",
+            ALLOWED_VERIFICATION_EXECUTABLES.join(", ")
+        ));
+        return result;
+    }
     let args = command[1..].to_vec();
     let timeout = Duration::from_secs(
         params
@@ -751,6 +765,28 @@ fn executable_command(values: Vec<String>) -> Vec<String> {
         return values;
     }
     split_command_line(&values[0]).unwrap_or(values)
+}
+
+fn ensure_verification_command_allowed(executable: &str) -> Result<(), String> {
+    if executable.is_empty() {
+        return Err("verification command executable cannot be empty".to_string());
+    }
+    if Path::new(executable).is_absolute()
+        || executable.contains('/')
+        || executable.contains('\\')
+        || executable.contains(std::path::MAIN_SEPARATOR)
+    {
+        return Err(
+            "verification command executable must be a bare allowlisted command name".to_string(),
+        );
+    }
+    if ALLOWED_VERIFICATION_EXECUTABLES.contains(&executable) {
+        Ok(())
+    } else {
+        Err(format!(
+            "verification command executable `{executable}` is not in the allowlist"
+        ))
+    }
 }
 
 fn split_command_line(value: &str) -> Option<Vec<String>> {
