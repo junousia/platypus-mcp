@@ -68,6 +68,7 @@ pub trait WorkerAdapter {
 
 pub(crate) struct HarnessOutput {
     pub success: bool,
+    pub exit_code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
 }
@@ -105,6 +106,7 @@ pub(crate) fn run_harness_process(
                     .map_err(|error| format!("failed to collect worker output: {error}"))?;
                 return Ok(HarnessOutput {
                     success: output.status.success(),
+                    exit_code: output.status.code(),
                     stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
                     stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
                 });

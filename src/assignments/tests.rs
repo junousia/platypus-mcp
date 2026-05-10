@@ -429,6 +429,50 @@ fn run_task_verification_executes_command_and_records_event() {
 }
 
 #[test]
+fn run_task_verification_reports_actual_exit_code() {
+    let project = project_with_backlog();
+    let task = create_task_record(
+        project.path(),
+        None,
+        NewTask {
+            source_item_id: "PROJ-001".to_string(),
+            title: "External assignment".to_string(),
+            worker: Some("coder".to_string()),
+        },
+    )
+    .expect("task");
+    let assignment = prepare_worker_assignment(
+        project.path(),
+        PrepareWorkerAssignmentParams {
+            root: None,
+            task_id: Some(task.id.clone()),
+            worker: Some("coder".to_string()),
+            claimant: Some("parent-agent".to_string()),
+            base_ref: None,
+            verification_command: vec!["sh".to_string(), "-c".to_string(), "exit 2".to_string()],
+        },
+    )
+    .data
+    .expect("assignment data")
+    .assignment;
+
+    let verification = run_task_verification(
+        project.path(),
+        RunTaskVerificationParams {
+            root: None,
+            assignment_id: Some(assignment.id),
+            task_id: None,
+            timeout_seconds: Some(5),
+        },
+    );
+
+    assert!(matches!(verification.status, ActionStatus::Completed));
+    let data = verification.data.expect("verification data");
+    assert_eq!(data.status, "failed");
+    assert_eq!(data.exit_code, Some(2));
+}
+
+#[test]
 fn truncate_output_does_not_split_utf8_characters() {
     let value = format!("{}é", "a".repeat(MAX_CAPTURE_BYTES - 1));
 
@@ -436,6 +480,78 @@ fn truncate_output_does_not_split_utf8_characters() {
 
     assert!(was_truncated);
     assert_eq!(truncated, "a".repeat(MAX_CAPTURE_BYTES - 1));
+}
+
+#[cfg(unix)]
+#[test]
+fn prepare_worker_assignment_rejects_owned_surface_symlink_escape() {
+    let project = project_with_backlog();
+    let outside = TempDir::new().expect("outside dir");
+    std::os::unix::fs::symlink(outside.path(), project.path().join("linked"))
+        .expect("create symlink");
+    fs::write(
+        project.path().join("backlog/items/PROJ-001.md"),
+        r#"---
+id: PROJ-001
+title: External assignment
+priority: P0
+type: foundation
+area: execution
+epic: general
+depends_on: []
+suggested_worker: coder
+owned_surfaces:
+- linked/generated/
+---
+
+# PROJ-001 External assignment
+
+## Goal
+
+Verify external worker handoff.
+
+## Implementation Contract
+
+Edit only the assigned owned surface.
+
+## Acceptance
+
+- Assignment lifecycle completes.
+"#,
+    )
+    .expect("rewrite item");
+    git(&project, &["add", "linked", "backlog/items/PROJ-001.md"]);
+    git(&project, &["commit", "-m", "Add symlink owned surface"]);
+    let task = create_task_record(
+        project.path(),
+        None,
+        NewTask {
+            source_item_id: "PROJ-001".to_string(),
+            title: "External assignment".to_string(),
+            worker: Some("coder".to_string()),
+        },
+    )
+    .expect("task");
+
+    let prepared = prepare_worker_assignment(
+        project.path(),
+        PrepareWorkerAssignmentParams {
+            root: None,
+            task_id: Some(task.id),
+            worker: Some("coder".to_string()),
+            claimant: Some("parent-agent".to_string()),
+            base_ref: None,
+            verification_command: Vec::new(),
+        },
+    );
+
+    assert!(matches!(prepared.status, ActionStatus::Failed));
+    assert!(prepared
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("escapes the assignment worktree"));
+    assert!(!outside.path().join("generated").exists());
 }
 
 #[test]

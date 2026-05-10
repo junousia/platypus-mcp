@@ -108,37 +108,102 @@ pub fn prepare_worker_assignment(
 }
 
 fn ensure_owned_surface_dirs(assignment: &WorkerAssignment) -> Result<(), String> {
-    let worktree = std::path::Path::new(&assignment.worktree_path);
+    let worktree = Path::new(&assignment.worktree_path);
+    let canonical_worktree = fs::canonicalize(worktree).map_err(|error| {
+        format!(
+            "could not resolve assignment worktree `{}`: {error}",
+            worktree.display()
+        )
+    })?;
     for surface in &assignment.bundle.owned_surfaces {
-        let trimmed = surface.trim();
-        if trimmed.is_empty() || trimmed == "." {
+        let Some(create_target) = owned_surface_create_target(worktree, surface)? else {
             continue;
-        }
-        if trimmed.contains("..") {
-            continue;
-        }
-        let target = worktree.join(trimmed);
-        if !target.starts_with(worktree) {
-            continue;
-        }
-        let create_target = if trimmed.ends_with('/') {
-            target
-        } else if std::path::Path::new(trimmed).extension().is_some() {
-            target
-                .parent()
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or_else(|| worktree.to_path_buf())
-        } else {
-            target
         };
+        ensure_create_target_inside_worktree(worktree, &canonical_worktree, &create_target)?;
         if let Err(error) = fs::create_dir_all(&create_target) {
             return Err(format!(
                 "could not create owned surface directory `{}`: {error}",
                 create_target.display()
             ));
         }
+        ensure_create_target_inside_worktree(worktree, &canonical_worktree, &create_target)?;
     }
     Ok(())
+}
+
+fn owned_surface_create_target(worktree: &Path, surface: &str) -> Result<Option<PathBuf>, String> {
+    let trimmed = surface.trim();
+    if trimmed.is_empty() || trimmed == "." {
+        return Ok(None);
+    }
+    let relative = Path::new(trimmed);
+    if relative.is_absolute() {
+        return Err(format!(
+            "owned surface `{trimmed}` must be relative to the assignment worktree"
+        ));
+    }
+    for component in relative.components() {
+        if matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        ) {
+            return Err(format!(
+                "owned surface `{trimmed}` must stay inside the assignment worktree"
+            ));
+        }
+    }
+    let target = worktree.join(relative);
+    let create_target = if trimmed.ends_with('/') {
+        target
+    } else if relative.extension().is_some() {
+        target
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| worktree.to_path_buf())
+    } else {
+        target
+    };
+    Ok(Some(create_target))
+}
+
+fn ensure_create_target_inside_worktree(
+    worktree: &Path,
+    canonical_worktree: &Path,
+    create_target: &Path,
+) -> Result<(), String> {
+    let existing = nearest_existing_ancestor(create_target, worktree)?;
+    let canonical_existing = fs::canonicalize(&existing).map_err(|error| {
+        format!(
+            "could not resolve owned surface ancestor `{}`: {error}",
+            existing.display()
+        )
+    })?;
+    if !canonical_existing.starts_with(canonical_worktree) {
+        return Err(format!(
+            "owned surface directory `{}` escapes the assignment worktree",
+            create_target.display()
+        ));
+    }
+    Ok(())
+}
+
+fn nearest_existing_ancestor(path: &Path, floor: &Path) -> Result<PathBuf, String> {
+    let mut current = path.to_path_buf();
+    loop {
+        if current.exists() {
+            return Ok(current);
+        }
+        if current == floor {
+            return Ok(current);
+        }
+        let Some(parent) = current.parent() else {
+            return Err(format!(
+                "owned surface path `{}` does not have a valid parent",
+                path.display()
+            ));
+        };
+        current = parent.to_path_buf();
+    }
 }
 
 pub fn inspect_worker_assignment(
@@ -583,7 +648,7 @@ pub fn run_task_verification(
     let (status, exit_code, stdout_raw, stderr_raw, timed_out) = match outcome {
         Ok(output) => (
             if output.success { "passed" } else { "failed" }.to_string(),
-            Some(if output.success { 0 } else { 1 }),
+            output.exit_code,
             output.stdout,
             output.stderr,
             false,
