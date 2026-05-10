@@ -607,7 +607,7 @@ pub fn run_task_verification(
         Ok(snapshot) => snapshot,
         Err(error) => return state_error(action, "Could not inspect assignment.", error),
     };
-    let command = snapshot.bundle.verification_command.clone();
+    let command = executable_command(snapshot.bundle.verification_command.clone());
     if command.is_empty() {
         return ActionResult::completed(
             action,
@@ -739,6 +739,73 @@ fn truncate_output(value: String, max_bytes: usize) -> (String, bool) {
         boundary -= 1;
     }
     (value[..boundary].to_string(), true)
+}
+
+fn executable_command(values: Vec<String>) -> Vec<String> {
+    let values = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if values.len() != 1 {
+        return values;
+    }
+    split_command_line(&values[0]).unwrap_or(values)
+}
+
+fn split_command_line(value: &str) -> Option<Vec<String>> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut saw_whitespace = false;
+
+    for character in value.chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+            continue;
+        }
+        if character == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(quote_char) = quote {
+            if character == quote_char {
+                quote = None;
+            } else {
+                current.push(character);
+            }
+            continue;
+        }
+        if matches!(character, '\'' | '"') {
+            quote = Some(character);
+            continue;
+        }
+        if character.is_whitespace() {
+            saw_whitespace = true;
+            if !current.is_empty() {
+                args.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        current.push(character);
+    }
+
+    if escaped {
+        current.push('\\');
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    if saw_whitespace && !args.is_empty() {
+        Some(args)
+    } else {
+        None
+    }
 }
 
 fn resolve_assignment_id(

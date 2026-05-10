@@ -473,6 +473,51 @@ fn run_task_verification_reports_actual_exit_code() {
 }
 
 #[test]
+fn run_task_verification_splits_single_string_command() {
+    let project = project_with_backlog();
+    let task = create_task_record(
+        project.path(),
+        None,
+        NewTask {
+            source_item_id: "PROJ-001".to_string(),
+            title: "External assignment".to_string(),
+            worker: Some("coder".to_string()),
+        },
+    )
+    .expect("task");
+    let assignment = prepare_worker_assignment(
+        project.path(),
+        PrepareWorkerAssignmentParams {
+            root: None,
+            task_id: Some(task.id.clone()),
+            worker: Some("coder".to_string()),
+            claimant: Some("parent-agent".to_string()),
+            base_ref: None,
+            verification_command: vec!["sh -c 'exit 2'".to_string()],
+        },
+    )
+    .data
+    .expect("assignment data")
+    .assignment;
+
+    let verification = run_task_verification(
+        project.path(),
+        RunTaskVerificationParams {
+            root: None,
+            assignment_id: Some(assignment.id),
+            task_id: None,
+            timeout_seconds: Some(5),
+        },
+    );
+
+    assert!(matches!(verification.status, ActionStatus::Completed));
+    let data = verification.data.expect("verification data");
+    assert_eq!(data.verification_command, vec!["sh", "-c", "exit 2"]);
+    assert_eq!(data.status, "failed");
+    assert_eq!(data.exit_code, Some(2));
+}
+
+#[test]
 fn truncate_output_does_not_split_utf8_characters() {
     let value = format!("{}é", "a".repeat(MAX_CAPTURE_BYTES - 1));
 

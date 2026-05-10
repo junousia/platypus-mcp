@@ -388,7 +388,28 @@ fn plan_task_for_task_id<'a>(
     task_id: &str,
 ) -> Option<&'a PlannedTask> {
     let plan = plan?;
-    plan.tasks.iter().find(|task| task.id == task_id)
+    plan.tasks
+        .iter()
+        .find(|task| plan_task_id_matches(&plan.item_id, &task.id, task_id))
+}
+
+fn plan_task_id_matches(item_id: &str, planned_task_id: &str, task_id: &str) -> bool {
+    if planned_task_id == task_id {
+        return true;
+    }
+    let Some(planned_number) = task_number_for_item(item_id, planned_task_id) else {
+        return false;
+    };
+    task_number_for_item(item_id, task_id) == Some(planned_number)
+}
+
+fn task_number_for_item(item_id: &str, task_id: &str) -> Option<u16> {
+    let suffix = task_id.strip_prefix(item_id)?.strip_prefix("-T")?;
+    if !matches!(suffix.len(), 2 | 3) || !suffix.chars().all(|character| character.is_ascii_digit())
+    {
+        return None;
+    }
+    suffix.parse::<u16>().ok().filter(|number| *number > 0)
 }
 
 fn task_plan_brief(plan: Option<&TaskPlanFile>) -> String {
@@ -566,7 +587,7 @@ design:
   owned_surfaces:
     - src/bundle.rs
 tasks:
-  - id: PROJ-001-T001
+  - id: PROJ-001-T01
     title: Add plan-aware bundle
     goal: Include task-plan detail in the worker brief.
     requirement_refs:
