@@ -114,8 +114,8 @@ pub fn inspect_work_queue(
 ) -> ActionResult<WorkQueueData> {
     let action = "inspect_work_queue";
     let require_task_plan = params.require_task_plan.unwrap_or(false);
-    let requested_limit = params.limit.unwrap_or(10).clamp(1, 100);
-    let listed = backlog::list_backlog(default_root, params.root.as_deref(), Some(100));
+    let requested_limit = params.limit.unwrap_or(10).clamp(1, 200);
+    let listed = backlog::list_backlog(default_root, params.root.as_deref(), Some(200));
     let (root, candidates) = match listed {
         ActionResult {
             status: ActionStatus::Completed | ActionStatus::Skipped,
@@ -1541,6 +1541,47 @@ tasks:
         assert_eq!(data.items.len(), 1);
         assert_eq!(data.items[0].candidate.item_id, "PROJ-011");
         assert_eq!(data.active_count, 10);
+        assert_eq!(data.recommended_tool, "dispatch_ready_work");
+    }
+
+    #[test]
+    fn inspect_work_queue_honors_limit_above_one_hundred() {
+        let project = backlog_project();
+        init_git(project.path());
+        for index in 1..=101 {
+            let item_id = format!("PROJ-{index:03}");
+            write_item(project.path(), &item_id, &format!("Item {index}"));
+        }
+        git(project.path(), &["add", "backlog"]);
+        git(project.path(), &["commit", "-m", "Add large queue"]);
+        for index in 1..=100 {
+            let item_id = format!("PROJ-{index:03}");
+            create_task_record(
+                project.path(),
+                None,
+                NewTask {
+                    source_item_id: item_id,
+                    title: format!("Active item {index}"),
+                    worker: Some("coder".to_string()),
+                },
+            )
+            .expect("task");
+        }
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(101),
+                require_task_plan: Some(false),
+            },
+        );
+        let data = result.data.expect("queue");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.items.len(), 1);
+        assert_eq!(data.items[0].candidate.item_id, "PROJ-101");
+        assert_eq!(data.active_count, 100);
         assert_eq!(data.recommended_tool, "dispatch_ready_work");
     }
 

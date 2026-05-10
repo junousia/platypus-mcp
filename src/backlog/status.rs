@@ -159,7 +159,7 @@ fn runnable_backlog_candidates(
     });
     candidates
         .into_iter()
-        .take(limit.min(100))
+        .take(limit.min(200))
         .map(|item| BacklogCandidate {
             source: "backlog".to_string(),
             item_id: item.frontmatter.id.clone(),
