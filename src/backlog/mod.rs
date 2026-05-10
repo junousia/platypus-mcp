@@ -9,9 +9,12 @@ mod types;
 mod validate;
 
 pub use create::create_backlog_item;
-pub use draft::draft_backlog_items;
+pub use draft::{
+    draft_backlog_items, draft_backlog_items_from_sample, draft_backlog_items_sampling_prompt,
+};
 pub use plan::{
-    draft_task_plan, inspect_task_plan, list_task_plans, validate_task_plan, write_task_plan,
+    draft_task_plan, draft_task_plan_from_sample, draft_task_plan_sampling_prompt,
+    inspect_task_plan, list_task_plans, validate_task_plan, write_task_plan,
 };
 pub use status::{inspect_backlog_inventory, inspect_status, list_backlog};
 pub use validate::validate_backlog;
@@ -76,7 +79,8 @@ pub(crate) fn backlog_item_snapshot(
 mod tests {
     use super::*;
     use crate::models::{
-        ActionStatus, CreateBacklogItemParams, DraftBacklogItemsParams, TaskPlanQueryParams,
+        ActionStatus, CreateBacklogItemParams, DraftBacklogItemsParams, PlannedTask,
+        TaskPlanDesign, TaskPlanFile, TaskPlanItemParams, TaskPlanQueryParams, TaskPlanRequirement,
         WriteTaskPlanParams,
     };
     use std::{fs, path::Path, process::Command};
@@ -327,7 +331,7 @@ mod tests {
             "## Implementation Contract\n\nImplement the requested change: Scaffold frontend."
         ));
         assert!(goal_text
-            .contains("- Scaffold frontend is implemented and the validation path is documented."));
+            .contains("- Scaffold frontend is implemented and verification notes are recorded."));
 
         let title_only = create_backlog_item(
             temp.path(),
@@ -497,7 +501,7 @@ mod tests {
     }
 
     #[test]
-    fn draft_backlog_items_returns_three_candidates() {
+    fn draft_backlog_items_skips_without_sampling() {
         let result = draft_backlog_items(DraftBacklogItemsParams {
             goal: "Build MCP tools".to_string(),
             suggested_worker: Some("coder".to_string()),
@@ -505,12 +509,13 @@ mod tests {
             verification_command: vec!["cargo".to_string(), "test".to_string()],
         });
 
-        assert!(matches!(result.status, ActionStatus::Completed));
-        assert_eq!(result.data.unwrap().drafts.len(), 3);
+        assert!(matches!(result.status, ActionStatus::Skipped));
+        let drafts = result.data.unwrap().drafts;
+        assert!(drafts.is_empty());
     }
 
     #[test]
-    fn drafts_writes_and_validates_strict_task_plan() {
+    fn sampled_task_plan_writes_and_validates_strict_task_plan() {
         let temp = project_fixture();
         write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);
 
@@ -522,7 +527,50 @@ mod tests {
             },
         );
         assert!(matches!(drafted.status, ActionStatus::Completed));
-        let plan = drafted.data.unwrap().plan;
+        let starter = drafted.data.expect("starter plan").plan;
+        assert_eq!(starter.item_id, "PROJ-001");
+        assert_eq!(starter.mode, "standard");
+        assert_eq!(starter.tasks[0].id, "PROJ-001-T001");
+        assert!(starter.tasks[0].verification.is_empty());
+
+        let sampled = draft_task_plan_from_sample(
+            temp.path(),
+            &crate::models::DraftTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+            },
+            r#"{
+              "plan": {
+                "item_id": "PROJ-001",
+                "version": 1,
+                "mode": "standard",
+                "requirements": [
+                  { "id": "R1", "text": "Deliver the backlog item." }
+                ],
+                "design": {
+                  "summary": "Implement a focused task planning slice.",
+                  "owned_surfaces": ["README.md"],
+                  "notes": null
+                },
+                "tasks": [
+                  {
+                    "id": "PROJ-001-T01",
+                    "title": "Implement task planning",
+                    "goal": "Deliver concrete task planning behavior.",
+                    "requirement_refs": ["R1"],
+                    "depends_on": [],
+                    "owned_surfaces": ["README.md"],
+                    "suggested_worker": "coder",
+                    "verification": ["make check"],
+                    "acceptance": ["Task planning behavior is concrete."],
+                    "notes": null
+                  }
+                ]
+              }
+            }"#,
+        );
+        assert!(matches!(sampled.status, ActionStatus::Completed));
+        let plan = sampled.data.unwrap().plan;
         assert_eq!(plan.tasks[0].id, "PROJ-001-T01");
 
         let written = write_task_plan(
@@ -548,6 +596,165 @@ mod tests {
         assert!(validation.data.unwrap().ok);
     }
 
+    #[test]
+    fn write_task_plan_accepts_goal_mode_aliases_and_stores_canonical_mode() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);
+
+        let written = write_task_plan(
+            temp.path(),
+            WriteTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                plan: TaskPlanFile {
+                    item_id: "PROJ-001".to_string(),
+                    version: 1,
+                    mode: "direct_scaffold".to_string(),
+                    requirements: vec![TaskPlanRequirement {
+                        id: "R1".to_string(),
+                        text: "Deliver the backlog item.".to_string(),
+                    }],
+                    design: TaskPlanDesign {
+                        summary: "Implement a focused direct task.".to_string(),
+                        owned_surfaces: vec!["README.md".to_string()],
+                        notes: None,
+                    },
+                    tasks: vec![PlannedTask {
+                        id: "PROJ-001-T01".to_string(),
+                        title: "Implement direct task".to_string(),
+                        goal: "Deliver concrete direct behavior.".to_string(),
+                        requirement_refs: vec!["R1".to_string()],
+                        depends_on: Vec::new(),
+                        owned_surfaces: vec!["README.md".to_string()],
+                        suggested_worker: Some("coder".to_string()),
+                        verification: vec!["make check".to_string()],
+                        acceptance: vec!["Direct task is complete.".to_string()],
+                        notes: None,
+                    }],
+                },
+                overwrite: None,
+            },
+        );
+
+        assert!(matches!(written.status, ActionStatus::Completed));
+        let inspected = inspect_task_plan(
+            temp.path(),
+            TaskPlanItemParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+            },
+        );
+        assert_eq!(inspected.data.expect("plan").plan.mode, "direct");
+    }
+
+    #[test]
+    fn task_plan_yaml_defaults_missing_version_to_one() {
+        let parsed: crate::models::TaskPlanFile = serde_yaml::from_str(
+            r#"item_id: PROJ-001
+mode: standard
+requirements:
+  - id: R1
+    text: Requirement.
+design:
+  summary: Design.
+  owned_surfaces:
+    - README.md
+tasks:
+  - id: PROJ-001-T01
+    title: Implement slice
+    goal: Exercise default version.
+    requirement_refs:
+      - R1
+    depends_on: []
+    owned_surfaces:
+      - README.md
+    suggested_worker: coder
+    verification:
+      - make check
+    acceptance:
+      - Slice is complete.
+"#,
+        )
+        .expect("plan parses");
+
+        assert_eq!(parsed.version, 1);
+    }
+
+    #[test]
+    fn write_task_plan_defaults_empty_task_surfaces_from_design() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);
+
+        let plan: crate::models::TaskPlanFile = serde_yaml::from_str(
+            r#"item_id: PROJ-001
+mode: standard
+requirements:
+  - id: R1
+    text: Requirement.
+design:
+  summary: Design.
+  owned_surfaces:
+    - README.md
+tasks:
+  - id: PROJ-001-T01
+    title: Implement slice
+    goal: Exercise default owned surfaces.
+    requirement_refs:
+      - R1
+    depends_on: []
+    suggested_worker: coder
+    verification:
+      - make check
+    acceptance:
+      - Slice is complete.
+"#,
+        )
+        .expect("plan parses");
+
+        let result = write_task_plan(
+            temp.path(),
+            WriteTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                plan,
+                overwrite: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let written =
+            fs::read_to_string(temp.path().join("backlog/plans/PROJ-001.yaml")).expect("plan");
+        assert!(written.contains("owned_surfaces:\n  - README.md"));
+    }
+
+    #[test]
+    fn sampled_backlog_items_reject_generic_fastapi_react_templates() {
+        let params = DraftBacklogItemsParams {
+            goal: "Build a simple FastAPI + React web app".to_string(),
+            suggested_worker: None,
+            owned_surfaces: Vec::new(),
+            verification_command: Vec::new(),
+        };
+        let result = draft_backlog_items_from_sample(
+            &params,
+            r#"[
+              {
+                "candidate_id": "draft-1",
+                "title": "Shape Build a simple FastAPI + React web app",
+                "objective": "Clarify scope.",
+                "type": "foundation",
+                "area": "planning",
+                "owned_surfaces": [],
+                "suggested_worker": "coder",
+                "verification_command": []
+              }
+            ]"#,
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result.error.unwrap().contains("generic placeholder"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn write_task_plan_rejects_symlink_escape() {
@@ -563,16 +770,34 @@ mod tests {
         )
         .expect("symlink");
 
-        let plan = draft_task_plan(
-            temp.path(),
-            crate::models::DraftTaskPlanParams {
-                root: Some(root_arg(temp.path())),
-                item_id: "PROJ-001".to_string(),
-            },
+        let plan: crate::models::TaskPlanFile = serde_yaml::from_str(
+            r#"item_id: PROJ-001
+version: 1
+mode: standard
+requirements:
+  - id: R1
+    text: Requirement.
+design:
+  summary: Design.
+  owned_surfaces:
+    - README.md
+tasks:
+  - id: PROJ-001-T01
+    title: Implement slice
+    goal: Exercise symlink safety.
+    requirement_refs:
+      - R1
+    depends_on: []
+    owned_surfaces:
+      - README.md
+    suggested_worker: coder
+    verification:
+      - make check
+    acceptance:
+      - Slice is complete.
+"#,
         )
-        .data
-        .expect("draft")
-        .plan;
+        .expect("plan");
 
         let result = write_task_plan(
             temp.path(),
@@ -680,8 +905,75 @@ tasks:
         assert!(error.contains("unknown requirement_ref `R2`"));
         assert!(error.contains("unknown dependency `PROJ-001-T99`"));
         assert!(error.contains("owned_surfaces must not be empty"));
-        assert!(error.contains("verification must not be empty"));
-        assert!(error.contains("acceptance must not be empty"));
+        assert!(
+            !error.contains("verification must not be empty"),
+            "verification should be optional, got: {error}"
+        );
+        assert!(
+            !error.contains("acceptance must not be empty"),
+            "acceptance should be optional, got: {error}"
+        );
+    }
+
+    #[test]
+    fn validates_task_plan_rejects_circular_dependencies() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);
+        fs::create_dir_all(temp.path().join("backlog/plans")).expect("plans dir");
+        fs::write(
+            temp.path().join("backlog/plans/PROJ-001.yaml"),
+            r#"item_id: PROJ-001
+version: 1
+mode: standard
+requirements:
+  - id: R1
+    text: Requirement.
+design:
+  summary: Design.
+  owned_surfaces:
+    - README.md
+tasks:
+  - id: PROJ-001-T01
+    title: First
+    goal: First task.
+    requirement_refs:
+      - R1
+    depends_on:
+      - PROJ-001-T02
+    owned_surfaces:
+      - README.md
+    verification:
+      - make check
+    acceptance:
+      - First done.
+  - id: PROJ-001-T02
+    title: Second
+    goal: Second task.
+    requirement_refs:
+      - R1
+    depends_on:
+      - PROJ-001-T01
+    owned_surfaces:
+      - README.md
+    verification:
+      - make check
+    acceptance:
+      - Second done.
+"#,
+        )
+        .expect("plan");
+
+        let validation = validate_task_plan(
+            temp.path(),
+            TaskPlanQueryParams {
+                root: Some(root_arg(temp.path())),
+                item_id: Some("PROJ-001".to_string()),
+                include_errors: Some(true),
+            },
+        );
+        assert!(matches!(validation.status, ActionStatus::Failed));
+        let error = validation.error.unwrap();
+        assert!(error.contains("circular task dependency"), "{error}");
     }
 
     fn project_fixture() -> TempDir {

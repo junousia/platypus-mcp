@@ -2,101 +2,226 @@ use super::{
     filesystem::resolve_root,
     validate::{valid_item_id, validate_backlog_at_root},
 };
-use crate::models::{
-    ActionResult, ActionStatus, DraftTaskPlanParams, PlannedTask, TaskPlanData, TaskPlanDesign,
-    TaskPlanFile, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams, TaskPlanRequirement,
-    TaskPlanSummary, TaskPlanValidationData, TaskPlanWriteData, WriteTaskPlanParams,
+use crate::{
+    models::{
+        ActionResult, ActionStatus, DraftTaskPlanParams, PlannedTask, TaskPlanData, TaskPlanDesign,
+        TaskPlanFile, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams,
+        TaskPlanRequirement, TaskPlanSummary, TaskPlanValidationData, TaskPlanWriteData,
+        WriteTaskPlanParams,
+    },
+    sampling,
 };
+use serde::Deserialize;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
-
-const PLAN_MODES: &[&str] = &["direct", "standard", "full"];
 
 pub fn draft_task_plan(
     default_root: &Path,
     params: DraftTaskPlanParams,
 ) -> ActionResult<TaskPlanData> {
     let action = "draft_task_plan";
-    let root = match resolve_root(default_root, params.root.as_deref()) {
-        Ok(root) => root,
+    let context = match task_plan_draft_context(default_root, &params) {
+        Ok(context) => context,
         Err(error) => return ActionResult::failed(action, "Could not draft task plan.", error),
     };
-    let item_id = normalize_item_id(&params.item_id);
-    let validation = validate_backlog_at_root(&root, true);
-    if !validation.ok {
+    let plan = starter_task_plan(&context);
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Completed,
+        summary: "MCP sampling is unavailable; drafted a conservative starter task plan."
+            .to_string(),
+        next_action: Some(
+            "Review data.plan and decide whether planning is worth it for this item. For direct-scaffold work, you can skip this starter plan and continue without task-plan enforcement. If you keep it, call write_task_plan, commit backlog/plans/<ITEM>.yaml, and dispatch_ready_work."
+                .to_string(),
+        ),
+        data: Some(TaskPlanData {
+            root: context.root.display().to_string(),
+            item_id: plan.item_id.clone(),
+            path: None,
+            plan,
+        }),
+        error: None,
+    }
+}
+
+pub fn draft_task_plan_sampling_prompt(
+    default_root: &Path,
+    params: &DraftTaskPlanParams,
+) -> Result<String, String> {
+    let context = task_plan_draft_context(default_root, params)?;
+    let surfaces = if context.owned_surfaces.is_empty() {
+        "none declared".to_string()
+    } else {
+        context.owned_surfaces.join(", ")
+    };
+    let acceptance = context
+        .acceptance
+        .iter()
+        .map(|criterion| format!("- {criterion}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(format!(
+        "Draft a strict Platypus task plan for this backlog item.\n\n\
+         Item: {item_id}\n\
+         Title: {title}\n\
+         Goal:\n{goal}\n\n\
+         Implementation contract:\n{contract}\n\n\
+         Acceptance criteria:\n{acceptance}\n\n\
+         Suggested worker: {worker}\n\
+         Owned surfaces: {surfaces}\n\n\
+         Return only JSON for one TaskPlanFile object or an object with a `plan` field. \
+         The plan must use this shape: item_id, version, mode, requirements, design, tasks. \
+         Use mode direct, standard, or full. Task IDs should be three digit values such as {item_id}-T001, {item_id}-T002. \
+         Map acceptance criteria into concrete executable tasks with non-empty verification commands.",
+        item_id = context.item_id,
+        title = context.title,
+        goal = context.goal,
+        contract = context.implementation_contract,
+        worker = context.suggested_worker.unwrap_or_else(|| "coder".to_string()),
+    ))
+}
+
+pub fn draft_task_plan_from_sample(
+    default_root: &Path,
+    params: &DraftTaskPlanParams,
+    text: &str,
+) -> ActionResult<TaskPlanData> {
+    let action = "draft_task_plan";
+    let context = match task_plan_draft_context(default_root, params) {
+        Ok(context) => context,
+        Err(error) => return ActionResult::failed(action, "Could not draft task plan.", error),
+    };
+    let mut plan = match sampling::parse_sampled_json::<SampledTaskPlan>(text) {
+        Ok(SampledTaskPlan::Wrapped { plan }) | Ok(SampledTaskPlan::Bare(plan)) => plan,
+        Err(error) => return ActionResult::failed(action, "Could not draft task plan.", error),
+    };
+    if normalize_item_id(&plan.item_id) != context.item_id {
         return ActionResult::failed(
             action,
             "Could not draft task plan.",
-            "backlog must validate before drafting task plans",
+            format!(
+                "sampled plan item_id `{}` did not match requested item `{}`",
+                plan.item_id, context.item_id
+            ),
         );
     }
-    let Some(item) = validation
-        .items
-        .iter()
-        .find(|item| item.frontmatter.id == item_id)
-    else {
+    plan.item_id = context.item_id.clone();
+    canonicalize_plan_mode(&mut plan);
+    canonicalize_task_ids(&mut plan);
+    apply_task_defaults(&mut plan);
+    let errors = validate_plan_with_backlog(&context.root, &plan);
+    if !errors.is_empty() {
         return ActionResult::failed(
             action,
             "Could not draft task plan.",
-            format!("unknown backlog item `{item_id}`"),
+            format!("sampled task plan was invalid: {}", errors.join("\n")),
         );
-    };
-
-    let owned_surfaces = if item.frontmatter.owned_surfaces.is_empty() {
-        vec![format!("backlog/items/{item_id}.md")]
-    } else {
-        item.frontmatter.owned_surfaces.clone()
-    };
-
-    let plan = TaskPlanFile {
-        item_id: item_id.clone(),
-        version: 1,
-        mode: "standard".to_string(),
-        requirements: vec![TaskPlanRequirement {
-            id: "R1".to_string(),
-            text: format!(
-                "Deliver the accepted outcome for backlog item {}: {}.",
-                item.frontmatter.id, item.frontmatter.title
-            ),
-        }],
-        design: TaskPlanDesign {
-            summary: format!(
-                "Implement a focused slice for {} while keeping runtime state outside the plan file.",
-                item.frontmatter.id
-            ),
-            owned_surfaces: owned_surfaces.clone(),
-            notes: None,
-        },
-        tasks: vec![PlannedTask {
-            id: format!("{item_id}-T01"),
-            title: format!("Implement {}", item.frontmatter.title),
-            goal: format!("Complete the implementation contract for {}.", item.frontmatter.id),
-            requirement_refs: vec!["R1".to_string()],
-            depends_on: Vec::new(),
-            owned_surfaces,
-            suggested_worker: item.frontmatter.suggested_worker.clone(),
-            verification: vec!["make check".to_string()],
-            acceptance: vec![format!(
-                "{} acceptance criteria are satisfied.",
-                item.frontmatter.id
-            )],
-            notes: None,
-        }],
-    };
+    }
 
     ActionResult::completed(
         action,
-        format!("Drafted task plan for {item_id}."),
+        format!(
+            "Drafted task plan for {} with host sampling.",
+            context.item_id
+        ),
         TaskPlanData {
-            root: root.display().to_string(),
-            item_id,
+            root: context.root.display().to_string(),
+            item_id: context.item_id,
             path: None,
             plan,
         },
     )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum SampledTaskPlan {
+    Wrapped { plan: TaskPlanFile },
+    Bare(TaskPlanFile),
+}
+
+struct TaskPlanDraftContext {
+    root: PathBuf,
+    item_id: String,
+    title: String,
+    goal: String,
+    implementation_contract: String,
+    acceptance: Vec<String>,
+    owned_surfaces: Vec<String>,
+    suggested_worker: Option<String>,
+}
+
+fn task_plan_draft_context(
+    default_root: &Path,
+    params: &DraftTaskPlanParams,
+) -> Result<TaskPlanDraftContext, String> {
+    let root = resolve_root(default_root, params.root.as_deref())?;
+    let item_id = normalize_item_id(&params.item_id);
+    let validation = validate_backlog_at_root(&root, true);
+    if !validation.ok {
+        return Err("backlog must validate before drafting task plans".to_string());
+    }
+    let item = validation
+        .items
+        .iter()
+        .find(|item| item.frontmatter.id == item_id)
+        .ok_or_else(|| format!("unknown backlog item `{item_id}`"))?;
+    let text = fs::read_to_string(&item.path).map_err(|error| error.to_string())?;
+    let body = text
+        .split_once("\n---\n")
+        .map(|(_, body)| body)
+        .ok_or_else(|| format!("{} missing markdown body", item.path.display()))?;
+    let goal = section(body, "Goal")
+        .ok_or_else(|| format!("{} missing Goal section", item.path.display()))?;
+    let implementation_contract = section(body, "Implementation Contract").ok_or_else(|| {
+        format!(
+            "{} missing Implementation Contract section",
+            item.path.display()
+        )
+    })?;
+    let acceptance_text = section(body, "Acceptance")
+        .ok_or_else(|| format!("{} missing Acceptance section", item.path.display()))?;
+    let acceptance = parse_acceptance(&acceptance_text);
+    if acceptance.is_empty() {
+        return Err(format!(
+            "{} Acceptance section is empty",
+            item.path.display()
+        ));
+    }
+    Ok(TaskPlanDraftContext {
+        root,
+        item_id,
+        title: item.frontmatter.title.clone(),
+        goal,
+        implementation_contract,
+        acceptance,
+        owned_surfaces: item.frontmatter.owned_surfaces.clone(),
+        suggested_worker: item.frontmatter.suggested_worker.clone(),
+    })
+}
+
+fn section(body: &str, heading: &str) -> Option<String> {
+    let marker = format!("## {heading}");
+    let start = body.find(&marker)?;
+    let after_heading = &body[start + marker.len()..];
+    let after_heading = after_heading.strip_prefix('\n').unwrap_or(after_heading);
+    let end = after_heading.find("\n## ").unwrap_or(after_heading.len());
+    Some(after_heading[..end].trim().to_string())
+}
+
+fn parse_acceptance(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("- ")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .collect()
 }
 
 pub fn inspect_task_plan(
@@ -212,11 +337,17 @@ pub fn validate_task_plan(
         },
     };
     if data.ok {
-        ActionResult::completed(
-            action,
-            format!("Task plans valid: {} plan(s).", data.plan_count),
-            data,
-        )
+        ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Completed,
+            summary: format!("Task plans valid: {} plan(s).", data.plan_count),
+            next_action: Some(
+                "Commit task-plan artifacts before dispatching work if this validation followed writes."
+                    .to_string(),
+            ),
+            data: Some(data),
+            error: None,
+        }
     } else {
         ActionResult {
             action: action.to_string(),
@@ -241,14 +372,18 @@ pub fn write_task_plan(
         Err(error) => return ActionResult::failed(action, "Could not write task plan.", error),
     };
     let item_id = normalize_item_id(&params.item_id);
-    if item_id != params.plan.item_id {
+    let mut plan = params.plan;
+    if item_id != plan.item_id {
         return ActionResult::failed(
             action,
             "Could not write task plan.",
             "request item_id must match plan.item_id",
         );
     }
-    let errors = validate_plan_with_backlog(&root, &params.plan);
+    canonicalize_plan_mode(&mut plan);
+    canonicalize_task_ids(&mut plan);
+    apply_task_defaults(&mut plan);
+    let errors = validate_plan_with_backlog(&root, &plan);
     if !errors.is_empty() {
         return ActionResult::failed(action, "Could not write task plan.", errors.join("\n"));
     }
@@ -271,7 +406,7 @@ pub fn write_task_plan(
         return ActionResult::failed(action, "Could not write task plan.", error);
     }
     let existed = path.exists();
-    let text = match serde_yaml::to_string(&params.plan) {
+    let text = match serde_yaml::to_string(&plan) {
         Ok(text) => text,
         Err(error) => {
             return ActionResult::failed(action, "Could not write task plan.", error.to_string())
@@ -280,17 +415,23 @@ pub fn write_task_plan(
     if let Err(error) = fs::write(&path, text) {
         return ActionResult::failed(action, "Could not write task plan.", error.to_string());
     }
-    ActionResult::completed(
-        action,
-        format!("Wrote task plan for {item_id}."),
-        TaskPlanWriteData {
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Completed,
+        summary: format!("Wrote task plan for {item_id}."),
+        next_action: Some(
+            "Task plan was validated before write. Commit backlog/plans/<ITEM>.yaml, then dispatch ready work."
+                .to_string(),
+        ),
+        data: Some(TaskPlanWriteData {
             root: root.display().to_string(),
             item_id,
             path: path.display().to_string(),
             created: !existed,
             overwritten: existed,
-        },
-    )
+        }),
+        error: None,
+    }
 }
 
 fn validate_plans_at_root(root: &Path, item_id: Option<&str>) -> Vec<String> {
@@ -358,8 +499,11 @@ fn validate_plan_shape(plan: &TaskPlanFile) -> Vec<String> {
     if plan.version == 0 {
         errors.push("version must be at least 1".to_string());
     }
-    if !PLAN_MODES.contains(&plan.mode.as_str()) {
-        errors.push(format!("invalid mode `{}`", plan.mode));
+    if canonical_plan_mode(&plan.mode).is_none() {
+        errors.push(format!(
+            "invalid mode `{}`; expected one of: direct, standard, full. Accepted aliases: direct_scaffold -> direct, platypus_workflow -> full",
+            plan.mode
+        ));
     }
     if plan.design.summary.trim().is_empty() {
         errors.push("design.summary is required".to_string());
@@ -382,8 +526,9 @@ fn validate_plan_shape(plan: &TaskPlanFile) -> Vec<String> {
     for task in &plan.tasks {
         if !valid_task_id(&plan.item_id, &task.id) {
             errors.push(format!(
-                "invalid task id `{}`; expected {}-TNN",
-                task.id, plan.item_id
+                "invalid task id `{}`; expected task IDs such as {}",
+                task.id,
+                task_id_hint(&plan.item_id)
             ));
         }
         if !task_ids.insert(task.id.clone()) {
@@ -392,14 +537,8 @@ fn validate_plan_shape(plan: &TaskPlanFile) -> Vec<String> {
         if task.title.trim().is_empty() || task.goal.trim().is_empty() {
             errors.push(format!("{}: title and goal are required", task.id));
         }
-        if task.owned_surfaces.is_empty() {
+        if task.owned_surfaces.is_empty() && plan.design.owned_surfaces.is_empty() {
             errors.push(format!("{}: owned_surfaces must not be empty", task.id));
-        }
-        if task.verification.is_empty() {
-            errors.push(format!("{}: verification must not be empty", task.id));
-        }
-        if task.acceptance.is_empty() {
-            errors.push(format!("{}: acceptance must not be empty", task.id));
         }
         for reference in &task.requirement_refs {
             if !requirement_ids.contains(reference) {
@@ -419,8 +558,187 @@ fn validate_plan_shape(plan: &TaskPlanFile) -> Vec<String> {
             }
         }
     }
+    errors.extend(find_dependency_cycles(plan));
 
     errors
+}
+
+fn apply_task_defaults(plan: &mut TaskPlanFile) {
+    if plan.design.owned_surfaces.is_empty() {
+        return;
+    }
+    for task in &mut plan.tasks {
+        if task.owned_surfaces.is_empty() {
+            task.owned_surfaces = plan.design.owned_surfaces.clone();
+        }
+    }
+}
+
+fn canonicalize_task_ids(plan: &mut TaskPlanFile) {
+    let mut rewrite = BTreeMap::new();
+    for task in &mut plan.tasks {
+        let original = task.id.clone();
+        let normalized = normalize_task_id_hint(&plan.item_id, &task.id);
+        task.id = normalized.clone();
+        rewrite.insert(original, normalized);
+    }
+    for task in &mut plan.tasks {
+        task.depends_on = task
+            .depends_on
+            .iter()
+            .map(|dependency| {
+                rewrite
+                    .get(dependency)
+                    .cloned()
+                    .unwrap_or_else(|| normalize_task_id_hint(&plan.item_id, dependency))
+            })
+            .collect();
+    }
+}
+
+fn normalize_task_id_hint(item_id: &str, value: &str) -> String {
+    if valid_task_id(item_id, value) {
+        return value.to_string();
+    }
+    let trimmed = value.trim();
+    if let Some(number) = parse_task_number(trimmed) {
+        return format!("{item_id}-T{number:03}");
+    }
+    value.to_string()
+}
+
+fn parse_task_number(value: &str) -> Option<u16> {
+    let upper = value.to_ascii_uppercase();
+    let candidate = upper
+        .strip_prefix("TASK-")
+        .or_else(|| upper.strip_prefix("TASK"))
+        .unwrap_or(upper.as_str());
+    let candidate = candidate
+        .strip_prefix("T-")
+        .or_else(|| candidate.strip_prefix("T"))
+        .unwrap_or(candidate);
+    if candidate.is_empty() || !candidate.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    candidate.parse::<u16>().ok().filter(|number| *number > 0)
+}
+
+fn starter_task_plan(context: &TaskPlanDraftContext) -> TaskPlanFile {
+    let worker = context
+        .suggested_worker
+        .clone()
+        .unwrap_or_else(|| "coder".to_string());
+    let surfaces = if context.owned_surfaces.is_empty() {
+        vec![".".to_string()]
+    } else {
+        context.owned_surfaces.clone()
+    };
+    let acceptance = if context.acceptance.is_empty() {
+        vec!["Primary objective is implemented and verification notes are recorded.".to_string()]
+    } else {
+        context.acceptance.clone()
+    };
+    TaskPlanFile {
+        item_id: context.item_id.clone(),
+        version: 1,
+        mode: "standard".to_string(),
+        requirements: vec![TaskPlanRequirement {
+            id: "R1".to_string(),
+            text: context.goal.clone(),
+        }],
+        design: TaskPlanDesign {
+            summary: context.implementation_contract.clone(),
+            owned_surfaces: surfaces.clone(),
+            notes: Some(
+                "Starter plan generated without MCP sampling; review and adjust before writing."
+                    .to_string(),
+            ),
+        },
+        tasks: vec![PlannedTask {
+            id: format!("{}-T001", context.item_id),
+            title: format!("Deliver {}", context.title),
+            goal: context.goal.clone(),
+            requirement_refs: vec!["R1".to_string()],
+            depends_on: Vec::new(),
+            owned_surfaces: surfaces,
+            suggested_worker: Some(worker),
+            verification: Vec::new(),
+            acceptance,
+            notes: Some(vec![
+                "Add project-specific verification commands before dispatch when needed."
+                    .to_string(),
+            ]),
+        }],
+    }
+}
+
+fn canonicalize_plan_mode(plan: &mut TaskPlanFile) {
+    if let Some(mode) = canonical_plan_mode(&plan.mode) {
+        plan.mode = mode.to_string();
+    }
+}
+
+fn canonical_plan_mode(mode: &str) -> Option<&'static str> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "direct" | "direct_scaffold" => Some("direct"),
+        "standard" | "hybrid" => Some("standard"),
+        "full" | "platypus_workflow" => Some("full"),
+        _ => None,
+    }
+}
+
+fn task_id_hint(item_id: &str) -> String {
+    format!("{item_id}-T001, {item_id}-T002, ...")
+}
+
+fn find_dependency_cycles(plan: &TaskPlanFile) -> Vec<String> {
+    let graph = plan
+        .tasks
+        .iter()
+        .map(|task| (task.id.as_str(), task.depends_on.as_slice()))
+        .collect::<BTreeMap<_, _>>();
+    let mut errors = Vec::new();
+    for task in &plan.tasks {
+        let mut path = Vec::new();
+        let mut visiting = BTreeSet::new();
+        detect_cycle_from(
+            task.id.as_str(),
+            &graph,
+            &mut visiting,
+            &mut path,
+            &mut errors,
+        );
+    }
+    errors.sort();
+    errors.dedup();
+    errors
+}
+
+fn detect_cycle_from<'a>(
+    task_id: &'a str,
+    graph: &BTreeMap<&'a str, &'a [String]>,
+    visiting: &mut BTreeSet<&'a str>,
+    path: &mut Vec<&'a str>,
+    errors: &mut Vec<String>,
+) {
+    if !visiting.insert(task_id) {
+        if let Some(position) = path.iter().position(|seen| *seen == task_id) {
+            let mut cycle = path[position..].to_vec();
+            cycle.push(task_id);
+            errors.push(format!("circular task dependency: {}", cycle.join(" -> ")));
+        }
+        return;
+    }
+    path.push(task_id);
+    if let Some(dependencies) = graph.get(task_id) {
+        for dependency in *dependencies {
+            if graph.contains_key(dependency.as_str()) {
+                detect_cycle_from(dependency, graph, visiting, path, errors);
+            }
+        }
+    }
+    path.pop();
+    visiting.remove(task_id);
 }
 
 fn valid_task_id(item_id: &str, task_id: &str) -> bool {
@@ -430,7 +748,7 @@ fn valid_task_id(item_id: &str, task_id: &str) -> bool {
     let Some(number) = suffix.strip_prefix("-T") else {
         return false;
     };
-    number.len() == 2 && number.chars().all(|character| character.is_ascii_digit())
+    matches!(number.len(), 2 | 3) && number.chars().all(|character| character.is_ascii_digit())
 }
 
 fn read_plan_for_item(

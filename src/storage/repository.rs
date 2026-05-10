@@ -371,6 +371,20 @@ impl TaskStore for TaskRepository<'_> {
 }
 
 impl TaskRepository<'_> {
+    pub fn active_source_items(&self) -> RepositoryResult<Vec<String>> {
+        let mut statement = self.connection.prepare(
+            r#"
+            SELECT DISTINCT source_item_id
+            FROM tasks
+            WHERE status IN ('queued', 'claimed', 'running')
+            ORDER BY source_item_id ASC
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>("source_item_id"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(RepositoryError::from)
+    }
+
     fn next_task_id(&self, source_item_id: &str) -> rusqlite::Result<String> {
         let existing: i64 = self.connection.query_row(
             "SELECT COUNT(*) FROM tasks WHERE source_item_id = ?1",

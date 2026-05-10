@@ -42,6 +42,7 @@ stateDiagram-v2
     [*] --> queued: dispatch_ready_work or dispatch_next_work
     queued --> claimed: claim_next_task
     claimed --> running: start_worker_task
+    claimed --> completed: complete_worker_task auto-starts prepared assignment
     running --> completed: complete_worker_task completed
     running --> failed: complete_worker_task failed
     running --> cancelled: future cancellation
@@ -75,6 +76,9 @@ sequenceDiagram
     Platy->>Git: create/record worktree
     Platy-->>Host: assignment bundle
     Host->>Worker: run bundle in worktree
+    opt explicit running transition
+        Worker->>Platy: start_worker_task
+    end
     Worker->>Platy: record_worker_progress
     Worker->>Platy: complete_worker_task
     Host->>Platy: record_verification_evidence

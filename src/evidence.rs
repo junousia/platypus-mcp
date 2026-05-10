@@ -71,13 +71,20 @@ pub fn record_verification_evidence(
     default_root: &Path,
     params: RecordVerificationEvidenceParams,
 ) -> ActionResult<EvidenceRecordData> {
+    if params.source_item_id.is_none() && params.source_task_id.is_none() {
+        return ActionResult::failed(
+            "record_verification_evidence",
+            "Could not record verification evidence.",
+            "source_item_id or source_task_id is required",
+        );
+    }
     let mut result = record_evidence(
         default_root,
         RecordEvidenceParams {
             root: params.root,
             id: params.id,
             source_item_id: params.source_item_id,
-            source_task_id: Some(params.source_task_id),
+            source_task_id: params.source_task_id,
             kind: "verification".to_string(),
             summary: params.summary,
             refs: params.refs,
@@ -201,6 +208,50 @@ mod tests {
         );
         let data = listed.data.expect("list data");
         assert_eq!(data.returned, 1);
+    }
+
+    #[test]
+    fn records_verification_evidence_for_item_without_task() {
+        let project = TempDir::new().expect("temp dir");
+
+        let recorded = record_verification_evidence(
+            project.path(),
+            RecordVerificationEvidenceParams {
+                root: None,
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: None,
+                summary: "Manual verification covered the whole item.".to_string(),
+                refs: vec!["local:make-check".to_string()],
+                metadata: BTreeMap::new(),
+            },
+        );
+
+        assert_eq!(recorded.status, ActionStatus::Completed);
+        let evidence = recorded.data.expect("evidence").evidence;
+        assert_eq!(evidence.source_item_id.as_deref(), Some("PROJ-001"));
+        assert!(evidence.source_task_id.is_none());
+    }
+
+    #[test]
+    fn rejects_verification_evidence_without_source() {
+        let project = TempDir::new().expect("temp dir");
+
+        let recorded = record_verification_evidence(
+            project.path(),
+            RecordVerificationEvidenceParams {
+                root: None,
+                id: None,
+                source_item_id: None,
+                source_task_id: None,
+                summary: "No source.".to_string(),
+                refs: Vec::new(),
+                metadata: BTreeMap::new(),
+            },
+        );
+
+        assert_eq!(recorded.status, ActionStatus::Failed);
+        assert!(recorded.error.expect("error").contains("source_item_id"));
     }
 
     #[test]

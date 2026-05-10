@@ -68,9 +68,11 @@ pub(crate) fn validate_changed_files(
         return Ok(());
     }
     for file in changed_files {
-        let allowed = surfaces
-            .iter()
-            .any(|surface| file == surface || file.starts_with(&format!("{surface}/")));
+        let allowed = surfaces.iter().any(|surface| {
+            file == surface
+                || file.starts_with(&format!("{surface}/"))
+                || same_owned_file_directory(surface, file)
+        });
         if !allowed {
             return Err(format!(
                 "`{file}` is outside owned surfaces: {}",
@@ -79,6 +81,18 @@ pub(crate) fn validate_changed_files(
         }
     }
     Ok(())
+}
+
+fn same_owned_file_directory(surface: &str, file: &str) -> bool {
+    let Some((surface_dir, surface_name)) = surface.rsplit_once('/') else {
+        return false;
+    };
+    if !surface_name.contains('.') {
+        return false;
+    }
+    file.rsplit_once('/')
+        .map(|(file_dir, _)| file_dir == surface_dir)
+        .unwrap_or(false)
 }
 
 fn clean_relative_path(field: &str, value: &str) -> Result<String, String> {
@@ -99,4 +113,26 @@ fn clean_relative_path(field: &str, value: &str) -> Result<String, String> {
         }
     }
     Ok(path.to_string_lossy().replace('\\', "/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changed_files_allow_auxiliary_files_in_owned_file_directory() {
+        let owned = vec!["app/main.py".to_string()];
+        let changed = vec!["app/__init__.py".to_string(), "app/main.py".to_string()];
+
+        validate_changed_files(&owned, &changed).expect("same directory auxiliary file");
+    }
+
+    #[test]
+    fn changed_files_still_reject_unowned_directories() {
+        let owned = vec!["app/main.py".to_string()];
+        let changed = vec!["tests/test_app.py".to_string()];
+
+        let error = validate_changed_files(&owned, &changed).expect_err("unowned file");
+        assert!(error.contains("outside owned surfaces"));
+    }
 }

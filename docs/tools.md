@@ -38,11 +38,12 @@ deterministic and references the current public tool names.
 1. Bootstrap and inspect: `platypus-mcp bootstrap <host> --init-project` for
    fresh projects, or `init_project`, `doctor_snapshot`, `inspect_status`,
    `inspect_workflow_config` from an MCP host.
-2. Shape backlog: `draft_backlog_items`, `draft_external_backlog_items`,
-   `import_github_issues`, `create_backlog_item`, `validate_backlog`,
-   `list_backlog`.
-3. Plan non-trivial work: `draft_task_plan`, `write_task_plan`,
+2. Shape backlog: `create_backlog_item`, `validate_backlog`, `list_backlog`,
+   `draft_external_backlog_items`, `import_github_issues`. Use
+   `draft_backlog_items` only when host sampling is available.
+3. Plan non-trivial work: `write_task_plan`,
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
+   Use `draft_task_plan` only when host sampling is available.
 4. Inspect the executable queue: `inspect_work_queue`.
 5. Dispatch work: prefer `dispatch_ready_work` for one or more ready items;
    use `dispatch_next_work` and `prepare_worker_handoff` only for precise
@@ -50,7 +51,7 @@ deterministic and references the current public tool names.
 6. Run worker externally: pass the generated bundle/worktree to Codex, Claude,
    or another harness.
 7. Record worker activity: `start_worker_task`, `record_worker_progress`,
-   `complete_worker_task`.
+   `complete_worker_task`, `run_task_verification`.
 8. Inspect and verify: `inspect_worktree_changes`,
    `record_verification_evidence`, `record_finding`, `validate_findings`.
 9. Integrate and clean up: `integrate_worker_result`, `reconcile_project`,
@@ -105,8 +106,10 @@ make smoke-storage
 
 ### Backlog
 
-- `draft_backlog_items`: draft deterministic candidate backlog items from a
-  goal.
+- `draft_backlog_items`: optionally ask a sampling-capable MCP host to draft
+  concrete backlog candidates from a goal. If sampling is unavailable, the tool
+  skips instead of returning generic templates; the host should call
+  `create_backlog_item` directly.
 - `draft_external_backlog_items`: draft provider-neutral candidates from
   host-provided external work records and skip already-imported references.
 - `import_github_issues`: import host-provided GitHub issue records as local
@@ -212,17 +215,31 @@ trailers.
 
 ### Task And Workspace Lifecycle
 
+- `plan_goal_work`: read-only intake guidance for a broad user goal. It
+  classifies mode and returns the concrete next `start_goal_work` arguments
+  without creating files, backlog items, tasks, or state.
+- `start_goal_work`: mutating intake for new goals. It can classify mode,
+  create or reuse a lightweight tracking backlog item, and optionally dispatch
+  prepared work.
 - `next_safe_action`: recommend the next safe tool call and parameters.
 - `classify_workflow_fit`: classify broad user goals as `direct_scaffold`,
   `platypus_workflow`, or `hybrid` before forcing backlog ceremony.
 - `inspect_work_queue`: inspect runnable backlog candidates with task-plan
-  state and a recommended next tool.
+  state, active task counts, and a recommended next tool. Items already
+  dispatched are omitted from ready candidates and reported through
+  `active_count` and `active_item_ids`.
 - `classify_planning_needs`: classify runnable items as `direct`, `standard`,
   or `full` planning mode with structured reasons.
 - `dispatch_ready_work`: preferred host flow for executable backlog work. It
   checks Git readiness, dispatches up to `max_tasks` runnable independent
   items, skips already-active items, and prepares worker assignments,
-  worktrees, and bundles by default.
+  worktrees, and bundles in one call.
+  Auto-commit of backlog artifacts is opt-in via
+  `auto_commit_artifacts=true`.
+  For direct-scaffold goals, call `plan_goal_work` first when unsure. Its
+  recommended arguments prefer `dispatch=true` so one mutating call can create
+  tracking and prepare the first task worktree. Use `dispatch=false` only when
+  intentionally editing the manager workspace directly.
 - `dispatch_next_work`: low-level single-item queueing. It also checks Git
   readiness before creating task state, but hosts usually want
   `dispatch_ready_work` so worker assignment state cannot be accidentally
@@ -230,7 +247,9 @@ trailers.
 - `inspect_task`: inspect one task lifecycle record.
 - `claim_next_task`: atomically claim a queued task.
 - `worktree_create`: create an isolated task worktree.
-- `worktree_status`: inspect recorded worktree metadata.
+- `worktree_status`: inspect recorded worktree metadata. `exists` means the
+  recorded worktree path is present on disk; `created` only means the current
+  tool call created a new worktree.
 - `worktree_diff` / `inspect_worktree_changes`: inspect bounded worktree
   changes.
 - `worktree_cleanup`: remove a clean or explicitly forced task worktree.
@@ -248,7 +267,12 @@ trailers.
   running.
 - `record_worker_event` / `record_worker_progress`: persist worker progress.
 - `complete_worker_execution` / `complete_worker_task`: finish a worker task
-  with result, changed files, and verification status.
+  with result, changed files, and verification status. For same-session host
+  flows, completion can auto-start a prepared assignment by default. Set
+  `auto_start_if_prepared=false` only when strict running-only completion is
+  required.
+- `run_task_verification`: execute the assignment verification command in the
+  task worktree and persist a verification run event/evidence record.
 - `send_worker_guidance`: persist steering messages for active tasks.
 
 ### Supervision, Evidence, And Findings
@@ -279,8 +303,10 @@ trailers.
 
 When a backlog item is runnable, the result recommends `dispatch_ready_work`.
 It returns task ids, assignment ids, worktree paths, and per-item skipped or
-failed reasons in one response. After dispatch, use `start_worker_task`, then
-`record_worker_progress` while the assignment is running.
+failed reasons in one response. After dispatch, use `start_worker_task` when
+you need an explicit running transition, then `record_worker_progress` while
+the assignment is running. Same-session host flows can complete a prepared
+assignment directly with `complete_worker_task`.
 
 ## Workflow Configuration
 

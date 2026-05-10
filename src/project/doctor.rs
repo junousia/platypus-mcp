@@ -36,16 +36,26 @@ pub fn doctor_snapshot(
     checks.push(git_check(&root));
     checks.push(backlog_count_check(&root));
 
-    let ok = checks
+    let has_failures = checks
         .iter()
-        .all(|check| matches!(check.status, DoctorCheckStatus::Pass));
+        .any(|check| matches!(check.status, DoctorCheckStatus::Fail));
+    let ok = !has_failures;
     let data = DoctorSnapshotData {
         root: root.display().to_string(),
         ok,
         checks,
     };
     if ok {
-        ActionResult::completed(action, "Project doctor checks passed.", data)
+        let summary = if data
+            .checks
+            .iter()
+            .any(|check| matches!(check.status, DoctorCheckStatus::Warn))
+        {
+            "Project doctor checks passed with warnings."
+        } else {
+            "Project doctor checks passed."
+        };
+        ActionResult::completed(action, summary, data)
     } else {
         ActionResult {
             action: action.to_string(),
@@ -134,8 +144,12 @@ fn backlog_count_check(root: &Path) -> DoctorCheck {
         DoctorCheck {
             name: "backlog_items_count".to_string(),
             status: DoctorCheckStatus::Warn,
-            summary: "No backlog items found.".to_string(),
-            next_action: Some("Ask the MCP host to draft and create backlog items.".to_string()),
+            summary: "No backlog items found; direct scaffold mode can start without them."
+                .to_string(),
+            next_action: Some(
+                "For a greenfield baseline, use plan_goal_work for read-only guidance, then start_goal_work with the recommended arguments to create tracking and prepare the first task worktree."
+                    .to_string(),
+            ),
         }
     }
 }
@@ -198,6 +212,32 @@ mod tests {
         assert!(matches!(git.status, DoctorCheckStatus::Fail));
         assert!(git.summary.contains("no initial commit"));
         assert!(git.next_action.as_ref().unwrap().contains("initial commit"));
+    }
+
+    #[test]
+    fn doctor_snapshot_treats_empty_backlog_as_warning_not_failure() {
+        let temp = project_fixture(true);
+        init_git(temp.path());
+
+        let root = temp.path().to_string_lossy().into_owned();
+        let result = doctor_snapshot(temp.path(), Some(root.as_str()));
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert!(result.summary.contains("warnings"));
+        let data = result.data.expect("data");
+        assert!(data.ok);
+        let backlog = data
+            .checks
+            .iter()
+            .find(|check| check.name == "backlog_items_count")
+            .expect("backlog count check");
+        assert!(matches!(backlog.status, DoctorCheckStatus::Warn));
+        assert!(backlog.summary.contains("direct scaffold"));
+        assert!(backlog
+            .next_action
+            .as_ref()
+            .expect("next action")
+            .contains("plan_goal_work"));
     }
 
     fn project_fixture(with_backlog_dirs: bool) -> TempDir {

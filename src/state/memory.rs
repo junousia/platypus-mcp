@@ -374,9 +374,12 @@ impl ProjectState for MemoryProjectState {
             .assignments
             .get(&command.assignment_id)
             .ok_or_else(|| ProjectStateError::not_found("worker assignment was not found"))?;
-        if !matches!(assignment.state, AssignmentLifecycleState::Running) {
+        if !matches!(
+            assignment.state,
+            AssignmentLifecycleState::Prepared | AssignmentLifecycleState::Running
+        ) {
             return Err(ProjectStateError::conflict(
-                "worker assignment is not running",
+                "worker assignment is not prepared or running",
             ));
         }
         let sequence = inner

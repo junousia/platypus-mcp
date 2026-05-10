@@ -450,9 +450,9 @@ impl ProjectState for SqliteProjectState {
         let storage = self.connect_storage()?;
         let assignment = load_assignment(&storage.connection, &command.assignment_id)
             .map_err(map_assignment_load_error)?;
-        if assignment.status != "running" {
+        if assignment.status != "running" && assignment.status != "prepared" {
             return Err(ProjectStateError::conflict(format!(
-                "worker assignment `{}` is `{}`; record progress only after start_execution",
+                "worker assignment `{}` is `{}`; record progress only for prepared or running assignments",
                 command.assignment_id, assignment.status
             )));
         }
@@ -781,6 +781,33 @@ impl ProjectState for SqliteProjectState {
                     [("root", root.as_str()), ("max_tasks", "1")],
                 ));
             }
+        }
+
+        let backlog_items_dir = self.root.join("backlog/items");
+        let backlog_item_files = std::fs::read_dir(&backlog_items_dir)
+            .ok()
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .filter(|entry| {
+                        entry
+                            .path()
+                            .extension()
+                            .is_some_and(|extension| extension == "md")
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        if backlog_item_files > 0 {
+            return Ok(safe_action(
+                "inspect_work_queue",
+                format!(
+                    "Backlog has {} item file(s), but none are ready to dispatch yet.",
+                    backlog_item_files
+                ),
+                "Inspect queue readiness and planning requirements before creating new items.",
+                [("root", root.as_str())],
+            ));
         }
 
         Ok(safe_action(

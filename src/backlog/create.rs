@@ -28,18 +28,22 @@ pub fn create_backlog_item(
         return ActionResult::failed(action, "Could not create backlog item.", error);
     }
     let validation = validate_backlog_at_root(&root, true);
+    let configured_prefix = configured_id_prefix(&root);
     let item_id = match params.id.as_deref() {
         Some(id) => normalize_item_id(id),
         None => allocate_item_id(
             &validation.items,
-            params.id_prefix.as_deref().unwrap_or("PROJ"),
+            params.id_prefix.as_deref().unwrap_or(&configured_prefix),
         ),
     };
     if !valid_item_id(&item_id) {
         return ActionResult::failed(
             action,
             "Could not create backlog item.",
-            format!("invalid backlog id `{}`; expected AREA-000", item_id),
+            format!(
+                "invalid backlog id `{}`; expected format `{}-NNN` with three digits",
+                item_id, configured_prefix
+            ),
         );
     }
     let item_path = items_dir.join(format!("{}.md", item_id));
@@ -171,6 +175,24 @@ fn normalize_item_type(value: Option<&str>) -> String {
     }
 }
 
+fn configured_id_prefix(root: &Path) -> String {
+    let path = root.join("platy.yaml");
+    let Ok(text) = fs::read_to_string(path) else {
+        return "PROJ".to_string();
+    };
+    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
+        return "PROJ".to_string();
+    };
+    value
+        .get("backlog")
+        .and_then(|backlog| backlog.get("id_prefix"))
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("PROJ")
+        .to_ascii_uppercase()
+}
+
 fn clean_vec(values: Vec<String>) -> Vec<String> {
     values
         .into_iter()
@@ -206,7 +228,7 @@ fn normalize_backlog_input(
     let mut acceptance = clean_vec(params.acceptance.clone());
     if acceptance.is_empty() {
         acceptance.push(format!(
-            "{} is implemented and the validation path is documented.",
+            "{} is implemented and verification notes are recorded.",
             title
         ));
     }

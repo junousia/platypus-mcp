@@ -1,5 +1,8 @@
 use crate::{
-    models::{ActionResult, GenerateTaskBundleParams, TaskBundle, TaskBundleData, TaskRecord},
+    models::{
+        ActionResult, GenerateTaskBundleParams, PlannedTask, TaskBundle, TaskBundleData,
+        TaskPlanFile, TaskPlanRequirement, TaskRecord,
+    },
     state::{sqlite::SqliteProjectState, ProjectState, TaskQuery, TaskSnapshot},
 };
 use serde::Deserialize;
@@ -27,6 +30,7 @@ struct ParsedBundleItem {
     goal: String,
     implementation_contract: String,
     acceptance: Vec<String>,
+    task_plan: Option<TaskPlanFile>,
 }
 
 pub fn generate_task_bundle(
@@ -82,8 +86,30 @@ pub fn generate_task_bundle(
             return ActionResult::failed(action, "Could not read backlog item.", error)
         }
     };
-    let verification_command = clean_command(params.verification_command);
-    let brief = bundle_brief(&task, &item, &workspace_path, &verification_command);
+    let selected_plan_task = plan_task_for_task_id(item.task_plan.as_ref(), &task.id);
+    let mut verification_command = clean_command(params.verification_command);
+    if verification_command.is_empty() {
+        verification_command = selected_plan_task
+            .map(|planned| clean_command(planned.verification.clone()))
+            .filter(|commands| !commands.is_empty())
+            .unwrap_or_else(|| task_plan_verification(item.task_plan.as_ref()));
+    }
+    let acceptance = selected_plan_task
+        .map(|planned| planned.acceptance.clone())
+        .filter(|criteria| !criteria.is_empty())
+        .unwrap_or_else(|| item.acceptance.clone());
+    let owned_surfaces = selected_plan_task
+        .map(|planned| planned.owned_surfaces.clone())
+        .filter(|surfaces| !surfaces.is_empty())
+        .unwrap_or_else(|| item.frontmatter.owned_surfaces.clone());
+    let brief = bundle_brief(
+        &task,
+        &item,
+        &workspace_path,
+        &verification_command,
+        &acceptance,
+        &owned_surfaces,
+    );
     let bundle = TaskBundle {
         task_id: task.id.clone(),
         item_id: item.frontmatter.id.clone(),
@@ -95,9 +121,9 @@ pub fn generate_task_bundle(
         workspace_path: workspace_path.display().to_string(),
         goal: item.goal,
         implementation_contract: item.implementation_contract,
-        acceptance: item.acceptance,
+        acceptance,
         dependencies: item.frontmatter.depends_on,
-        owned_surfaces: item.frontmatter.owned_surfaces,
+        owned_surfaces,
         verification_command,
         brief,
     };
@@ -218,12 +244,27 @@ fn parse_backlog_item_for_task(
             canonical.display()
         )));
     }
+    let task_plan = read_task_plan(root, item_id);
     Ok(ParsedBundleItem {
         frontmatter,
         goal,
         implementation_contract,
         acceptance,
+        task_plan,
     })
+}
+
+fn read_task_plan(root: &Path, item_id: &str) -> Option<TaskPlanFile> {
+    let path = root
+        .join("backlog")
+        .join("plans")
+        .join(format!("{item_id}.yaml"));
+    let canonical = fs::canonicalize(&path).ok()?;
+    if !canonical.starts_with(root) {
+        return None;
+    }
+    let text = fs::read_to_string(canonical).ok()?;
+    serde_yaml::from_str(&text).ok()
 }
 
 fn split_frontmatter(text: &str) -> Result<(&str, &str), String> {
@@ -288,28 +329,34 @@ fn bundle_brief(
     item: &ParsedBundleItem,
     workspace_path: &Path,
     verification_command: &[String],
+    acceptance_criteria: &[String],
+    owned_surfaces: &[String],
 ) -> String {
     let verify = if verification_command.is_empty() {
-        "No verification command was provided. Report what can be verified safely.".to_string()
+        "Verification command: unspecified. Do not report `passed` unless you ran an explicit check; otherwise use verification_status `not_run`, `skipped`, or `failed` and explain why."
+            .to_string()
     } else {
-        verification_command.join(" ")
+        verification_command
+            .iter()
+            .map(|command| format!("- `{command}`"))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
-    let acceptance = item
-        .acceptance
+    let acceptance = acceptance_criteria
         .iter()
         .map(|criterion| format!("- {criterion}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let surfaces = if item.frontmatter.owned_surfaces.is_empty() {
+    let surfaces = if owned_surfaces.is_empty() {
         "- No owned surfaces declared.".to_string()
     } else {
-        item.frontmatter
-            .owned_surfaces
+        owned_surfaces
             .iter()
             .map(|surface| format!("- {surface}"))
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let task_plan = task_plan_brief(item.task_plan.as_ref());
     limit_brief(&format!(
         "# Task Bundle: {item_id}\n\n\
          Task: {task_id}\n\
@@ -319,6 +366,7 @@ fn bundle_brief(
          ## Goal\n\n{goal}\n\n\
          ## Implementation Contract\n\n{contract}\n\n\
          ## Acceptance\n\n{acceptance}\n\n\
+         ## Task Plan\n\n{task_plan}\n\n\
          ## Owned Surfaces\n\n{surfaces}\n\n\
          ## Verification\n\n{verify}\n",
         item_id = item.frontmatter.id.as_str(),
@@ -333,6 +381,96 @@ fn bundle_brief(
         goal = item.goal.as_str(),
         contract = item.implementation_contract.as_str(),
     ))
+}
+
+fn plan_task_for_task_id<'a>(
+    plan: Option<&'a TaskPlanFile>,
+    task_id: &str,
+) -> Option<&'a PlannedTask> {
+    let plan = plan?;
+    plan.tasks.iter().find(|task| task.id == task_id)
+}
+
+fn task_plan_brief(plan: Option<&TaskPlanFile>) -> String {
+    let Some(plan) = plan else {
+        return "No task plan is attached for this backlog item.".to_string();
+    };
+    let requirements = plan_requirements_brief(&plan.requirements);
+    let tasks = plan_tasks_brief(&plan.tasks);
+    format!(
+        "Mode: {mode}\n\nDesign: {design}\n\nRequirements:\n{requirements}\n\nPlanned tasks:\n{tasks}",
+        mode = plan.mode,
+        design = plan.design.summary,
+    )
+}
+
+fn plan_requirements_brief(requirements: &[TaskPlanRequirement]) -> String {
+    if requirements.is_empty() {
+        return "- No requirements recorded.".to_string();
+    }
+    requirements
+        .iter()
+        .map(|requirement| format!("- {}: {}", requirement.id, requirement.text))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn plan_tasks_brief(tasks: &[PlannedTask]) -> String {
+    if tasks.is_empty() {
+        return "- No planned tasks recorded.".to_string();
+    }
+    tasks
+        .iter()
+        .map(|task| {
+            let depends = if task.depends_on.is_empty() {
+                "none".to_string()
+            } else {
+                task.depends_on.join(", ")
+            };
+            let surfaces = if task.owned_surfaces.is_empty() {
+                "inherit from design".to_string()
+            } else {
+                task.owned_surfaces.join(", ")
+            };
+            let verification = if task.verification.is_empty() {
+                "not specified".to_string()
+            } else {
+                task.verification
+                    .iter()
+                    .map(|command| format!("`{command}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let acceptance = if task.acceptance.is_empty() {
+                "not specified".to_string()
+            } else {
+                task.acceptance.join("; ")
+            };
+            format!(
+                "- {id}: {title}\n  goal: {goal}\n  depends_on: {depends}\n  surfaces: {surfaces}\n  verification: {verification}\n  acceptance: {acceptance}",
+                id = task.id,
+                title = task.title,
+                goal = task.goal
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn task_plan_verification(plan: Option<&TaskPlanFile>) -> Vec<String> {
+    let Some(plan) = plan else {
+        return Vec::new();
+    };
+    let mut commands = Vec::new();
+    for task in &plan.tasks {
+        for command in &task.verification {
+            let command = command.trim();
+            if !command.is_empty() && !commands.iter().any(|existing| existing == command) {
+                commands.push(command.to_string());
+            }
+        }
+    }
+    commands
 }
 
 fn limit_text(value: &str) -> String {
@@ -409,6 +547,81 @@ mod tests {
         assert_eq!(bundle.owned_surfaces, vec!["src/bundle.rs"]);
         assert_eq!(bundle.verification_command, vec!["make", "check"]);
         assert!(bundle.brief.contains("## Goal"));
+    }
+
+    #[test]
+    fn bundle_brief_includes_task_plan_guidance() {
+        let project = project_with_backlog();
+        fs::create_dir_all(project.path().join("backlog/plans")).expect("plans");
+        fs::write(
+            project.path().join("backlog/plans/PROJ-001.yaml"),
+            r#"item_id: PROJ-001
+version: 1
+mode: standard
+requirements:
+  - id: R1
+    text: Worker must follow the implementation plan.
+design:
+  summary: Use the task plan to guide worker execution.
+  owned_surfaces:
+    - src/bundle.rs
+tasks:
+  - id: PROJ-001-T001
+    title: Add plan-aware bundle
+    goal: Include task-plan detail in the worker brief.
+    requirement_refs:
+      - R1
+    depends_on: []
+    owned_surfaces:
+      - src/bundle.rs
+    verification:
+      - make check
+    acceptance:
+      - Worker brief includes plan detail.
+"#,
+        )
+        .expect("plan");
+        git(&project, &["add", "backlog/plans/PROJ-001.yaml"]);
+        git(&project, &["commit", "-m", "Add task plan fixture"]);
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Bundle task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        )
+        .data
+        .expect("worktree");
+
+        let result = generate_task_bundle(
+            project.path(),
+            GenerateTaskBundleParams {
+                root: None,
+                task_id: task.id,
+                verification_command: Vec::new(),
+            },
+        );
+        let bundle = result.data.expect("bundle data").bundle;
+        let brief = bundle.brief;
+
+        assert!(brief.contains("## Task Plan"));
+        assert!(brief.contains("Add plan-aware bundle"));
+        assert!(brief.contains("Worker must follow the implementation plan"));
+        assert!(brief.contains("acceptance: Worker brief includes plan detail."));
+        assert!(brief.contains("- `make check`"));
+        assert_eq!(bundle.verification_command, vec!["make check"]);
+        assert!(!brief.contains("No verification command was provided"));
     }
 
     #[test]

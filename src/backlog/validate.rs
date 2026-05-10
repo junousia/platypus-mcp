@@ -31,14 +31,20 @@ pub fn validate_backlog(
         },
     };
     if validation.ok {
-        ActionResult::completed(
-            action,
-            format!(
+        ActionResult {
+            action: action.to_string(),
+            status: crate::models::ActionStatus::Completed,
+            summary: format!(
                 "Backlog valid: {} item(s), {} epic(s).",
                 data.item_count, data.epic_count
             ),
-            data,
-        )
+            next_action: Some(
+                "Commit backlog artifacts before dispatching work if this validation followed writes."
+                    .to_string(),
+            ),
+            data: Some(data),
+            error: None,
+        }
     } else {
         ActionResult {
             action: action.to_string(),
@@ -57,6 +63,7 @@ pub fn validate_backlog(
 pub(super) fn validate_backlog_at_root(root: &Path, include_errors: bool) -> BacklogValidation {
     let mut errors = Vec::new();
     let mut epic_ids = BTreeSet::new();
+    let expected_prefix = configured_id_prefix(root);
     let epics_dir = root.join("backlog").join("epics");
     if epics_dir.is_dir() {
         match read_markdown_paths(root, &epics_dir) {
@@ -95,7 +102,7 @@ pub(super) fn validate_backlog_at_root(root: &Path, include_errors: bool) -> Bac
                 for path in paths {
                     match parse_backlog_item(&path) {
                         Ok(item) => {
-                            validate_item_shape(&item, &epic_ids, &mut errors);
+                            validate_item_shape(&item, &epic_ids, &expected_prefix, &mut errors);
                             items.push(item);
                         }
                         Err(error) => errors.push(format!("{}: {}", path.display(), error)),
@@ -143,21 +150,25 @@ pub(super) fn valid_item_id(value: &str) -> bool {
 fn validate_item_shape(
     item: &ParsedBacklogItem,
     epic_ids: &BTreeSet<String>,
+    expected_prefix: &str,
     errors: &mut Vec<String>,
 ) {
     let frontmatter = &item.frontmatter;
     let path = &item.path;
     if !valid_item_id(&frontmatter.id) {
         errors.push(format!(
-            "{}: invalid id `{}`",
+            "{}: invalid id `{}`; expected format `{}-NNN` (three digits, matching backlog.id_prefix in platy.yaml)",
             path.display(),
-            frontmatter.id
+            frontmatter.id,
+            expected_prefix
         ));
     }
     if path.file_stem().and_then(|value| value.to_str()) != Some(frontmatter.id.as_str()) {
         errors.push(format!(
-            "{}: filename does not match frontmatter id",
-            path.display()
+            "{}: filename does not match frontmatter id `{}`; rename the file to `{}.md` or update the frontmatter id",
+            path.display(),
+            frontmatter.id,
+            frontmatter.id
         ));
     }
     if frontmatter.title.trim().is_empty()
@@ -178,9 +189,10 @@ fn validate_item_shape(
     }
     if !VALID_TYPES.contains(&frontmatter.item_type.as_str()) {
         errors.push(format!(
-            "{}: invalid type `{}`",
+            "{}: invalid type `{}`; expected one of: {}",
             path.display(),
-            frontmatter.item_type
+            frontmatter.item_type,
+            VALID_TYPES.join(", ")
         ));
     }
     if !epic_ids.is_empty() && !epic_ids.contains(&frontmatter.epic) {
@@ -223,5 +235,64 @@ fn validate_item_shape(
         if !item.sections.contains(*section) {
             errors.push(format!("{}: missing section `{}`", path.display(), section));
         }
+    }
+}
+
+fn configured_id_prefix(root: &Path) -> String {
+    let path = root.join("platy.yaml");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return "PROJ".to_string();
+    };
+    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
+        return "PROJ".to_string();
+    };
+    value
+        .get("backlog")
+        .and_then(|backlog| backlog.get("id_prefix"))
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("PROJ")
+        .to_ascii_uppercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn validation_errors_explain_expected_id_prefix_and_filename() {
+        let project = TempDir::new().expect("temp dir");
+        fs::create_dir_all(project.path().join("backlog/items")).expect("items");
+        fs::create_dir_all(project.path().join("backlog/epics")).expect("epics");
+        fs::write(
+            project.path().join("platy.yaml"),
+            "backlog:\n  id_prefix: PROJ\n",
+        )
+        .expect("config");
+        fs::write(
+            project.path().join("backlog/epics/general.md"),
+            "---\nid: general\ntitle: General\npriority: P1\nstatus: active\narea: general\n---\n",
+        )
+        .expect("epic");
+        fs::write(
+            project.path().join("backlog/items/WEB-2.md"),
+            "---\nid: WEB-2\ntitle: Bad\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nsuggested_worker: coder\nowned_surfaces: []\n---\n\n# Bad\n\n## Goal\n\nBad.\n\n## Implementation Contract\n\nBad.\n\n## Acceptance\n\n- Bad.\n",
+        )
+        .expect("item");
+        fs::write(
+            project.path().join("backlog/items/WRONG-NAME.md"),
+            "---\nid: PROJ-002\ntitle: Mismatch\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nsuggested_worker: coder\nowned_surfaces: []\n---\n\n# Mismatch\n\n## Goal\n\nMismatch.\n\n## Implementation Contract\n\nMismatch.\n\n## Acceptance\n\n- Mismatch.\n",
+        )
+        .expect("mismatch item");
+
+        let validation = validate_backlog_at_root(project.path(), true);
+
+        assert!(!validation.ok);
+        let errors = validation.errors.join("\n");
+        assert!(errors.contains("expected format `PROJ-NNN`"));
+        assert!(errors.contains("rename the file"));
     }
 }

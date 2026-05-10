@@ -177,7 +177,8 @@ pub fn run_with_adapter(
             default_root,
             StartWorkerExecutionParams {
                 root: Some(report.root.clone()),
-                assignment_id: assignment_id.clone(),
+                assignment_id: Some(assignment_id.clone()),
+                task_id: None,
                 worker_session: Some(format!("runner:{}", adapter.name())),
             },
         );
@@ -214,11 +215,13 @@ pub fn run_with_adapter(
             default_root,
             CompleteWorkerExecutionParams {
                 root: Some(report.root.clone()),
-                assignment_id,
+                assignment_id: Some(assignment_id),
+                task_id: None,
                 status: worker_result.status.as_task_status().to_string(),
                 summary: worker_result.summary,
                 changed_files: worker_result.changed_files,
                 verification_status,
+                auto_start_if_prepared: None,
             },
         );
         let Some(completed_data) = completed.data else {
@@ -284,7 +287,8 @@ fn record_assignment_worker_event(
         default_root,
         RecordWorkerEventParams {
             root: Some(root.to_string()),
-            assignment_id: assignment_id.to_string(),
+            assignment_id: Some(assignment_id.to_string()),
+            task_id: None,
             event_type: event.event_type,
             summary: event.summary,
             payload: payload_map(event.payload),

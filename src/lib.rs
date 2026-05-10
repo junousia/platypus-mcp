@@ -10,6 +10,7 @@ pub mod events;
 pub mod evidence;
 pub mod findings;
 pub mod git_readiness;
+pub mod goal;
 pub mod guidance;
 pub mod host_guidance;
 pub mod integrations;
@@ -26,5 +27,6 @@ pub mod workers;
 pub mod workspace;
 
 mod git_trailers;
+mod sampling;
 
 pub use server::{serve_stdio, PlatypusMcp};
