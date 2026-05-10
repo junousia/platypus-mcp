@@ -145,6 +145,9 @@ pub fn start_goal_work(
             ),
         };
     }
+    if let Err(error) = validate_requested_mode(params.mode.as_deref()) {
+        return ActionResult::failed(ACTION, "Could not start goal work.", error);
+    }
     let mut bootstrap_warnings = Vec::new();
     if let Some(summary) = ensure_project_scaffold(default_root, params.root.clone()) {
         bootstrap_warnings.push(summary);
@@ -416,6 +419,10 @@ fn requested_or_inferred_mode(
         "direct_scaffold" | "hybrid" | "platypus_workflow" => Ok(requested_mode),
         _ => Err("mode must be auto, direct_scaffold, hybrid, or platypus_workflow".to_string()),
     }
+}
+
+fn validate_requested_mode(requested_mode: Option<&str>) -> Result<(), String> {
+    requested_or_inferred_mode(requested_mode, "direct_scaffold").map(|_| ())
 }
 
 fn dispatch_agent_profile_warning(
@@ -979,6 +986,33 @@ mod tests {
             .expect("error")
             .contains("plan_goal_work"));
         assert!(!project.path().join("platy.yaml").exists());
+    }
+
+    #[test]
+    fn start_goal_work_rejects_invalid_mode_before_mutation() {
+        let project = TempDir::new().expect("temp dir");
+        let result = start_goal_work(
+            project.path(),
+            StartGoalWorkParams {
+                root: None,
+                goal: "create a simple web app".to_string(),
+                mode: Some("direct-ish".to_string()),
+                dispatch: Some(false),
+                prepare_handoffs: None,
+                auto_start: None,
+                auto_commit_artifacts: None,
+                also_track: None,
+                scaffold_in_place: None,
+                max_tasks: None,
+                suggested_worker: None,
+                owned_surfaces: Vec::new(),
+                verification_command: Vec::new(),
+            },
+        );
+        assert_eq!(result.status, ActionStatus::Failed);
+        assert!(result.error.as_deref().expect("error").contains("mode"));
+        assert!(!project.path().join("platy.yaml").exists());
+        assert!(!project.path().join("backlog").exists());
     }
 
     #[test]
