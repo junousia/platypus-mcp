@@ -98,6 +98,7 @@ pub fn dispatch_ready_work(
         let candidates = filter_candidates_for_dispatch(
             candidates,
             params.item_id.as_deref(),
+            params.worker.as_deref(),
             &active_source_items,
         );
         let available_before_dispatch = candidates.len();
@@ -157,6 +158,7 @@ pub fn dispatch_ready_work(
                 filter_candidates_for_dispatch(
                     data.candidates,
                     params.item_id.as_deref(),
+                    params.worker.as_deref(),
                     &active_source_items,
                 )
                 .len()
@@ -606,11 +608,15 @@ fn state_error<T: schemars::JsonSchema + serde::Serialize>(
 fn filter_candidates_for_dispatch(
     candidates: Vec<BacklogCandidate>,
     item_id: Option<&str>,
+    worker: Option<&str>,
     active_source_items: &BTreeSet<String>,
 ) -> Vec<BacklogCandidate> {
     candidates
         .into_iter()
         .filter(|candidate| item_id.is_none_or(|item_id| candidate.item_id == item_id))
+        .filter(|candidate| {
+            worker.is_none_or(|worker| candidate.suggested_worker.as_deref() == Some(worker))
+        })
         .filter(|candidate| !active_source_items.contains(&candidate.item_id))
         .collect()
 }
@@ -809,6 +815,34 @@ mod tests {
         assert_eq!(data.items.len(), 1);
         assert_eq!(data.items[0].item_id, "PROJ-002");
         assert_eq!(data.items[0].status, "preview");
+    }
+
+    #[test]
+    fn dispatch_ready_work_dry_run_filters_by_worker_like_real_dispatch() {
+        let project = backlog_project(true);
+
+        let result = dispatch_ready_work(
+            project.path(),
+            DispatchReadyWorkParams {
+                root: None,
+                item_id: None,
+                max_tasks: Some(1),
+                worker: Some("qa".to_string()),
+                claimant: Some("tester".to_string()),
+                prepare_handoffs: Some(false),
+                auto_start: None,
+                auto_commit_artifacts: None,
+                dry_run: Some(true),
+                verification_command: Vec::new(),
+            },
+        );
+        let data = result.data.expect("dry-run data");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert_eq!(data.available_before_dispatch, 0);
+        assert_eq!(data.selected, 0);
+        assert!(data.items.is_empty());
+        assert_eq!(data.stopped_reason, "no_runnable_items");
     }
 
     #[test]

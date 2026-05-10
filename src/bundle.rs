@@ -89,10 +89,11 @@ pub fn generate_task_bundle(
     let selected_plan_task = plan_task_for_task_id(item.task_plan.as_ref(), &task.id);
     let mut verification_command = clean_command(params.verification_command);
     if verification_command.is_empty() {
-        verification_command = selected_plan_task
-            .map(|planned| clean_command(planned.verification.clone()))
-            .filter(|commands| !commands.is_empty())
-            .unwrap_or_else(|| task_plan_verification(item.task_plan.as_ref()));
+        verification_command = if let Some(planned) = selected_plan_task {
+            clean_command(planned.verification.clone())
+        } else {
+            task_plan_verification(item.task_plan.as_ref())
+        };
     }
     let acceptance = selected_plan_task
         .map(|planned| planned.acceptance.clone())
@@ -643,6 +644,87 @@ tasks:
         assert!(brief.contains("- `make check`"));
         assert_eq!(bundle.verification_command, vec!["make check"]);
         assert!(!brief.contains("No verification command was provided"));
+    }
+
+    #[test]
+    fn bundle_preserves_empty_selected_task_verification() {
+        let project = project_with_backlog();
+        fs::create_dir_all(project.path().join("backlog/plans")).expect("plans");
+        fs::write(
+            project.path().join("backlog/plans/PROJ-001.yaml"),
+            r#"item_id: PROJ-001
+version: 1
+mode: standard
+requirements:
+  - id: R1
+    text: Worker must follow the implementation plan.
+design:
+  summary: Use the task plan to guide worker execution.
+  owned_surfaces:
+    - src/bundle.rs
+tasks:
+  - id: PROJ-001-T01
+    title: Add no-check plan task
+    goal: This task intentionally has no verification command.
+    requirement_refs:
+      - R1
+    depends_on: []
+    owned_surfaces:
+      - src/bundle.rs
+    verification: []
+    acceptance:
+      - Worker reports not_run or skipped unless a check is explicit.
+  - id: PROJ-001-T02
+    title: Add checked plan task
+    goal: This later task has verification.
+    requirement_refs:
+      - R1
+    depends_on:
+      - PROJ-001-T01
+    owned_surfaces:
+      - src/bundle.rs
+    verification:
+      - make check
+    acceptance:
+      - Worker runs make check.
+"#,
+        )
+        .expect("plan");
+        git(&project, &["add", "backlog/plans/PROJ-001.yaml"]);
+        git(&project, &["commit", "-m", "Add task plan fixture"]);
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Bundle task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        )
+        .data
+        .expect("worktree");
+
+        let result = generate_task_bundle(
+            project.path(),
+            GenerateTaskBundleParams {
+                root: None,
+                task_id: task.id,
+                verification_command: Vec::new(),
+            },
+        );
+        let bundle = result.data.expect("bundle data").bundle;
+
+        assert!(bundle.verification_command.is_empty());
+        assert!(bundle.brief.contains("Verification command: unspecified"));
     }
 
     #[test]
