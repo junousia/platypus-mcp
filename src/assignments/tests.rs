@@ -1,5 +1,7 @@
 use super::*;
 use crate::tasks::{self, create_task_record, inspect_task_events, NewTask};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{collections::BTreeMap, fs, process::Command};
 use tempfile::TempDir;
 
@@ -439,6 +441,63 @@ fn run_task_verification_executes_command_and_records_event() {
     .data
     .expect("evidence");
     assert_eq!(evidence.evidence.len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_task_verification_surfaces_evidence_recording_failure() {
+    let project = project_with_backlog();
+    let task = create_task_record(
+        project.path(),
+        None,
+        NewTask {
+            source_item_id: "PROJ-001".to_string(),
+            title: "Verification task".to_string(),
+            worker: Some("coder".to_string()),
+        },
+    )
+    .expect("task");
+    let assignment = prepare_worker_assignment(
+        project.path(),
+        PrepareWorkerAssignmentParams {
+            root: None,
+            task_id: Some(task.id.clone()),
+            worker: Some("coder".to_string()),
+            claimant: None,
+            base_ref: None,
+            verification_command: vec!["make".to_string(), "check".to_string()],
+        },
+    )
+    .data
+    .expect("assignment")
+    .assignment;
+    fs::write(
+        Path::new(&assignment.worktree_path).join("Makefile"),
+        "check:\n\t@chmod 000 ../../platypus.sqlite3\n\t@echo ok\n",
+    )
+    .expect("makefile");
+
+    let verification = run_task_verification(
+        project.path(),
+        RunTaskVerificationParams {
+            root: None,
+            assignment_id: Some(assignment.id),
+            task_id: None,
+            timeout_seconds: Some(30),
+        },
+    );
+    let _ = fs::set_permissions(
+        project.path().join(".platy/platypus.sqlite3"),
+        fs::Permissions::from_mode(0o600),
+    );
+
+    assert!(matches!(verification.status, ActionStatus::Failed));
+    assert!(verification
+        .summary
+        .contains("verification evidence could not be recorded"));
+    let data = verification.data.expect("verification data");
+    assert_eq!(data.status, "passed");
+    assert!(verification.error.is_some());
 }
 
 #[test]

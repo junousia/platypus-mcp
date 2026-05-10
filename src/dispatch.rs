@@ -22,7 +22,8 @@ pub fn dispatch_next_work(
         Ok(state) => state,
         Err(error) => return state_error(action, "Could not open project state.", error),
     };
-    if let Some(blocked) = dispatch_readiness_result(action, state.root(), false) {
+    if let Some(blocked) = dispatch_readiness_result(action, state.root(), false, &BTreeSet::new())
+    {
         return blocked;
     }
     match state.dispatch_work(DispatchWorkCommand {
@@ -147,27 +148,45 @@ pub fn dispatch_ready_work(
             .map(|value| value.auto_commit_artifacts_default)
             .unwrap_or(false)
     });
-    if let Some(blocked) = dispatch_readiness_result(action, state.root(), auto_commit_artifacts) {
-        return blocked;
-    }
-
-    let available_before_dispatch =
-        backlog::list_backlog(default_root, params.root.as_deref(), Some(100))
-            .data
-            .map(|data| {
-                filter_candidates_for_dispatch(
-                    data.candidates,
-                    params.item_id.as_deref(),
-                    params.worker.as_deref(),
-                    &active_source_items,
-                )
-                .len()
-            })
-            .unwrap_or(0);
+    let listed = backlog::list_backlog(default_root, Some(root.as_str()), Some(100));
+    let candidates = match listed {
+        ActionResult {
+            status: ActionStatus::Completed | ActionStatus::Skipped,
+            data: Some(data),
+            ..
+        } => data.candidates,
+        ActionResult { summary, error, .. } => {
+            return ActionResult::failed(
+                action,
+                "Could not inspect dispatchable work.",
+                error.unwrap_or(summary),
+            )
+        }
+    };
+    let candidates = filter_candidates_for_dispatch(
+        candidates,
+        params.item_id.as_deref(),
+        params.worker.as_deref(),
+        &active_source_items,
+    );
+    let available_before_dispatch = candidates.len();
     let requested = params
         .max_tasks
         .unwrap_or_else(|| available_before_dispatch.clamp(1, 10))
         .clamp(1, 10);
+    let selected_item_ids = candidates
+        .iter()
+        .take(requested)
+        .map(|candidate| candidate.item_id.clone())
+        .collect::<BTreeSet<_>>();
+    if let Some(blocked) = dispatch_readiness_result(
+        action,
+        state.root(),
+        auto_commit_artifacts,
+        &selected_item_ids,
+    ) {
+        return blocked;
+    }
     let prepare_handoffs = params.prepare_handoffs.unwrap_or(true);
     let auto_start = params.auto_start.unwrap_or(false);
     let claimant = params
@@ -427,6 +446,7 @@ fn dispatch_readiness_result<T: schemars::JsonSchema + serde::Serialize>(
     action: &str,
     root: &Path,
     auto_commit_artifacts: bool,
+    selected_item_ids: &BTreeSet<String>,
 ) -> Option<ActionResult<T>> {
     if !auto_commit_artifacts {
         if let Some(paths) = manager_dirty_paths(root) {
@@ -459,7 +479,7 @@ fn dispatch_readiness_result<T: schemars::JsonSchema + serde::Serialize>(
             crate::git_readiness::GitReadinessStatus::Dirty
         )
     {
-        match auto_commit_dispatch_artifacts(root) {
+        match auto_commit_dispatch_artifacts(root, selected_item_ids) {
             Ok(true) => {
                 readiness = inspect_git_readiness(root, true);
             }
@@ -491,6 +511,13 @@ fn manager_dirty_paths(root: &Path) -> Option<Vec<String>> {
 }
 
 fn git_dirty_paths(root: &Path) -> Result<Vec<String>, String> {
+    Ok(git_dirty_entries(root)?
+        .into_iter()
+        .flat_map(|entry| entry.paths())
+        .collect())
+}
+
+fn git_dirty_entries(root: &Path) -> Result<Vec<DirtyEntry>, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -500,10 +527,35 @@ fn git_dirty_paths(root: &Path) -> Result<Vec<String>, String> {
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
-    Ok(parse_porcelain_z_paths(&output.stdout))
+    Ok(parse_porcelain_z_entries(&output.stdout))
 }
 
+#[cfg(test)]
 fn parse_porcelain_z_paths(output: &[u8]) -> Vec<String> {
+    parse_porcelain_z_entries(output)
+        .into_iter()
+        .flat_map(|entry| entry.paths())
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DirtyEntry {
+    status: String,
+    path: String,
+    source: Option<String>,
+}
+
+impl DirtyEntry {
+    fn paths(self) -> Vec<String> {
+        let mut paths = vec![self.path];
+        if let Some(source) = self.source {
+            paths.push(source);
+        }
+        paths
+    }
+}
+
+fn parse_porcelain_z_entries(output: &[u8]) -> Vec<DirtyEntry> {
     let mut paths = Vec::new();
     let mut entries = output
         .split(|byte| *byte == 0)
@@ -513,23 +565,31 @@ fn parse_porcelain_z_paths(output: &[u8]) -> Vec<String> {
             continue;
         }
         let status = &entry[..2];
-        push_dirty_path(&mut paths, &entry[3..]);
+        let Some(path) = dirty_path(&entry[3..]) else {
+            continue;
+        };
+        let mut dirty = DirtyEntry {
+            status: String::from_utf8_lossy(status).to_string(),
+            path,
+            source: None,
+        };
         if matches!(status.first(), Some(b'R' | b'C')) || matches!(status.get(1), Some(b'R' | b'C'))
         {
             if let Some(source) = entries.next() {
-                push_dirty_path(&mut paths, source);
+                dirty.source = dirty_path(source);
             }
         }
+        paths.push(dirty);
     }
     paths
 }
 
-fn push_dirty_path(paths: &mut Vec<String>, path: &[u8]) {
+fn dirty_path(path: &[u8]) -> Option<String> {
     let path = String::from_utf8_lossy(path).trim().to_string();
     if path.is_empty() || path.starts_with(".platy/") {
-        return;
+        return None;
     }
-    paths.push(path);
+    Some(path)
 }
 
 fn dispatch_artifact_paths_only(paths: &[String]) -> bool {
@@ -548,30 +608,47 @@ fn is_dispatch_artifact_path(path: &str) -> bool {
             && (path.ends_with(".md") || path.ends_with(".yaml")))
 }
 
-fn auto_commit_dispatch_artifacts(root: &Path) -> Result<bool, String> {
-    let paths = git_dirty_paths(root)?;
-    if paths.is_empty() {
+fn auto_commit_dispatch_artifacts(
+    root: &Path,
+    selected_item_ids: &BTreeSet<String>,
+) -> Result<bool, String> {
+    let entries = git_dirty_entries(root)?;
+    if entries.is_empty() {
         return Ok(false);
     }
+    let paths = entries
+        .iter()
+        .flat_map(|entry| entry.clone().paths())
+        .collect::<Vec<_>>();
     if !dispatch_artifact_paths_only(&paths) {
         return Ok(false);
     }
-    let mut staging_paths = Vec::new();
-    for path in [
-        ".gitignore",
-        "AGENTS.md",
-        "CLAUDE.md",
-        "WORKFLOW.md",
-        "platy.yaml",
-    ] {
-        if paths.iter().any(|dirty| dirty == path) {
-            staging_paths.push(path);
-        }
-    }
-    if paths.iter().any(|path| path.starts_with("backlog/")) {
-        staging_paths.push("backlog");
+    let unrelated = entries
+        .iter()
+        .filter(|entry| !auto_commit_entry_allowed(entry, selected_item_ids))
+        .flat_map(|entry| entry.clone().paths())
+        .collect::<Vec<_>>();
+    if !unrelated.is_empty() {
+        let listed = unrelated
+            .iter()
+            .take(5)
+            .map(|path| format!("`{path}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let suffix = if unrelated.len() > 5 {
+            format!(" and {} more", unrelated.len() - 5)
+        } else {
+            String::new()
+        };
+        return Err(format!(
+            "refusing to auto-commit unrelated backlog artifacts: {listed}{suffix}"
+        ));
     }
 
+    let staging_paths = entries
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect::<Vec<_>>();
     let add = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -595,6 +672,51 @@ fn auto_commit_dispatch_artifacts(root: &Path) -> Result<bool, String> {
         return Err(String::from_utf8_lossy(&commit.stderr).trim().to_string());
     }
     Ok(true)
+}
+
+fn auto_commit_entry_allowed(entry: &DirtyEntry, selected_item_ids: &BTreeSet<String>) -> bool {
+    fixed_dispatch_artifact_path(&entry.path)
+        || bootstrap_backlog_artifact_entry(entry)
+        || selected_backlog_artifact_entry(entry, selected_item_ids)
+}
+
+fn fixed_dispatch_artifact_path(path: &str) -> bool {
+    matches!(
+        path,
+        ".gitignore" | "AGENTS.md" | "CLAUDE.md" | "WORKFLOW.md" | "platy.yaml"
+    )
+}
+
+fn bootstrap_backlog_artifact_entry(entry: &DirtyEntry) -> bool {
+    if entry.status != "??" {
+        return false;
+    }
+    matches!(
+        entry.path.as_str(),
+        "backlog/README.md"
+            | "backlog/epics/general.md"
+            | "backlog/templates/item.md"
+            | "backlog/templates/plan.yaml"
+            | "backlog/templates/epic.md"
+    )
+}
+
+fn selected_backlog_artifact_entry(
+    entry: &DirtyEntry,
+    selected_item_ids: &BTreeSet<String>,
+) -> bool {
+    backlog_artifact_item_id(&entry.path).is_some_and(|item_id| selected_item_ids.contains(item_id))
+}
+
+fn backlog_artifact_item_id(path: &str) -> Option<&str> {
+    if let Some(item_id) = path
+        .strip_prefix("backlog/items/")
+        .and_then(|value| value.strip_suffix(".md"))
+    {
+        return Some(item_id);
+    }
+    path.strip_prefix("backlog/plans/")
+        .and_then(|value| value.strip_suffix(".yaml"))
 }
 
 fn state_error<T: schemars::JsonSchema + serde::Serialize>(
@@ -1021,8 +1143,10 @@ mod tests {
             .expect("renamed item")
             .replace("PROJ-001", "PROJ-010");
         fs::write(&item_path, item).expect("update renamed item");
+        let selected = BTreeSet::from(["PROJ-010".to_string()]);
 
-        let committed = auto_commit_dispatch_artifacts(project.path()).expect("auto commit");
+        let committed =
+            auto_commit_dispatch_artifacts(project.path(), &selected).expect("auto commit");
 
         assert!(committed);
         let status = Command::new("git")
@@ -1034,6 +1158,37 @@ mod tests {
         assert!(
             String::from_utf8_lossy(&status.stdout).trim().is_empty(),
             "workspace should be clean after auto-commit"
+        );
+    }
+
+    #[test]
+    fn auto_commit_dispatch_artifacts_rejects_unselected_backlog_paths() {
+        let project = backlog_project(true);
+        fs::write(
+            project.path().join("backlog/items/PROJ-001.md"),
+            "selected edit\n",
+        )
+        .expect("selected edit");
+        fs::write(
+            project.path().join("backlog/items/PROJ-002.md"),
+            "unrelated edit\n",
+        )
+        .expect("unrelated edit");
+        let selected = BTreeSet::from(["PROJ-001".to_string()]);
+
+        let error = auto_commit_dispatch_artifacts(project.path(), &selected)
+            .expect_err("unselected backlog dirt should fail closed");
+
+        assert!(error.contains("PROJ-002.md"));
+        let staged = Command::new("git")
+            .args(["diff", "--cached", "--name-only"])
+            .current_dir(project.path())
+            .output()
+            .expect("git diff");
+        assert!(staged.status.success());
+        assert!(
+            String::from_utf8_lossy(&staged.stdout).trim().is_empty(),
+            "auto-commit should not stage a partial backlog set"
         );
     }
 

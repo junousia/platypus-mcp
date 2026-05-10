@@ -735,8 +735,22 @@ pub fn run_task_verification(
         },
     );
 
+    let data = TaskVerificationRunData {
+        root: state.root().display().to_string(),
+        assignment_id: snapshot.id.clone(),
+        task_id: task.id.clone(),
+        verification_command,
+        status: status.clone(),
+        exit_code,
+        stdout,
+        stderr,
+        stdout_truncated,
+        stderr_truncated,
+        timed_out,
+    };
+
     if status == "passed" {
-        let _ = evidence::record_verification_evidence(
+        let evidence_result = evidence::record_verification_evidence(
             default_root,
             RecordVerificationEvidenceParams {
                 root: Some(state.root().display().to_string()),
@@ -748,6 +762,22 @@ pub fn run_task_verification(
                 metadata: std::collections::BTreeMap::new(),
             },
         );
+        if !matches!(evidence_result.status, ActionStatus::Completed) {
+            return ActionResult {
+                action: action.to_string(),
+                status: ActionStatus::Failed,
+                summary: format!(
+                    "Verification command passed for assignment `{}`, but verification evidence could not be recorded.",
+                    snapshot.id
+                ),
+                next_action: Some(
+                    "Resolve the evidence storage error, then retry run_task_verification before integrating the worker result."
+                        .to_string(),
+                ),
+                data: Some(data),
+                error: evidence_result.error.or(Some(evidence_result.summary)),
+            };
+        }
     }
 
     let mut result = ActionResult::completed(
@@ -756,19 +786,7 @@ pub fn run_task_verification(
             "Verification command finished with `{status}` for assignment `{}`.",
             snapshot.id
         ),
-        TaskVerificationRunData {
-            root: state.root().display().to_string(),
-            assignment_id: snapshot.id,
-            task_id: task.id.clone(),
-            verification_command,
-            status: status.clone(),
-            exit_code,
-            stdout,
-            stderr,
-            stdout_truncated,
-            stderr_truncated,
-            timed_out,
-        },
+        data,
     );
     if status != "passed" {
         result.next_action = Some(
