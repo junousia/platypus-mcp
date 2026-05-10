@@ -209,7 +209,7 @@ pub struct DispatchReadyWorkParams {
     pub root: Option<String>,
     /// Restrict dispatch to this backlog item id instead of selecting from the
     /// global runnable queue.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub item_id: Option<String>,
     /// Maximum number of tasks to include or process.
     #[schemars(range(min = 1, max = 10))]
@@ -257,7 +257,7 @@ pub struct ClassifyPlanningNeedsParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
     /// Backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub item_id: Option<String>,
     /// Maximum number of records to return.
     #[schemars(range(min = 1, max = 200))]
@@ -501,7 +501,7 @@ pub struct ImportGitHubIssuesParams {
     /// State or status value.
     pub state: Option<String>,
     /// Identifier prefix used when allocating new local backlog item IDs.
-    #[schemars(example = example_id_prefix(), pattern(r"^[A-Z][A-Z0-9]*$"))]
+    #[schemars(example = example_id_prefix(), pattern(r"^[A-Z]+$"))]
     pub id_prefix: Option<String>,
     /// Suggested worker name for this item.
     #[schemars(example = example_worker())]
@@ -524,7 +524,7 @@ pub struct DraftExternalReportParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
     /// Source backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub source_item_id: String,
     /// Source task identifier.
     #[schemars(example = example_task_id())]
@@ -640,12 +640,12 @@ pub struct CreateBacklogItemParams {
     /// Stable local record identifier. Usually omit this and let Platypus allocate
     /// the next ID from id_prefix; provide it only when mirroring an existing
     /// external identifier or preserving a human-chosen sequence.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub id: Option<String>,
     /// Identifier prefix used when allocating new local backlog item IDs when id
     /// is omitted. Use short project or domain prefixes such as PROJ, WEB, API,
     /// DOC, or OPS.
-    #[schemars(example = example_id_prefix(), pattern(r"^[A-Z][A-Z0-9]*$"))]
+    #[schemars(example = example_id_prefix(), pattern(r"^[A-Z]+$"))]
     pub id_prefix: Option<String>,
     #[serde(default)]
     /// Human-readable title or short label.
@@ -669,7 +669,7 @@ pub struct CreateBacklogItemParams {
     pub epic: Option<String>,
     #[serde(default)]
     /// Dependencies that must be satisfied first.
-    #[schemars(inner(pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$")))]
+    #[schemars(inner(pattern(r"^[A-Z]+-[0-9]{3}$")))]
     pub depends_on: Vec<String>,
     /// Suggested worker name for this item.
     #[schemars(example = example_worker())]
@@ -736,7 +736,7 @@ pub struct ExternalReportDraft {
     /// Type of external report to draft or record.
     pub report_type: String,
     /// Source backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub source_item_id: String,
     /// Source task identifier.
     pub source_task_id: Option<String>,
@@ -759,7 +759,7 @@ pub struct TaskPlanQueryParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
     /// Backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub item_id: Option<String>,
     /// Whether validation errors should be included.
     pub include_errors: Option<bool>,
@@ -770,7 +770,7 @@ pub struct TaskPlanItemParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
     /// Backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub item_id: String,
 }
 
@@ -779,7 +779,7 @@ pub struct DraftTaskPlanParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
     /// Backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub item_id: String,
 }
 
@@ -788,7 +788,7 @@ pub struct WriteTaskPlanParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
     /// Backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub item_id: String,
     /// Task plan state or file for this item.
     pub plan: TaskPlanFile,
@@ -1076,7 +1076,7 @@ pub struct RecordEvidenceParams {
     /// Stable local record identifier.
     pub id: Option<String>,
     /// Source backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub source_item_id: Option<String>,
     /// Source task identifier.
     #[schemars(example = example_task_id())]
@@ -1107,7 +1107,7 @@ pub struct RecordVerificationEvidenceParams {
     /// Stable local record identifier.
     pub id: Option<String>,
     /// Source backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub source_item_id: Option<String>,
     /// Source task identifier.
     #[schemars(example = example_task_id())]
@@ -1128,7 +1128,7 @@ pub struct ListEvidenceParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
     /// Source backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub source_item_id: Option<String>,
     /// Source task identifier.
     #[schemars(example = example_task_id())]
@@ -1228,7 +1228,7 @@ pub struct RecordFindingParams {
     /// Stable local record identifier.
     pub id: Option<String>,
     /// Source backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub source_item_id: Option<String>,
     /// Source task identifier.
     #[schemars(example = example_task_id())]
@@ -1259,7 +1259,7 @@ pub struct ListFindingsParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
     /// Source backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z][A-Z0-9]*-[0-9]{3}$"))]
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub source_item_id: Option<String>,
     /// Source task identifier.
     #[schemars(example = example_task_id())]

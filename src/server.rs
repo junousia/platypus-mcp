@@ -2065,13 +2065,9 @@ mod tests {
         let create_backlog_item = input_schema(&tools, "create_backlog_item");
         assert_property_has_example(&create_backlog_item, "title");
         assert_property_has_example(&create_backlog_item, "goal");
-        assert_property_pattern(&create_backlog_item, "id", r"^[A-Z][A-Z0-9]*-[0-9]{3}$");
-        assert_property_pattern(&create_backlog_item, "id_prefix", r"^[A-Z][A-Z0-9]*$");
-        assert_array_item_pattern(
-            &create_backlog_item,
-            "depends_on",
-            r"^[A-Z][A-Z0-9]*-[0-9]{3}$",
-        );
+        assert_property_pattern(&create_backlog_item, "id", r"^[A-Z]+-[0-9]{3}$");
+        assert_property_pattern(&create_backlog_item, "id_prefix", r"^[A-Z]+$");
+        assert_array_item_pattern(&create_backlog_item, "depends_on", r"^[A-Z]+-[0-9]{3}$");
 
         let start_goal_work = input_schema(&tools, "start_goal_work");
         assert_property_has_example(&start_goal_work, "goal");
