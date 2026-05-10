@@ -429,6 +429,16 @@ fn run_task_verification_executes_command_and_records_event() {
 }
 
 #[test]
+fn truncate_output_does_not_split_utf8_characters() {
+    let value = format!("{}é", "a".repeat(MAX_CAPTURE_BYTES - 1));
+
+    let (truncated, was_truncated) = truncate_output(value, MAX_CAPTURE_BYTES);
+
+    assert!(was_truncated);
+    assert_eq!(truncated, "a".repeat(MAX_CAPTURE_BYTES - 1));
+}
+
+#[test]
 fn complete_can_auto_start_prepared_assignment() {
     let project = project_with_backlog();
     let task = create_task_record(

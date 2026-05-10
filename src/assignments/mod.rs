@@ -669,7 +669,11 @@ fn truncate_output(value: String, max_bytes: usize) -> (String, bool) {
     if value.len() <= max_bytes {
         return (value, false);
     }
-    (value[..max_bytes].to_string(), true)
+    let mut boundary = max_bytes.min(value.len());
+    while boundary > 0 && !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    (value[..boundary].to_string(), true)
 }
 
 fn resolve_assignment_id(
