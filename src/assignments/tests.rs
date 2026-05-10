@@ -544,6 +544,55 @@ fn run_task_verification_splits_single_string_command() {
 }
 
 #[test]
+fn run_task_verification_runs_multiple_command_strings() {
+    let project = project_with_backlog();
+    let task = create_task_record(
+        project.path(),
+        None,
+        NewTask {
+            source_item_id: "PROJ-001".to_string(),
+            title: "External assignment".to_string(),
+            worker: Some("coder".to_string()),
+        },
+    )
+    .expect("task");
+    let assignment = prepare_worker_assignment(
+        project.path(),
+        PrepareWorkerAssignmentParams {
+            root: None,
+            task_id: Some(task.id.clone()),
+            worker: Some("coder".to_string()),
+            claimant: Some("parent-agent".to_string()),
+            base_ref: None,
+            verification_command: vec!["make check".to_string(), "make check".to_string()],
+        },
+    )
+    .data
+    .expect("assignment data")
+    .assignment;
+
+    let verification = run_task_verification(
+        project.path(),
+        RunTaskVerificationParams {
+            root: None,
+            assignment_id: Some(assignment.id),
+            task_id: None,
+            timeout_seconds: Some(5),
+        },
+    );
+
+    assert!(matches!(verification.status, ActionStatus::Completed));
+    let data = verification.data.expect("verification data");
+    assert_eq!(
+        data.verification_command,
+        vec!["make check".to_string(), "make check".to_string()]
+    );
+    assert_eq!(data.status, "passed");
+    assert_eq!(data.exit_code, Some(0));
+    assert_eq!(data.stdout.matches("$ make check").count(), 2);
+}
+
+#[test]
 fn run_task_verification_rejects_non_allowlisted_executable() {
     let project = project_with_backlog();
     let task = create_task_record(

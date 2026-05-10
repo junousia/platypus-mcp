@@ -603,8 +603,14 @@ pub fn run_task_verification(
         Ok(snapshot) => snapshot,
         Err(error) => return state_error(action, "Could not inspect assignment.", error),
     };
-    let command = executable_command(snapshot.bundle.verification_command.clone());
-    if command.is_empty() {
+    let commands = match executable_commands(snapshot.bundle.verification_command.clone()) {
+        Ok(commands) => commands,
+        Err(error) => {
+            return ActionResult::failed(action, "Verification command could not be parsed.", error)
+        }
+    };
+    let verification_command = verification_command_for_result(&commands);
+    if commands.is_empty() {
         return ActionResult::completed(
             action,
             format!(
@@ -615,7 +621,7 @@ pub fn run_task_verification(
                 root: state.root().display().to_string(),
                 assignment_id: snapshot.id,
                 task_id: snapshot.task_id,
-                verification_command: command,
+                verification_command,
                 status: "skipped".to_string(),
                 exit_code: None,
                 stdout: String::new(),
@@ -626,46 +632,79 @@ pub fn run_task_verification(
             },
         );
     }
-    let executable = command[0].clone();
-    if let Err(error) = ensure_verification_command_allowed(&executable) {
-        let mut result = ActionResult::failed(
-            action,
-            "Verification command executable is not allowed.",
-            error,
-        );
-        result.next_action = Some(format!(
-            "Use one of the allowed verification executables: {}.",
-            ALLOWED_VERIFICATION_EXECUTABLES.join(", ")
-        ));
-        return result;
+    for command in &commands {
+        if let Some(executable) = command.first() {
+            if let Err(error) = ensure_verification_command_allowed(executable) {
+                let mut result = ActionResult::failed(
+                    action,
+                    "Verification command executable is not allowed.",
+                    error,
+                );
+                result.next_action = Some(format!(
+                    "Use one of the allowed verification executables: {}.",
+                    ALLOWED_VERIFICATION_EXECUTABLES.join(", ")
+                ));
+                return result;
+            }
+        }
     }
-    let args = command[1..].to_vec();
     let timeout = Duration::from_secs(
         params
             .timeout_seconds
             .unwrap_or(DEFAULT_VERIFICATION_TIMEOUT_SECONDS)
             .clamp(1, 600),
     );
-    let outcome = run_harness_process(
-        Path::new(&executable),
-        &args,
-        &snapshot.worktree_path,
-        "",
-        timeout,
-    );
-    let (status, exit_code, stdout_raw, stderr_raw, timed_out) = match outcome {
-        Ok(output) => (
-            if output.success { "passed" } else { "failed" }.to_string(),
-            output.exit_code,
-            output.stdout,
-            output.stderr,
-            false,
-        ),
-        Err(error) if error.contains("timed out") => {
-            ("timed_out".to_string(), None, String::new(), error, true)
+    let multiple_commands = commands.len() > 1;
+    let mut status = "passed".to_string();
+    let mut exit_code = None;
+    let mut stdout_raw = String::new();
+    let mut stderr_raw = String::new();
+    let mut timed_out = false;
+    for command in &commands {
+        let executable = command[0].clone();
+        let args = command[1..].to_vec();
+        let outcome = run_harness_process(
+            Path::new(&executable),
+            &args,
+            &snapshot.worktree_path,
+            "",
+            timeout,
+        );
+        match outcome {
+            Ok(output) => {
+                exit_code = output.exit_code;
+                append_verification_output(
+                    &mut stdout_raw,
+                    command,
+                    output.stdout,
+                    multiple_commands,
+                );
+                append_verification_output(
+                    &mut stderr_raw,
+                    command,
+                    output.stderr,
+                    multiple_commands,
+                );
+                if !output.success {
+                    status = "failed".to_string();
+                    break;
+                }
+            }
+            Err(error) if error.contains("timed out") => {
+                status = "timed_out".to_string();
+                exit_code = None;
+                timed_out = true;
+                append_verification_output(&mut stderr_raw, command, error, multiple_commands);
+                break;
+            }
+            Err(error) => {
+                status = "failed".to_string();
+                exit_code = None;
+                append_verification_output(&mut stderr_raw, command, error, multiple_commands);
+                break;
+            }
         }
-        Err(error) => ("failed".to_string(), None, String::new(), error, false),
-    };
+    }
     let (stdout, stdout_truncated) = truncate_output(stdout_raw, MAX_CAPTURE_BYTES);
     let (stderr, stderr_truncated) = truncate_output(stderr_raw, MAX_CAPTURE_BYTES);
 
@@ -690,7 +729,7 @@ pub fn run_task_verification(
             payload: Some(serde_json::json!({
                 "assignment_id": snapshot.id,
                 "status": status,
-                "command": command,
+                "command": verification_command,
                 "timed_out": timed_out
             })),
         },
@@ -721,7 +760,7 @@ pub fn run_task_verification(
             root: state.root().display().to_string(),
             assignment_id: snapshot.id,
             task_id: task.id.clone(),
-            verification_command: command,
+            verification_command,
             status: status.clone(),
             exit_code,
             stdout,
@@ -751,16 +790,76 @@ fn truncate_output(value: String, max_bytes: usize) -> (String, bool) {
     (value[..boundary].to_string(), true)
 }
 
-fn executable_command(values: Vec<String>) -> Vec<String> {
+fn executable_commands(values: Vec<String>) -> Result<Vec<Vec<String>>, String> {
     let values = values
         .into_iter()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
-    if values.len() != 1 {
-        return values;
+    if values.is_empty() {
+        return Ok(Vec::new());
     }
-    split_command_line(&values[0]).unwrap_or(values)
+    if values.len() == 1 {
+        return parse_verification_command_entry(&values[0]).map(|command| vec![command]);
+    }
+    if values
+        .iter()
+        .any(|value| verification_entry_looks_like_command_line(value))
+    {
+        return values
+            .iter()
+            .map(|value| parse_verification_command_entry(value))
+            .collect();
+    }
+    Ok(vec![values])
+}
+
+fn parse_verification_command_entry(value: &str) -> Result<Vec<String>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("verification command entries cannot be empty".to_string());
+    }
+    Ok(split_command_line(value).unwrap_or_else(|| vec![value.to_string()]))
+}
+
+fn verification_entry_looks_like_command_line(value: &str) -> bool {
+    value.split_whitespace().nth(1).is_some()
+        || value.contains('"')
+        || value.contains('\'')
+        || value.contains('\\')
+}
+
+fn verification_command_for_result(commands: &[Vec<String>]) -> Vec<String> {
+    if commands.len() == 1 {
+        return commands[0].clone();
+    }
+    commands
+        .iter()
+        .map(|command| command.join(" "))
+        .collect::<Vec<_>>()
+}
+
+fn append_verification_output(
+    output: &mut String,
+    command: &[String],
+    value: String,
+    include_command_header: bool,
+) {
+    if value.is_empty() {
+        return;
+    }
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    if include_command_header {
+        output.push_str("$ ");
+        output.push_str(&command.join(" "));
+        output.push('\n');
+    }
+    output.push_str(&value);
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
 }
 
 fn ensure_verification_command_allowed(executable: &str) -> Result<(), String> {
