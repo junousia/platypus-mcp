@@ -22,7 +22,7 @@ pub fn dispatch_next_work(
         Ok(state) => state,
         Err(error) => return state_error(action, "Could not open project state.", error),
     };
-    if let Some(blocked) = dispatch_readiness_result(action, state.root(), true) {
+    if let Some(blocked) = dispatch_readiness_result(action, state.root(), false) {
         return blocked;
     }
     match state.dispatch_work(DispatchWorkCommand {
@@ -698,6 +698,23 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_next_work_does_not_auto_commit_platypus_artifacts() {
+        let project = backlog_project(true);
+        let head_before = git_head(project.path());
+        fs::write(
+            project.path().join("backlog/items/PROJ-003.md"),
+            "# Draft artifact\n",
+        )
+        .expect("dirty backlog artifact");
+
+        let result = dispatch_next_work(project.path(), RootParams { root: None });
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result.summary.contains("uncommitted Platypus"));
+        assert_eq!(git_head(project.path()), head_before);
+    }
+
+    #[test]
     fn dispatch_ready_work_prepares_two_independent_handoffs() {
         let project = backlog_project(true);
 
@@ -1069,5 +1086,16 @@ Edit {surface}.
             args,
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    fn git_head(root: &Path) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git rev-parse");
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 }
