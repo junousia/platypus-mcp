@@ -24,10 +24,6 @@ pub(crate) fn parse_sampled_json<T: DeserializeOwned>(text: &str) -> Result<T, S
 
 fn extract_json_payload(text: &str) -> Result<&str, String> {
     let trimmed = strip_code_fence(text.trim());
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        return Ok(trimmed);
-    }
-
     let object_start = trimmed.find('{');
     let array_start = trimmed.find('[');
     let Some(start) = [object_start, array_start].into_iter().flatten().min() else {
@@ -74,5 +70,12 @@ mod tests {
             parse_sampled_json("Here is the payload:\n{\"value\": 2}\nThanks").expect("json");
 
         assert_eq!(parsed["value"], 2);
+    }
+
+    #[test]
+    fn parses_json_with_trailing_text() {
+        let parsed: serde_json::Value = parse_sampled_json("{\"drafts\": []}\nDone").expect("json");
+
+        assert!(parsed["drafts"].as_array().expect("drafts").is_empty());
     }
 }
