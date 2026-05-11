@@ -2,9 +2,12 @@ use super::{
     closure::closed_item_ids, filesystem::resolve_root, types::ParsedBacklogItem,
     validate::validate_backlog_at_root,
 };
-use crate::models::{
-    ActionResult, ActionStatus, BacklogCandidate, BacklogInventoryData, BacklogInventoryItem,
-    BacklogListData, ProjectStatusData,
+use crate::{
+    config,
+    models::{
+        ActionResult, ActionStatus, BacklogCandidate, BacklogInventoryData, BacklogInventoryItem,
+        BacklogListData, ProjectStatusData,
+    },
 };
 use std::{collections::BTreeSet, path::Path};
 
@@ -25,6 +28,7 @@ pub fn inspect_status(
     } else {
         Vec::new()
     };
+    let agent_readiness = config::inspect_agent_profile_readiness(&root).ok();
     let data = ProjectStatusData {
         root: root.display().to_string(),
         platy_yaml: root.join("platy.yaml").is_file(),
@@ -32,6 +36,28 @@ pub fn inspect_status(
         git_metadata: root.join(".git").exists(),
         backlog_items: validation.items.len(),
         runnable_backlog_items: candidates.len(),
+        agent_profiles: agent_readiness
+            .as_ref()
+            .map(|readiness| readiness.profile_count)
+            .unwrap_or(0),
+        manager_ready: agent_readiness
+            .as_ref()
+            .is_some_and(|readiness| readiness.manager_ready()),
+        worker_ready: agent_readiness
+            .as_ref()
+            .is_some_and(|readiness| readiness.worker_ready()),
+        ready_worker_profiles: agent_readiness
+            .as_ref()
+            .map(|readiness| readiness.ready_worker_count)
+            .unwrap_or(0),
+        agent_profile_warnings: agent_readiness
+            .map(|readiness| readiness.warnings)
+            .unwrap_or_else(|| {
+                vec![
+                    "Could not inspect agent profiles. Create platy.yaml or run init_project, then configure manager and worker profiles."
+                        .to_string(),
+                ]
+            }),
         tasks_supported: true,
         findings_supported: true,
     };

@@ -19,6 +19,30 @@ const VALID_HARNESSES: &[&str] = &["codex", "claude", "fake", "custom"];
 const VALID_MERGE_STYLES: &[&str] = &["merge_commit", "fast_forward", "squash"];
 const DEFAULT_MERGE_STYLE: &str = "merge_commit";
 
+#[derive(Debug, Clone)]
+pub struct AgentProfileReadiness {
+    pub profile_count: usize,
+    pub manager_count: usize,
+    pub ready_manager_count: usize,
+    pub worker_count: usize,
+    pub ready_worker_count: usize,
+    pub warnings: Vec<String>,
+}
+
+impl AgentProfileReadiness {
+    pub fn manager_ready(&self) -> bool {
+        self.ready_manager_count > 0
+    }
+
+    pub fn worker_ready(&self) -> bool {
+        self.ready_worker_count > 0
+    }
+
+    pub fn has_profiles(&self) -> bool {
+        self.profile_count > 0
+    }
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct ProjectConfig {
     #[serde(default)]
@@ -119,6 +143,88 @@ pub fn list_agent_profiles(
         format!("Returned {returned} agent profile(s)."),
         data,
     )
+}
+
+pub fn inspect_agent_profile_readiness(root: &Path) -> Result<AgentProfileReadiness, String> {
+    let config = read_config(root)?;
+    let profiles = config
+        .agents
+        .profiles
+        .iter()
+        .map(|(name, profile)| profile_data(name, profile))
+        .collect::<Vec<_>>();
+    let profile_count = profiles.len();
+    let manager_count = profiles
+        .iter()
+        .filter(|profile| profile.role == "manager")
+        .count();
+    let ready_manager_count = profiles
+        .iter()
+        .filter(|profile| profile.role == "manager" && profile.ready)
+        .count();
+    let worker_count = profiles
+        .iter()
+        .filter(|profile| profile.role == "worker")
+        .count();
+    let ready_worker_count = profiles
+        .iter()
+        .filter(|profile| profile.role == "worker" && profile.ready)
+        .count();
+    let mut warnings = Vec::new();
+    if manager_count == 0 {
+        warnings.push(format!(
+            "No manager profile is configured. {}",
+            manager_profile_setup_guidance()
+        ));
+    } else if ready_manager_count == 0 {
+        warnings.push(format!(
+            "Manager profile is configured but not ready. Check executable paths with list_agent_profiles, then update the profile. {}",
+            manager_profile_setup_guidance()
+        ));
+    }
+    if worker_count == 0 {
+        warnings.push(format!(
+            "No worker profile is configured. {} Manual handoff is still possible: dispatch_ready_work can prepare task bundles/worktrees, then an MCP host or external agent can run the assignment and report with start_worker_task and complete_worker_task.",
+            worker_profile_setup_guidance()
+        ));
+    } else if ready_worker_count == 0 {
+        let issues = profiles
+            .iter()
+            .filter(|profile| profile.role == "worker" && !profile.ready)
+            .flat_map(|profile| {
+                profile
+                    .issues
+                    .iter()
+                    .map(|issue| format!("{}: {}", profile.name, issue))
+            })
+            .collect::<Vec<_>>();
+        let issue_text = if issues.is_empty() {
+            "No ready worker executable was found.".to_string()
+        } else {
+            issues.join("; ")
+        };
+        warnings.push(format!(
+            "Worker profiles are configured but none are ready. {issue_text}. {} Manual handoff is still possible: use dispatch_ready_work with prepare_handoffs=true, then run the returned assignment externally.",
+            worker_profile_setup_guidance()
+        ));
+    }
+
+    Ok(AgentProfileReadiness {
+        profile_count,
+        manager_count,
+        ready_manager_count,
+        worker_count,
+        ready_worker_count,
+        warnings,
+    })
+}
+
+pub fn manager_profile_setup_guidance() -> String {
+    "Configure one with configure_agent_profile {\"name\":\"manager\",\"role\":\"manager\",\"harness\":\"codex\",\"executable\":\"codex\"} or use harness=\"claude\" with executable=\"claude\".".to_string()
+}
+
+pub fn worker_profile_setup_guidance() -> String {
+    "Configure one with configure_agent_profile {\"name\":\"coder\",\"role\":\"worker\",\"harness\":\"codex\",\"executable\":\"codex\"} or use harness=\"claude\" with executable=\"claude\".".to_string()
 }
 
 pub fn inspect_workflow_config(

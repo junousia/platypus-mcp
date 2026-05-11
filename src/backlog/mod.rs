@@ -107,6 +107,24 @@ mod tests {
     }
 
     #[test]
+    fn inspect_status_reports_agent_profile_readiness() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "First task", "P1", &[]);
+
+        let status = inspect_status(temp.path(), Some(root_arg(temp.path()).as_str()), Some(10));
+        let data = status.data.expect("status");
+
+        assert_eq!(data.runnable_backlog_items, 1);
+        assert_eq!(data.agent_profiles, 0);
+        assert!(!data.manager_ready);
+        assert!(!data.worker_ready);
+        assert!(data
+            .agent_profile_warnings
+            .iter()
+            .any(|warning| warning.contains("No worker profile")));
+    }
+
+    #[test]
     fn validate_backlog_rejects_unknown_frontmatter_fields() {
         let temp = project_fixture();
         write_item(temp.path(), "PROJ-001", "First task", "P1", &[]);

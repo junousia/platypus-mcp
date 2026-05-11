@@ -1,5 +1,5 @@
 use crate::{
-    backlog,
+    backlog, config,
     git_readiness::{inspect_git_readiness, GitReadinessStatus},
     models::{
         ActionResult, ActionStatus, BacklogCandidate, BacklogListData, ClassifyPlanningNeedsParams,
@@ -53,6 +53,21 @@ pub fn next_safe_action(
             },
         );
     }
+    if let Some(reason) = missing_worker_profile_reason(default_root, state.root()) {
+        let root_string = state.root().to_string_lossy().to_string();
+        return ActionResult::completed(
+            action,
+            "Runnable backlog work needs a ready worker profile.",
+            NextSafeActionData {
+                root: root_string.clone(),
+                recommended_tool: "configure_agent_profile".to_string(),
+                summary: "Runnable backlog work exists, but no ready worker profile is configured."
+                    .to_string(),
+                reason,
+                params: worker_profile_params(&root_string),
+            },
+        );
+    }
     match state.next_safe_action(NextSafeActionQuery::default()) {
         Ok(snapshot) => {
             let snapshot = verification_policy_adjusted_snapshot(state.root(), snapshot);
@@ -74,6 +89,29 @@ pub fn next_safe_action(
             error.to_string(),
         ),
     }
+}
+
+fn missing_worker_profile_reason(default_root: &Path, root: &Path) -> Option<String> {
+    let readiness = config::inspect_agent_profile_readiness(root).ok()?;
+    if readiness.worker_ready() {
+        return None;
+    }
+    let listed =
+        backlog::list_backlog(default_root, Some(root.to_string_lossy().as_ref()), Some(1));
+    let has_runnable = matches!(
+        listed,
+        ActionResult {
+            status: ActionStatus::Completed,
+            data: Some(BacklogListData { candidates, .. }),
+            ..
+        } if !candidates.is_empty()
+    );
+    has_runnable.then(|| {
+        format!(
+            "{} Manual handoff remains possible: call dispatch_ready_work with prepare_handoffs=true and have an MCP host or external agent execute the returned assignment.",
+            config::worker_profile_setup_guidance()
+        )
+    })
 }
 
 fn verification_policy_adjusted_snapshot(
@@ -207,6 +245,41 @@ pub fn inspect_work_queue(
             }
         }
     }
+    let initial_ready_count = items.iter().filter(|item| item.ready_to_dispatch).count();
+    let agent_readiness = config::inspect_agent_profile_readiness(Path::new(&root)).ok();
+    let worker_ready = agent_readiness
+        .as_ref()
+        .is_some_and(|readiness| readiness.worker_ready());
+    let ready_worker_profiles = agent_readiness
+        .as_ref()
+        .map(|readiness| readiness.ready_worker_count)
+        .unwrap_or(0);
+    let worker_profile_blocker_applies =
+        !items.is_empty() && initial_ready_count > 0 && !worker_ready;
+    if let Some(readiness) = agent_readiness.as_ref() {
+        if !readiness.worker_ready() {
+            preflight_warnings.extend(readiness.warnings.iter().filter_map(|warning| {
+                warning
+                    .to_ascii_lowercase()
+                    .contains("worker")
+                    .then(|| warning.clone())
+            }));
+        }
+    } else if !items.is_empty() {
+        preflight_warnings.push(
+            "Could not inspect worker profiles. Run doctor_snapshot or configure_agent_profile before managed dispatch."
+                .to_string(),
+        );
+    }
+    if worker_profile_blocker_applies {
+        for item in &mut items {
+            if item.ready_to_dispatch {
+                item.ready_to_dispatch = false;
+                item.recommended_tool = "configure_agent_profile".to_string();
+                item.reason = "Planning is ready, but no ready worker profile is configured for managed execution. Configure a worker profile, or explicitly use manual handoff with dispatch_ready_work prepare_handoffs=true.".to_string();
+            }
+        }
+    }
     let ready_count = items.iter().filter(|item| item.ready_to_dispatch).count();
     let blocked_count = items.len().saturating_sub(ready_count);
     if active_filtered > 0 {
@@ -227,6 +300,13 @@ pub fn inspect_work_queue(
             "{active_filtered} backlog item(s) already have active tasks. Use next_safe_action or inspect_task to continue active work instead of creating new backlog items."
         );
         params = map_params([("root", root.as_str())]);
+    } else if worker_profile_blocker_applies {
+        recommended_tool = "configure_agent_profile".to_string();
+        reason = format!(
+            "Runnable work exists, but no ready worker profile is configured. {} Manual handoff remains possible with dispatch_ready_work prepare_handoffs=true if an external agent will execute the returned assignment.",
+            config::worker_profile_setup_guidance()
+        );
+        params = worker_profile_params(&root);
     }
     let summary = if items.is_empty() {
         if active_filtered > 0 {
@@ -262,6 +342,8 @@ pub fn inspect_work_queue(
             active_count: active_filtered,
             active_item_ids,
             preflight_warnings,
+            worker_ready,
+            ready_worker_profiles,
             recommended_tool,
             summary,
             reason,
@@ -863,6 +945,16 @@ fn map_params<const N: usize>(params: [(&str, &str); N]) -> BTreeMap<String, Val
         .collect()
 }
 
+fn worker_profile_params(root: &str) -> BTreeMap<String, Value> {
+    BTreeMap::from([
+        ("root".to_string(), Value::String(root.to_string())),
+        ("name".to_string(), Value::String("coder".to_string())),
+        ("role".to_string(), Value::String("worker".to_string())),
+        ("harness".to_string(), Value::String("codex".to_string())),
+        ("executable".to_string(), Value::String("codex".to_string())),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1006,6 +1098,24 @@ mod tests {
         assert_eq!(data.recommended_tool, "doctor_snapshot");
         assert!(data.summary.contains("no initial commit"));
         assert!(data.reason.contains("initial commit"));
+    }
+
+    #[test]
+    fn next_safe_action_recommends_worker_profile_when_runnable_work_exists() {
+        let project = backlog_project();
+        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "First item");
+        git(project.path(), &["add", "backlog", "platy.yaml"]);
+        git(project.path(), &["commit", "-m", "Add backlog item"]);
+
+        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
+        let data = result.data.expect("next action");
+
+        assert_eq!(data.recommended_tool, "configure_agent_profile");
+        assert!(data.reason.contains("configure_agent_profile"));
+        assert_eq!(data.params["role"], "worker");
+        assert_eq!(data.params["name"], "coder");
     }
 
     #[test]
@@ -1179,6 +1289,7 @@ acceptance:
                 owned_surfaces: &["README.md"],
             },
         );
+        fs::write(project.path().join("README.md"), "# Dirty\n").expect("dirty readme");
 
         let result = inspect_work_queue(
             project.path(),
@@ -1195,6 +1306,95 @@ acceptance:
         assert!(data.reason.contains("workspace"));
         assert!(data.reason.contains("Dispatch will be blocked"));
         assert!(data.reason.contains("After cleanup"));
+    }
+
+    #[test]
+    fn inspect_work_queue_reports_missing_worker_profile_for_runnable_work() {
+        let project = backlog_project();
+        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
+        init_git(project.path());
+        write_item_with(
+            project.path(),
+            ItemFixture {
+                id: "PROJ-001",
+                title: "Update docs",
+                item_type: "docs",
+                area: "docs",
+                owned_surfaces: &["README.md"],
+            },
+        );
+        git(project.path(), &["add", "backlog", "platy.yaml"]);
+        git(project.path(), &["commit", "-m", "Add backlog item"]);
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: Some(true),
+            },
+        );
+        let data = result.data.expect("queue");
+
+        assert_eq!(data.recommended_tool, "configure_agent_profile");
+        assert!(!data.worker_ready);
+        assert_eq!(data.ready_worker_profiles, 0);
+        assert!(data
+            .preflight_warnings
+            .iter()
+            .any(|warning| warning.contains("No worker profile")));
+        assert!(!data.items[0].ready_to_dispatch);
+        assert_eq!(data.items[0].recommended_tool, "configure_agent_profile");
+    }
+
+    #[test]
+    fn inspect_work_queue_reports_non_ready_worker_profile() {
+        let project = backlog_project();
+        fs::write(
+            project.path().join("platy.yaml"),
+            r#"agents:
+  profiles:
+    manager:
+      role: manager
+      harness: codex
+      executable: git
+    coder:
+      role: worker
+      harness: codex
+      executable: definitely-missing-platypus-agent
+"#,
+        )
+        .expect("config");
+        init_git(project.path());
+        write_item_with(
+            project.path(),
+            ItemFixture {
+                id: "PROJ-001",
+                title: "Update docs",
+                item_type: "docs",
+                area: "docs",
+                owned_surfaces: &["README.md"],
+            },
+        );
+        git(project.path(), &["add", "backlog", "platy.yaml"]);
+        git(project.path(), &["commit", "-m", "Add backlog item"]);
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: Some(true),
+            },
+        );
+        let data = result.data.expect("queue");
+
+        assert_eq!(data.recommended_tool, "configure_agent_profile");
+        assert!(!data.worker_ready);
+        assert!(data
+            .preflight_warnings
+            .iter()
+            .any(|warning| warning.contains("none are ready")));
     }
 
     #[test]
@@ -1587,6 +1787,7 @@ tasks:
 
     fn backlog_project() -> TempDir {
         let project = TempDir::new().expect("temp dir");
+        write_ready_profiles(project.path());
         fs::create_dir_all(project.path().join("backlog/items")).expect("items");
         fs::create_dir_all(project.path().join("backlog/epics")).expect("epics");
         fs::write(
@@ -1606,12 +1807,30 @@ area: general
         project
     }
 
+    fn write_ready_profiles(root: &Path) {
+        fs::write(
+            root.join("platy.yaml"),
+            r#"agents:
+  profiles:
+    manager:
+      role: manager
+      harness: codex
+      executable: git
+    coder:
+      role: worker
+      harness: codex
+      executable: git
+"#,
+        )
+        .expect("config");
+    }
+
     fn init_git_with_closed_item(root: &Path, item_id: &str) {
         git(root, &["init"]);
         git(root, &["config", "user.name", "Platypus Test"]);
         git(root, &["config", "user.email", "platypus@example.invalid"]);
         fs::write(root.join("README.md"), "# Test\n").expect("readme");
-        git(root, &["add", "README.md"]);
+        git(root, &["add", "--all"]);
         git(
             root,
             &[
@@ -1627,7 +1846,7 @@ area: general
         git(root, &["config", "user.name", "Platypus Test"]);
         git(root, &["config", "user.email", "platypus@example.invalid"]);
         fs::write(root.join("README.md"), "# Test\n").expect("readme");
-        git(root, &["add", "README.md"]);
+        git(root, &["add", "--all"]);
         git(root, &["commit", "-m", "Initial commit"]);
     }
 

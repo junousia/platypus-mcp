@@ -95,7 +95,10 @@ mechanism is verified.
    it explains closed items from Git trailers and blocked items from open
    dependencies without requiring hosts to read markdown directly.
 8. Use `inspect_work_queue` to combine runnable candidates, active task state,
-   task-plan state, and the recommended next tool.
+   task-plan state, worker-profile readiness, and the recommended next tool.
+   When runnable work exists but no ready worker profile is configured, follow
+   the returned `configure_agent_profile` parameters or explicitly use
+   `dispatch_ready_work` as a manual handoff path.
 
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime
@@ -176,12 +179,15 @@ and `list_task_plans` to review committed plans.
 1. Call `inspect_work_queue`.
 2. If it requires a task plan, use the recommended task-plan tool first.
 3. Call `next_safe_action`.
-4. For normal execution, call `dispatch_ready_work`; it dispatches one or more
+4. Ensure at least one ready worker profile is configured with
+   `configure_agent_profile`, or decide that this dispatch is a manual handoff
+   to an MCP host or external agent.
+5. For normal execution, call `dispatch_ready_work`; it dispatches one or more
    runnable items and prepares assignments, worktrees, and bundles.
-5. For low-level debugging only, call `dispatch_next_work` and then immediately
+6. For low-level debugging only, call `dispatch_next_work` and then immediately
    `prepare_worker_handoff`; do not run a worker from a bare task id.
-6. Give the assignment bundle and worktree path to the worker harness.
-7. Mark the worker active with `start_worker_task` when you need an explicit
+7. Give the assignment bundle and worktree path to the worker harness.
+8. Mark the worker active with `start_worker_task` when you need an explicit
    running transition.
 
 The worker should operate in the assigned worktree, not in the manager
