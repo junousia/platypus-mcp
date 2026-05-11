@@ -6,7 +6,7 @@ use crate::{
         },
         validation::validate_changed_files,
     },
-    backlog, bundle, git_trailers,
+    backlog, bundle, execution_mode, git_trailers,
     models::{
         ActionResult, ActionStatus, BacklogCandidate, BacklogListData, EventRecord, EvidenceRecord,
         FindingRecord, GenerateTaskBundleParams, LeaseRecord, RuntimeTransitionRecord,
@@ -294,7 +294,7 @@ impl ProjectState for SqliteProjectState {
                 )));
             }
         };
-        let bundle = match bundle::generate_task_bundle(
+        let mut bundle = match bundle::generate_task_bundle(
             &self.root,
             GenerateTaskBundleParams {
                 root: Some(root),
@@ -320,6 +320,9 @@ impl ProjectState for SqliteProjectState {
                 )));
             }
         };
+        bundle.execution_mode =
+            execution_mode::normalize_assignment(command.execution_mode.as_deref())
+                .map_err(ProjectStateError::invalid_command)?;
         if let Err(error) = crate::assignments::ensure_owned_surface_dirs_for(
             &worktree.path,
             &bundle.owned_surfaces,
@@ -367,9 +370,10 @@ impl ProjectState for SqliteProjectState {
                 event_type: "worker_assignment_prepared".to_string(),
                 summary: format!("Prepared worker assignment `{}`.", assignment.id),
                 payload: Some(json!({
-                    "assignment_id": assignment.id,
-                    "worker": assignment.worker,
-                    "worktree_path": assignment.worktree_path
+                    "assignment_id": assignment.id.clone(),
+                    "worker": assignment.worker.clone(),
+                    "worktree_path": assignment.worktree_path.clone(),
+                    "execution_mode": assignment.bundle.execution_mode.clone()
                 })),
             })
             .map_err(map_repository_error)?;
@@ -1118,7 +1122,42 @@ impl ProjectState for SqliteProjectState {
         let unresolved_required =
             query_unresolved_required_finding_summaries(&self.connection.connection)
                 .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        let invalid_task_evidence = query_invalid_task_evidence(&self.connection.connection)
+            .map_err(|error| ProjectStateError::backend(error.to_string()))?;
         let mut gaps = Vec::new();
+
+        for evidence in invalid_task_evidence {
+            let Some(source_task_id) = evidence.source_task_id.as_deref() else {
+                continue;
+            };
+            if let Some(task_status) = evidence.task_status.as_deref() {
+                gaps.push(ReconcileGap {
+                    kind: "evidence_for_incomplete_task".to_string(),
+                    source_item_id: evidence.source_item_id.clone(),
+                    source_task_id: evidence.source_task_id.clone(),
+                    summary: format!(
+                        "Evidence `{}` of kind `{}` is attached to task `{source_task_id}` while it is `{task_status}`.",
+                        evidence.id, evidence.kind
+                    ),
+                    next_action:
+                        "Complete the worker lifecycle before relying on verification or integration evidence."
+                            .to_string(),
+                });
+            } else {
+                gaps.push(ReconcileGap {
+                    kind: "orphaned_task_evidence".to_string(),
+                    source_item_id: evidence.source_item_id.clone(),
+                    source_task_id: evidence.source_task_id.clone(),
+                    summary: format!(
+                        "Evidence `{}` of kind `{}` references missing task `{source_task_id}`.",
+                        evidence.id, evidence.kind
+                    ),
+                    next_action:
+                        "Record evidence against a valid lifecycle task or replace the orphaned evidence."
+                            .to_string(),
+                });
+            }
+        }
 
         for task in &completed_tasks {
             let verification = query_evidence(
@@ -1796,6 +1835,15 @@ struct CompletedTask {
     source_item_id: String,
 }
 
+#[derive(Debug)]
+struct InvalidTaskEvidence {
+    id: String,
+    source_item_id: Option<String>,
+    source_task_id: Option<String>,
+    kind: String,
+    task_status: Option<String>,
+}
+
 fn query_completed_tasks(
     connection: &rusqlite::Connection,
 ) -> rusqlite::Result<Vec<CompletedTask>> {
@@ -1811,6 +1859,36 @@ fn query_completed_tasks(
         Ok(CompletedTask {
             id: row.get("id")?,
             source_item_id: row.get("source_item_id")?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn query_invalid_task_evidence(
+    connection: &rusqlite::Connection,
+) -> rusqlite::Result<Vec<InvalidTaskEvidence>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT evidence.id,
+               COALESCE(evidence.source_item_id, tasks.source_item_id) AS source_item_id,
+               evidence.source_task_id,
+               evidence.kind,
+               tasks.status AS task_status
+        FROM evidence
+        LEFT JOIN tasks ON tasks.id = evidence.source_task_id
+        WHERE evidence.source_task_id IS NOT NULL
+          AND evidence.kind IN ('verification', 'commit')
+          AND (tasks.id IS NULL OR tasks.status != 'completed')
+        ORDER BY evidence.created_at ASC, evidence.id ASC
+        "#,
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(InvalidTaskEvidence {
+            id: row.get("id")?,
+            source_item_id: row.get("source_item_id")?,
+            source_task_id: row.get("source_task_id")?,
+            kind: row.get("kind")?,
+            task_status: row.get("task_status")?,
         })
     })?;
     rows.collect()
@@ -2097,6 +2175,7 @@ mod tests {
                 task_id: Some(task.id.clone()),
                 worker: None,
                 claimant: "tester".to_string(),
+                execution_mode: None,
                 base_ref: None,
                 verification_command: Vec::new(),
             })
@@ -2106,6 +2185,7 @@ mod tests {
                 task_id: Some(task.id),
                 worker: None,
                 claimant: "tester".to_string(),
+                execution_mode: None,
                 base_ref: None,
                 verification_command: Vec::new(),
             })
@@ -2136,6 +2216,7 @@ mod tests {
                 task_id: Some(task.id),
                 worker: Some("coder".to_string()),
                 claimant: "tester".to_string(),
+                execution_mode: None,
                 base_ref: None,
                 verification_command: vec!["make".to_string(), "check".to_string()],
             })

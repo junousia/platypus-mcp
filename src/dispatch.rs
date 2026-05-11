@@ -1,5 +1,5 @@
 use crate::{
-    assignments, backlog, config,
+    assignments, backlog, config, execution_mode,
     git_readiness::inspect_git_readiness,
     models::{
         ActionResult, ActionStatus, BacklogCandidate, DispatchNextWorkData, DispatchReadyWorkData,
@@ -78,6 +78,12 @@ pub fn dispatch_ready_work(
         Err(error) => return state_error(action, "Could not open project state.", error),
     };
     let root = state.root().display().to_string();
+    let requested_execution_mode = match execution_mode::normalize(params.execution_mode.as_deref())
+    {
+        Ok(mode) => mode,
+        Err(error) => return ActionResult::failed(action, "Could not dispatch work.", error),
+    };
+    let manual_handoff = execution_mode::is_manual_handoff(&requested_execution_mode);
     let requested = params.max_tasks.unwrap_or(10).clamp(1, 10);
     let active_source_items = active_source_item_ids(state.root());
     let profile_readiness = config::inspect_agent_profile_readiness(state.root()).ok();
@@ -88,7 +94,11 @@ pub fn dispatch_ready_work(
         .as_ref()
         .map(|readiness| readiness.ready_worker_count)
         .unwrap_or(0);
-    let preflight_warnings = dispatch_profile_warnings(profile_readiness.as_ref());
+    let preflight_warnings = if manual_handoff {
+        Vec::new()
+    } else {
+        dispatch_profile_warnings(profile_readiness.as_ref())
+    };
     if params.dry_run.unwrap_or(false) {
         let listed = backlog::list_backlog(default_root, Some(root.as_str()), Some(100));
         let candidates = match listed {
@@ -150,6 +160,7 @@ pub fn dispatch_ready_work(
                 } else {
                     "dry_run".to_string()
                 },
+                execution_mode: requested_execution_mode,
                 preflight_warnings,
                 worker_ready,
                 ready_worker_profiles,
@@ -195,7 +206,7 @@ pub fn dispatch_ready_work(
         .take(requested)
         .map(|candidate| candidate.item_id.clone())
         .collect::<BTreeSet<_>>();
-    if params.auto_start.unwrap_or(false) && !selected_item_ids.is_empty() && !worker_ready {
+    if !manual_handoff && !selected_item_ids.is_empty() && !worker_ready {
         return ActionResult {
             action: action.to_string(),
             status: ActionStatus::Failed,
@@ -203,7 +214,7 @@ pub fn dispatch_ready_work(
                 "Runnable backlog work exists, but no ready worker profile can execute it."
                     .to_string(),
             next_action: Some(format!(
-                "{} For manual handoff, call dispatch_ready_work with auto_start=false and prepare_handoffs=true, then run the returned assignment externally.",
+                "{} For manual handoff, call dispatch_ready_work with execution_mode=manual_handoff and prepare_handoffs=true, then run the returned assignment externally.",
                 config::worker_profile_setup_guidance()
             )),
             data: Some(DispatchReadyWorkData {
@@ -216,13 +227,14 @@ pub fn dispatch_ready_work(
                 started: 0,
                 failed: 0,
                 stopped_reason: "worker_profile_missing".to_string(),
+                execution_mode: requested_execution_mode,
                 preflight_warnings,
                 worker_ready,
                 ready_worker_profiles,
                 items: Vec::new(),
             }),
             error: Some(
-                "No ready worker profile is configured for managed auto_start dispatch."
+                "No ready worker profile is configured for profiled dispatch."
                     .to_string(),
             ),
         };
@@ -237,6 +249,11 @@ pub fn dispatch_ready_work(
     }
     let prepare_handoffs = params.prepare_handoffs.unwrap_or(true);
     let auto_start = params.auto_start.unwrap_or(false);
+    let applied_execution_mode = if manual_handoff {
+        execution_mode::MANUAL_HANDOFF.to_string()
+    } else {
+        execution_mode::PROFILED_WORKER.to_string()
+    };
     let claimant = params
         .claimant
         .clone()
@@ -252,6 +269,7 @@ pub fn dispatch_ready_work(
         started: 0,
         failed: 0,
         stopped_reason: "max_tasks_reached".to_string(),
+        execution_mode: applied_execution_mode,
         preflight_warnings,
         worker_ready,
         ready_worker_profiles,
@@ -319,6 +337,7 @@ pub fn dispatch_ready_work(
                 task_id: Some(task.id.clone()),
                 worker: task.worker.clone().or_else(|| params.worker.clone()),
                 claimant: Some(claimant.clone()),
+                execution_mode: Some(report.execution_mode.clone()),
                 base_ref: None,
                 verification_command: params.verification_command.clone(),
             },
@@ -442,17 +461,14 @@ pub fn dispatch_ready_work(
     };
     if !report.worker_ready && report.dispatched > 0 {
         next_action = format!(
-            "{next_action} No ready worker profile is configured; this dispatch is prepared for manual handoff. {}",
-            config::worker_profile_setup_guidance()
+            "{next_action} Manual handoff mode is externally managed; use start_worker_task, complete_worker_task, verification evidence, and integration to finish the lifecycle."
         );
     }
     next_action.push_str(
         " Planning rationale for each queued item is available via inspect_work_queue and classify_planning_needs.",
     );
     let summary = if !report.worker_ready && report.dispatched > 0 {
-        format!(
-            "{summary} No ready worker profile is configured; use manual handoff or configure a worker profile."
-        )
+        format!("{summary} Manual handoff mode selected; no ready worker profile was required.")
     } else {
         summary
     };
@@ -843,7 +859,10 @@ fn task_record(task: TaskSnapshot) -> TaskRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::DispatchReadyWorkParams;
+    use crate::{
+        models::{DispatchReadyWorkParams, InspectTaskEventsParams},
+        tasks,
+    };
     use std::{fs, process::Command};
     use tempfile::TempDir;
 
@@ -899,6 +918,7 @@ mod tests {
                 max_tasks: Some(2),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
+                execution_mode: None,
                 prepare_handoffs: None,
                 auto_start: None,
                 auto_commit_artifacts: None,
@@ -940,6 +960,7 @@ mod tests {
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
+                execution_mode: None,
                 prepare_handoffs: Some(false),
                 auto_start: None,
                 auto_commit_artifacts: None,
@@ -968,6 +989,7 @@ mod tests {
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
+                execution_mode: None,
                 prepare_handoffs: Some(false),
                 auto_start: None,
                 auto_commit_artifacts: None,
@@ -997,6 +1019,7 @@ mod tests {
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
+                execution_mode: None,
                 prepare_handoffs: Some(false),
                 auto_start: None,
                 auto_commit_artifacts: None,
@@ -1028,6 +1051,7 @@ mod tests {
                 max_tasks: Some(1),
                 worker: Some("qa".to_string()),
                 claimant: Some("tester".to_string()),
+                execution_mode: None,
                 prepare_handoffs: Some(false),
                 auto_start: None,
                 auto_commit_artifacts: None,
@@ -1056,6 +1080,7 @@ mod tests {
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
+                execution_mode: None,
                 prepare_handoffs: Some(false),
                 auto_start: None,
                 auto_commit_artifacts: None,
@@ -1103,6 +1128,7 @@ mod tests {
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
+                execution_mode: None,
                 prepare_handoffs: None,
                 auto_start: None,
                 auto_commit_artifacts: None,
@@ -1132,6 +1158,7 @@ mod tests {
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
+                execution_mode: None,
                 prepare_handoffs: Some(true),
                 auto_start: Some(true),
                 auto_commit_artifacts: None,
@@ -1162,6 +1189,7 @@ mod tests {
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
+                execution_mode: None,
                 prepare_handoffs: Some(true),
                 auto_start: Some(true),
                 auto_commit_artifacts: None,
@@ -1173,12 +1201,103 @@ mod tests {
 
         assert!(matches!(result.status, ActionStatus::Failed));
         assert_eq!(data.stopped_reason, "worker_profile_missing");
+        assert_eq!(data.execution_mode, "auto");
         assert_eq!(data.dispatched, 0);
         assert!(result
             .next_action
             .as_deref()
             .unwrap_or("")
             .contains("manual handoff"));
+    }
+
+    #[test]
+    fn dispatch_ready_work_manual_handoff_prepares_without_worker_profile() {
+        let project = backlog_project(true);
+        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
+        git(project.path(), &["add", "platy.yaml"]);
+        git(project.path(), &["commit", "-m", "Remove worker profile"]);
+
+        let result = dispatch_ready_work(
+            project.path(),
+            DispatchReadyWorkParams {
+                root: None,
+                item_id: None,
+                max_tasks: Some(1),
+                worker: Some("coder".to_string()),
+                claimant: Some("manual-host".to_string()),
+                execution_mode: Some("manual_handoff".to_string()),
+                prepare_handoffs: Some(true),
+                auto_start: None,
+                auto_commit_artifacts: None,
+                dry_run: None,
+                verification_command: Vec::new(),
+            },
+        );
+        let data = result.data.expect("batch data");
+        let item = data.items.first().expect("item");
+        let assignment = item.assignment.as_ref().expect("assignment");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert_eq!(data.execution_mode, "manual_handoff");
+        assert!(!data.worker_ready);
+        assert_eq!(data.prepared, 1);
+        assert_eq!(assignment.execution_mode, "manual_handoff");
+        assert_eq!(assignment.bundle.execution_mode, "manual_handoff");
+        assert_eq!(assignment.assigned_by.as_deref(), Some("manual-host"));
+        assert!(result
+            .next_action
+            .as_deref()
+            .unwrap_or("")
+            .contains("start_worker_task"));
+
+        let events = tasks::inspect_task_events(
+            project.path(),
+            InspectTaskEventsParams {
+                root: None,
+                task_id: item.task.as_ref().expect("task").id.clone(),
+                limit: Some(20),
+            },
+        )
+        .data
+        .expect("events");
+        assert!(events.events.iter().any(|event| {
+            event.event_type == "worker_assignment_prepared"
+                && event
+                    .payload
+                    .as_ref()
+                    .is_some_and(|payload| payload["execution_mode"] == "manual_handoff")
+        }));
+    }
+
+    #[test]
+    fn dispatch_ready_work_profiled_worker_requires_ready_worker_profile() {
+        let project = backlog_project(true);
+        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
+        git(project.path(), &["add", "platy.yaml"]);
+        git(project.path(), &["commit", "-m", "Remove worker profile"]);
+
+        let result = dispatch_ready_work(
+            project.path(),
+            DispatchReadyWorkParams {
+                root: None,
+                item_id: None,
+                max_tasks: Some(1),
+                worker: Some("coder".to_string()),
+                claimant: Some("tester".to_string()),
+                execution_mode: Some("profiled_worker".to_string()),
+                prepare_handoffs: Some(true),
+                auto_start: None,
+                auto_commit_artifacts: None,
+                dry_run: None,
+                verification_command: Vec::new(),
+            },
+        );
+        let data = result.data.expect("batch data");
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert_eq!(data.stopped_reason, "worker_profile_missing");
+        assert_eq!(data.execution_mode, "profiled_worker");
+        assert_eq!(data.dispatched, 0);
     }
 
     #[test]
@@ -1193,6 +1312,7 @@ mod tests {
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
+                execution_mode: None,
                 prepare_handoffs: Some(true),
                 auto_start: Some(true),
                 auto_commit_artifacts: Some(true),

@@ -8,6 +8,7 @@ pub mod config;
 pub mod dispatch;
 pub mod events;
 pub mod evidence;
+pub mod execution_mode;
 pub mod findings;
 pub mod git_readiness;
 pub mod goal;

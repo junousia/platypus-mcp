@@ -153,6 +153,76 @@ mod tests {
     }
 
     #[test]
+    fn reports_orphaned_task_evidence() {
+        let project = git_project_with_closure("PROJ-001");
+        record_evidence(
+            project.path(),
+            RecordEvidenceParams {
+                root: None,
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: Some("PROJ-001-T999".to_string()),
+                kind: "verification".to_string(),
+                summary: "Verification was recorded against a missing task.".to_string(),
+                refs: vec!["local".to_string()],
+                metadata: BTreeMap::new(),
+            },
+        );
+
+        let reconciled = reconcile_project(project.path(), ReconcileParams { root: None });
+        let data = reconciled.data.expect("reconcile data");
+
+        assert!(matches!(
+            reconciled.status,
+            crate::models::ActionStatus::Failed
+        ));
+        assert!(data.gaps.iter().any(
+            |gap| gap.kind == "orphaned_task_evidence" && gap.summary.contains("PROJ-001-T999")
+        ));
+    }
+
+    #[test]
+    fn reports_evidence_for_incomplete_task() {
+        let project = git_project_with_closure("PROJ-001");
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Queued task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        record_evidence(
+            project.path(),
+            RecordEvidenceParams {
+                root: None,
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: Some(task.id.clone()),
+                kind: "verification".to_string(),
+                summary: "Verification was recorded before completion.".to_string(),
+                refs: vec!["local".to_string()],
+                metadata: BTreeMap::new(),
+            },
+        );
+
+        let reconciled = reconcile_project(project.path(), ReconcileParams { root: None });
+        let data = reconciled.data.expect("reconcile data");
+
+        assert!(matches!(
+            reconciled.status,
+            crate::models::ActionStatus::Failed
+        ));
+        assert!(data
+            .gaps
+            .iter()
+            .any(|gap| gap.kind == "evidence_for_incomplete_task"
+                && gap.summary.contains(task.id.as_str())));
+    }
+
+    #[test]
     fn reports_integration_commits_missing_required_trailers() {
         let project = git_project_without_trailers();
         let task = completed_task(project.path(), "PROJ-001");

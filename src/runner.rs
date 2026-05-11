@@ -88,6 +88,7 @@ pub fn prepare_next(
                     .claimant
                     .clone()
                     .or_else(|| Some("local-runner".to_string())),
+                execution_mode: None,
                 base_ref: None,
                 verification_command: params.verification_command.clone(),
             },
