@@ -2,7 +2,8 @@ use super::{
     filesystem::{read_markdown_paths, resolve_root},
     parse::{parse_backlog_item, parse_epic},
     types::{
-        BacklogValidation, ParsedBacklogItem, REQUIRED_SECTIONS, VALID_PRIORITIES, VALID_TYPES,
+        BacklogValidation, ParsedBacklogItem, REQUIRED_SECTIONS, VALID_EPIC_STATUSES,
+        VALID_PRIORITIES, VALID_TYPES,
     },
 };
 use crate::models::{ActionResult, BacklogValidationData};
@@ -73,12 +74,26 @@ pub(super) fn validate_backlog_at_root(root: &Path, include_errors: bool) -> Bac
                         Ok(epic) => {
                             if epic.id.trim().is_empty()
                                 || epic.title.trim().is_empty()
-                                || epic.status.trim().is_empty()
                                 || epic.area.trim().is_empty()
-                                || !VALID_PRIORITIES.contains(&epic.priority.as_str())
                             {
                                 errors
                                     .push(format!("{}: invalid epic frontmatter", path.display()));
+                            }
+                            if !VALID_EPIC_STATUSES.contains(&epic.status.as_str()) {
+                                errors.push(format!(
+                                    "{}: invalid epic status `{}`; expected one of: {}",
+                                    path.display(),
+                                    epic.status,
+                                    VALID_EPIC_STATUSES.join(", ")
+                                ));
+                            }
+                            if !VALID_PRIORITIES.contains(&epic.priority.as_str()) {
+                                errors.push(format!(
+                                    "{}: invalid epic priority `{}`; expected one of: {}",
+                                    path.display(),
+                                    epic.priority,
+                                    VALID_PRIORITIES.join(", ")
+                                ));
                             }
                             epic_ids.insert(epic.id);
                         }
@@ -294,5 +309,24 @@ mod tests {
         let errors = validation.errors.join("\n");
         assert!(errors.contains("expected format `PROJ-NNN`"));
         assert!(errors.contains("rename the file"));
+    }
+
+    #[test]
+    fn validation_rejects_invalid_epic_status_and_priority() {
+        let project = TempDir::new().expect("temp dir");
+        fs::create_dir_all(project.path().join("backlog/items")).expect("items");
+        fs::create_dir_all(project.path().join("backlog/epics")).expect("epics");
+        fs::write(
+            project.path().join("backlog/epics/general.md"),
+            "---\nid: general\ntitle: General\npriority: urgent\nstatus: open\narea: general\n---\n",
+        )
+        .expect("epic");
+
+        let validation = validate_backlog_at_root(project.path(), true);
+
+        assert!(!validation.ok);
+        let errors = validation.errors.join("\n");
+        assert!(errors.contains("invalid epic status `open`; expected one of: active, archived"));
+        assert!(errors.contains("invalid epic priority `urgent`; expected one of: P0, P1, P2"));
     }
 }

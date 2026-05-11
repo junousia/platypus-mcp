@@ -122,6 +122,8 @@ make smoke-storage
 - `record_external_report_dispatch`: record the approved host/plugin provider
   dispatch result, including safe evidence and redacted metadata.
 - `create_backlog_item`: write one structured backlog item.
+- `create_epic`: write one structured backlog epic.
+- `list_epics`: list existing backlog epics and their metadata.
 - `validate_backlog`: validate backlog item and epic files.
 - `list_backlog`: list runnable backlog candidates.
 - `inspect_backlog_inventory`: inspect all backlog items with runnable,
@@ -148,6 +150,8 @@ Backlog schema quick reference:
   common recovery cases such as unknown epics, missing dependencies, duplicate
   IDs, invalid enum values, missing scaffold directories, and malformed
   external refs.
+- Use `list_epics` before assigning a non-default epic. Use `create_epic` to
+  add a missing grouping instead of hand-writing `backlog/epics/*.md`.
 
 Backlog item frontmatter may include provider-neutral `external_refs`. Use them
 to preserve where work came from or where results should be reported without

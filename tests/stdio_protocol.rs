@@ -28,6 +28,8 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
 
     assert!(tool_names.contains(&"inspect_status"));
     assert!(tool_names.contains(&"create_backlog_item"));
+    assert!(tool_names.contains(&"create_epic"));
+    assert!(tool_names.contains(&"list_epics"));
     assert!(tool_names.contains(&"doctor_snapshot"));
     assert!(tool_names.contains(&"init_project"));
     assert!(tool_names.contains(&"next_safe_action"));
@@ -83,6 +85,41 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"configure_agent_profile"));
     assert!(tool_names.contains(&"inspect_workflow_config"));
     assert!(tool_names.contains(&"send_worker_guidance"));
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_creates_and_lists_epics() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+    let initialized = call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "Epic Smoke" }),
+    )
+    .await?;
+    assert_stage_status("init_project", &initialized, "completed");
+
+    let created = call_tool_json(
+        &client,
+        "create_epic",
+        json!({
+            "id": "webapp",
+            "title": "Web Application",
+            "priority": "P0",
+            "description": "Web application work."
+        }),
+    )
+    .await?;
+    assert_stage_status("create_epic", &created, "completed");
+    assert_eq!(created["data"]["epic"]["id"], "webapp");
+
+    let listed = call_tool_json(&client, "list_epics", json!({})).await?;
+    assert_stage_status("list_epics", &listed, "completed");
+    assert_eq!(listed["data"]["returned"], 2);
+    assert_eq!(listed["data"]["epics"][1]["id"], "webapp");
 
     client.cancel().await?;
     Ok(())

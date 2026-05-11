@@ -4,6 +4,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 
 pub(super) const VALID_PRIORITIES: &[&str] = &["P0", "P1", "P2"];
 pub(super) const VALID_TYPES: &[&str] = &["foundation", "feature", "safety", "ux", "test", "docs"];
+pub(super) const VALID_EPIC_STATUSES: &[&str] = &["active", "archived"];
 pub(super) const REQUIRED_SECTIONS: &[&str] = &["Goal", "Implementation Contract", "Acceptance"];
 
 #[derive(Debug, Deserialize, Clone)]
@@ -28,6 +29,15 @@ pub(super) struct BacklogItemFrontmatter {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct EpicFrontmatter {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub priority: String,
+    pub area: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct EpicFrontmatterOut {
     pub id: String,
     pub title: String,
     pub status: String,

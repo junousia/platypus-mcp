@@ -146,6 +146,9 @@ Backlog schema quick reference:
 - Defaults: priority `P1`, type `feature`, epic `general`, worker `coder`.
 - `suggested_worker` is a Platypus worker profile name, not necessarily a
   host-specific subagent type.
+- Use `list_epics` before assigning a non-default epic. Use `create_epic` to
+  add a missing grouping; do not hand-write epic files unless a recovery step
+  explicitly asks for manual file edits.
 
 There is no manual `backlog/index.md`; hosts should compute queue state through
 `list_backlog`, `inspect_work_queue`, `inspect_status`, and `next_safe_action`.

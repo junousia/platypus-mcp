@@ -1,6 +1,7 @@
 mod closure;
 mod create;
 mod draft;
+mod epic;
 mod filesystem;
 mod parse;
 mod plan;
@@ -12,6 +13,7 @@ pub use create::create_backlog_item;
 pub use draft::{
     draft_backlog_items, draft_backlog_items_from_sample, draft_backlog_items_sampling_prompt,
 };
+pub use epic::{create_epic, list_epics};
 pub use plan::{
     draft_task_plan, draft_task_plan_from_sample, draft_task_plan_sampling_prompt,
     inspect_task_plan, list_task_plans, validate_task_plan, write_task_plan,
@@ -79,9 +81,9 @@ pub(crate) fn backlog_item_snapshot(
 mod tests {
     use super::*;
     use crate::models::{
-        ActionStatus, CreateBacklogItemParams, DraftBacklogItemsParams, PlannedTask,
-        TaskPlanDesign, TaskPlanFile, TaskPlanItemParams, TaskPlanQueryParams, TaskPlanRequirement,
-        WriteTaskPlanParams,
+        ActionStatus, CreateBacklogItemParams, CreateEpicParams, DraftBacklogItemsParams,
+        PlannedTask, RootParams, TaskPlanDesign, TaskPlanFile, TaskPlanItemParams,
+        TaskPlanQueryParams, TaskPlanRequirement, WriteTaskPlanParams,
     };
     use std::{fs, path::Path, process::Command};
     use tempfile::TempDir;
@@ -242,6 +244,153 @@ mod tests {
         assert_eq!(limited.total, 3);
         assert_eq!(limited.returned, 2);
         assert!(limited.truncated);
+    }
+
+    #[test]
+    fn creates_and_lists_epics() {
+        let temp = project_fixture();
+
+        let created = create_epic(
+            temp.path(),
+            CreateEpicParams {
+                root: Some(root_arg(temp.path())),
+                id: "webapp".to_string(),
+                title: "Web Application".to_string(),
+                status: None,
+                priority: Some("P0".to_string()),
+                area: None,
+                description: Some("Web application work.".to_string()),
+            },
+        );
+        assert!(matches!(created.status, ActionStatus::Completed));
+        let data = created.data.expect("created epic");
+        assert_eq!(data.epic.id, "webapp");
+        assert_eq!(data.epic.status, "active");
+        assert_eq!(data.epic.priority, "P0");
+        assert_eq!(data.epic.area, "webapp");
+        assert!(temp.path().join("backlog/epics/webapp.md").is_file());
+
+        let listed = list_epics(
+            temp.path(),
+            RootParams {
+                root: Some(root_arg(temp.path())),
+            },
+        );
+        assert!(matches!(listed.status, ActionStatus::Completed));
+        let listed = listed.data.expect("listed epics");
+        assert_eq!(listed.returned, 2);
+        assert_eq!(listed.epics[0].id, "general");
+        assert_eq!(listed.epics[1].id, "webapp");
+
+        let validation = validate_backlog(temp.path(), Some(root_arg(temp.path()).as_str()), true);
+        assert!(matches!(validation.status, ActionStatus::Completed));
+    }
+
+    #[test]
+    fn create_epic_rejects_invalid_values_with_recovery_guidance() {
+        let temp = project_fixture();
+
+        let invalid_id = create_epic(
+            temp.path(),
+            CreateEpicParams {
+                root: Some(root_arg(temp.path())),
+                id: "../webapp".to_string(),
+                title: "Web Application".to_string(),
+                status: None,
+                priority: None,
+                area: None,
+                description: None,
+            },
+        );
+        assert!(matches!(invalid_id.status, ActionStatus::Failed));
+        assert!(invalid_id
+            .next_action
+            .as_deref()
+            .unwrap_or("")
+            .contains("webapp"));
+        assert!(!temp.path().join("backlog/epics/../webapp.md").exists());
+
+        let duplicate = create_epic(
+            temp.path(),
+            CreateEpicParams {
+                root: Some(root_arg(temp.path())),
+                id: "general".to_string(),
+                title: "Duplicate".to_string(),
+                status: None,
+                priority: None,
+                area: None,
+                description: None,
+            },
+        );
+        assert!(matches!(duplicate.status, ActionStatus::Failed));
+        assert!(duplicate
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("backlog/epics/general.md"));
+
+        let invalid_status = create_epic(
+            temp.path(),
+            CreateEpicParams {
+                root: Some(root_arg(temp.path())),
+                id: "webapp".to_string(),
+                title: "Web Application".to_string(),
+                status: Some("open".to_string()),
+                priority: None,
+                area: None,
+                description: None,
+            },
+        );
+        assert!(invalid_status
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("active, archived"));
+
+        let invalid_priority = create_epic(
+            temp.path(),
+            CreateEpicParams {
+                root: Some(root_arg(temp.path())),
+                id: "webapp".to_string(),
+                title: "Web Application".to_string(),
+                status: None,
+                priority: Some("high".to_string()),
+                area: None,
+                description: None,
+            },
+        );
+        assert!(invalid_priority
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("P0, P1, P2"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_epic_rejects_preexisting_symlink_target() {
+        let temp = project_fixture();
+        let outside = TempDir::new().expect("outside temp dir");
+        let outside_target = outside.path().join("outside.md");
+        std::os::unix::fs::symlink(&outside_target, temp.path().join("backlog/epics/webapp.md"))
+            .expect("symlink");
+
+        let result = create_epic(
+            temp.path(),
+            CreateEpicParams {
+                root: Some(root_arg(temp.path())),
+                id: "webapp".to_string(),
+                title: "Web Application".to_string(),
+                status: None,
+                priority: None,
+                area: None,
+                description: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result.error.as_deref().unwrap_or("").contains("symlink"));
+        assert!(!outside_target.exists());
     }
 
     #[test]
@@ -605,7 +754,7 @@ mod tests {
             },
         );
         let path_shaped_next = path_shaped_epic.next_action.as_deref().unwrap_or("");
-        assert!(path_shaped_next.contains("existing epics: general"));
+        assert!(path_shaped_next.contains("list_epics: general"));
         assert!(!path_shaped_next.contains("backlog/epics/../../README.md"));
 
         let missing_dependency = create_backlog_item(

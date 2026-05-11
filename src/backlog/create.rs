@@ -298,12 +298,12 @@ fn unknown_epic_error(epic: &str, epic_ids: &BTreeSet<String>) -> String {
 fn unknown_epic_next_action(epic: &str, epic_ids: &BTreeSet<String>) -> String {
     if safe_epic_id(epic) {
         format!(
-            "Create `backlog/epics/{epic}.md`, or set epic to one of the existing epics: {}.",
+            "Call create_epic for `{epic}` (or create `backlog/epics/{epic}.md` manually), or set epic to one of the existing epics from list_epics: {}.",
             existing_epic_hint(epic_ids)
         )
     } else {
         format!(
-            "Set epic to one of the existing epics: {}, or choose a simple epic id containing only letters, digits, `_`, or `-` before creating a new epic file.",
+            "Set epic to one of the existing epics from list_epics: {}, or choose a simple epic id containing only letters, digits, `_`, or `-` before calling create_epic.",
             existing_epic_hint(epic_ids)
         )
     }

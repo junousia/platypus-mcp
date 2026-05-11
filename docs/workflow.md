@@ -112,6 +112,8 @@ When creating backlog items through tools, use the typed schema:
 - failed authoring calls include a specific `next_action`; follow it before
   retrying instead of falling back to manual markdown unless the recovery
   explicitly asks for a file edit
+- use `list_epics` before assigning a non-default epic, and `create_epic` when
+  a new grouping is needed
 
 Backlog items may include `external_refs` for intake and reporting surfaces
 such as GitHub, Linear, Jira, GitLab, support tickets, specs, or local design

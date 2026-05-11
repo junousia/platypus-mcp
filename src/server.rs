@@ -6,22 +6,23 @@ use crate::{
         ApprovalListData, ApprovalListParams, ApprovalRespondParams, ApprovalResponseData,
         ClaimNextTaskParams, ClassifyPlanningNeedsParams, ClassifyWorkflowFitParams,
         CompleteWorkerExecutionParams, ConfigureAgentProfileParams, CreateBacklogItemParams,
-        CreatedBacklogItemData, DispatchNextWorkData, DispatchReadyWorkData,
-        DispatchReadyWorkParams, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
-        DraftExternalBacklogItemsParams, DraftExternalReportParams, DraftTaskPlanParams,
-        EventsReplayData, EventsReplayParams, EvidenceListData, EvidenceRecordData,
-        ExternalBacklogDraftData, ExternalReportApprovalData, ExternalReportDispatchData,
-        ExternalReportDraftData, FindingDispositionData, FindingListData, FindingRecordData,
-        FindingValidationData, GenerateTaskBundleParams, GitHubIssueImportData,
-        ImportGitHubIssuesParams, InitProjectParams, InspectTaskEventsParams, InspectTaskParams,
-        InspectWorkQueueParams, InspectWorkerAssignmentParams, IntegrateWorkerResultParams,
-        LeaseListData, LeaseRecordData, LimitParams, ListEvidenceParams, ListFindingsParams,
-        ListLeasesParams, NextSafeActionData, NextSafeActionParams, PingData, PingParams,
-        PlanGoalWorkData, PlanGoalWorkParams, PlanningClassificationData,
-        PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData, ReconcileParams,
-        ReconciliationData, RecordEvidenceParams, RecordExternalReportDispatchParams,
-        RecordFindingParams, RecordVerificationEvidenceParams, RecordWorkerEventParams,
-        ReleaseLeaseParams, RenewLeaseParams, RequestExternalReportApprovalParams, RootParams,
+        CreateEpicParams, CreatedBacklogItemData, CreatedEpicData, DispatchNextWorkData,
+        DispatchReadyWorkData, DispatchReadyWorkParams, DoctorSnapshotData, DraftBacklogData,
+        DraftBacklogItemsParams, DraftExternalBacklogItemsParams, DraftExternalReportParams,
+        DraftTaskPlanParams, EventsReplayData, EventsReplayParams, EvidenceListData,
+        EvidenceRecordData, ExternalBacklogDraftData, ExternalReportApprovalData,
+        ExternalReportDispatchData, ExternalReportDraftData, FindingDispositionData,
+        FindingListData, FindingRecordData, FindingValidationData, GenerateTaskBundleParams,
+        GitHubIssueImportData, ImportGitHubIssuesParams, InitProjectParams,
+        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
+        InspectWorkerAssignmentParams, IntegrateWorkerResultParams, LeaseListData, LeaseRecordData,
+        LimitParams, ListEpicsData, ListEvidenceParams, ListFindingsParams, ListLeasesParams,
+        NextSafeActionData, NextSafeActionParams, PingData, PingParams, PlanGoalWorkData,
+        PlanGoalWorkParams, PlanningClassificationData, PrepareWorkerAssignmentParams,
+        ProjectScaffoldData, ProjectStatusData, ReconcileParams, ReconciliationData,
+        RecordEvidenceParams, RecordExternalReportDispatchParams, RecordFindingParams,
+        RecordVerificationEvidenceParams, RecordWorkerEventParams, ReleaseLeaseParams,
+        RenewLeaseParams, RequestExternalReportApprovalParams, RootParams,
         RunTaskVerificationParams, RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams,
         StartGoalWorkData, StartGoalWorkParams, StartWorkerExecutionParams,
         StorageCapabilityProbeData, StorageCapabilityProbeParams, TaskBundleData,
@@ -690,6 +691,44 @@ impl PlatypusMcp {
         Parameters(params): Parameters<CreateBacklogItemParams>,
     ) -> Json<ActionResult<CreatedBacklogItemData>> {
         Json(backlog::create_backlog_item(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Create Epic",
+        description = "Create one structured backlog epic file.",
+        annotations(
+            title = "Create Epic",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn create_epic(
+        &self,
+        Parameters(params): Parameters<CreateEpicParams>,
+    ) -> Json<ActionResult<CreatedEpicData>> {
+        Json(backlog::create_epic(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "List Epics",
+        description = "List structured backlog epics.",
+        annotations(
+            title = "List Epics",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn list_epics(
+        &self,
+        Parameters(params): Parameters<RootParams>,
+    ) -> Json<ActionResult<ListEpicsData>> {
+        Json(backlog::list_epics(&self.default_root, params))
     }
 
     #[tool(
@@ -1740,6 +1779,8 @@ mod tests {
             "request_external_report_approval",
             "record_external_report_dispatch",
             "create_backlog_item",
+            "create_epic",
+            "list_epics",
             "draft_task_plan",
             "inspect_task_plan",
             "list_task_plans",
@@ -1800,6 +1841,7 @@ mod tests {
         let mutating_tools = BTreeSet::from([
             "init_project",
             "create_backlog_item",
+            "create_epic",
             "write_task_plan",
             "import_github_issues",
             "request_external_report_approval",
@@ -1967,6 +2009,16 @@ mod tests {
             &["foundation", "feature", "safety", "ux", "test", "docs"],
         );
         assert_property_enum_values(
+            &input_schema(&tools, "create_epic"),
+            "status",
+            &["active", "archived"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "create_epic"),
+            "priority",
+            &["P0", "P1", "P2"],
+        );
+        assert_property_enum_values(
             &input_schema(&tools, "start_goal_work"),
             "mode",
             &["auto", "direct_scaffold", "hybrid", "platypus_workflow"],
@@ -2068,6 +2120,10 @@ mod tests {
         assert_property_pattern(&create_backlog_item, "id", r"^[A-Z]+-[0-9]{3}$");
         assert_property_pattern(&create_backlog_item, "id_prefix", r"^[A-Z]+$");
         assert_array_item_pattern(&create_backlog_item, "depends_on", r"^[A-Z]+-[0-9]{3}$");
+
+        let create_epic = input_schema(&tools, "create_epic");
+        assert_property_has_example(&create_epic, "id");
+        assert_property_pattern(&create_epic, "id", r"^[A-Za-z0-9_-]+$");
 
         let start_goal_work = input_schema(&tools, "start_goal_work");
         assert_property_has_example(&start_goal_work, "goal");
