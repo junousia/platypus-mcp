@@ -211,33 +211,37 @@ created without an approved planning gate.
      worker will execute it externally.
    - `auto` is the default and behaves like `profiled_worker` unless
      `manual_handoff` is explicitly requested.
-6. For normal execution, call `dispatch_ready_work`; it dispatches one or more
-   runnable items and prepares assignments, worktrees, and bundles. Pass
-   `execution_mode=manual_handoff` when no configured profile should be used.
-7. For low-level debugging only, call `dispatch_next_work` and then immediately
+6. For normal execution, call `prepare_work`; it either returns direct-edit
+   guidance or prepares an assignment, worktree, and bundle for host-run worker
+   execution. The MCP server does not launch the worker.
+7. For lower-level batch dispatch, call `dispatch_ready_work`; it dispatches
+   one or more runnable items and prepares assignments, worktrees, and bundles.
+   Pass `execution_mode=manual_handoff` when no configured profile should be used.
+8. For low-level debugging only, call `dispatch_next_work` and then immediately
    `prepare_worker_handoff`; do not run a worker from a bare task id.
-8. Give the assignment bundle and worktree path to the worker harness.
-9. Mark the worker active with `start_worker_task` when you need an explicit
+9. Give the assignment bundle, completion contract, and worktree path to the worker harness.
+10. Mark the worker active with `start_worker_task` when you need an explicit
    running transition.
 
 The worker should operate in the assigned worktree, not in the manager
 workspace. Manual handoff is still lifecycle-tracked: after the host or
 external worker edits the worktree, call `start_worker_task` if a running
-transition is needed, then `complete_worker_task`, record verification evidence,
-and integrate with `integrate_worker_result`.
+transition is needed, then `finish_work`. Follow its `host_action` to verify,
+record or resolve findings, integrate, recover, or continue to the next item.
 
 ## Worker Progress And Result
 
 Use `record_worker_progress` for safe progress summaries. Use
 `inspect_worktree_changes` to review bounded worktree changes. Finish with
-`complete_worker_task`, including:
+`finish_work`, including:
 
 - terminal status
 - summary
 - changed files
 - verification status
+- findings or `findings_reviewed=true`
 
-For same-session host-driven edits, `complete_worker_task` can complete a
+For same-session host-driven edits, `finish_work` can complete a
 prepared assignment directly; it auto-starts prepared assignments by default.
 Set `auto_start_if_prepared=false` when strict lifecycle enforcement is needed.
 

@@ -52,6 +52,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"list_task_plans"));
     assert!(tool_names.contains(&"validate_task_plan"));
     assert!(tool_names.contains(&"write_task_plan"));
+    assert!(tool_names.contains(&"prepare_work"));
     assert!(tool_names.contains(&"inspect_task"));
     assert!(tool_names.contains(&"claim_next_task"));
     assert!(tool_names.contains(&"worktree_create"));
@@ -70,6 +71,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"record_worker_progress"));
     assert!(tool_names.contains(&"complete_worker_execution"));
     assert!(tool_names.contains(&"complete_worker_task"));
+    assert!(tool_names.contains(&"finish_work"));
     assert!(tool_names.contains(&"run_task_verification"));
     assert!(tool_names.contains(&"runner_prepare_next"));
     assert!(tool_names.contains(&"approval_list"));
@@ -2546,6 +2548,139 @@ async fn stdio_server_runs_full_lifecycle_smoke_with_fake_worker() -> anyhow::Re
         call_tool_json(&client, "worktree_cleanup", json!({ "task_id": task_id })).await?;
     assert_stage_status("worktree_cleanup", &cleaned, "completed");
     assert!(!worktree_path.exists());
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_prepares_and_finishes_host_run_work() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let initialized = call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "Host Lifecycle Smoke" }),
+    )
+    .await?;
+    assert_stage_status("init_project", &initialized, "completed");
+
+    git(project.path(), &["init"]);
+    git(project.path(), &["config", "user.name", "Platypus Test"]);
+    git(
+        project.path(),
+        &["config", "user.email", "platypus@example.invalid"],
+    );
+    fs::create_dir_all(project.path().join("src"))?;
+    fs::write(
+        project.path().join("src/lib.rs"),
+        "pub fn answer() -> u8 { 0 }\n",
+    )?;
+
+    let created = call_tool_json(
+        &client,
+        "create_backlog_item",
+        json!({
+            "id": "PROJ-001",
+            "title": "Implement workflow feature",
+            "priority": "P1",
+            "type": "feature",
+            "area": "workflow",
+            "epic": "general",
+            "suggested_worker": "coder",
+            "owned_surfaces": ["src/lib.rs"],
+            "goal": "Implement one small workflow feature.",
+            "implementation_contract": "Only edit src/lib.rs in the assignment worktree.",
+            "acceptance": ["src/lib.rs exposes the new answer."]
+        }),
+    )
+    .await?;
+    assert_stage_status("create_backlog_item", &created, "completed");
+
+    git(project.path(), &["add", "--all"]);
+    git(
+        project.path(),
+        &["commit", "-m", "Initialize host lifecycle project"],
+    );
+
+    let prepared = call_tool_json(
+        &client,
+        "prepare_work",
+        json!({
+            "item_id": "PROJ-001",
+            "worker": "coder",
+            "claimant": "stdio-host",
+            "require_task_plan": false
+        }),
+    )
+    .await?;
+    assert_stage_status("prepare_work", &prepared, "completed");
+    assert_eq!(
+        prepared["data"]["host_actions"][0]["kind"],
+        "run_in_worktree"
+    );
+    let host_action = &prepared["data"]["host_actions"][0];
+    let assignment_id = host_action["assignment_id"]
+        .as_str()
+        .expect("assignment id")
+        .to_string();
+    let task_id = host_action["task_id"]
+        .as_str()
+        .expect("task id")
+        .to_string();
+    let worktree_path = PathBuf::from(
+        host_action["worktree_path"]
+            .as_str()
+            .expect("worktree path"),
+    );
+
+    fs::write(
+        worktree_path.join("src/lib.rs"),
+        "pub fn answer() -> u8 { 42 }\n",
+    )?;
+
+    let finished = call_tool_json(
+        &client,
+        "finish_work",
+        json!({
+            "assignment_id": assignment_id,
+            "status": "completed",
+            "summary": "Implemented the workflow feature.",
+            "verification_status": "passed",
+            "verification_summary": "Reviewed src/lib.rs after worker edit.",
+            "verification_refs": ["manual:stdio-smoke"],
+            "findings_reviewed": true,
+            "integrate_if_ready": false
+        }),
+    )
+    .await?;
+    assert_stage_status("finish_work", &finished, "completed");
+    assert_eq!(finished["data"]["host_action"]["kind"], "integrate_result");
+    assert_eq!(
+        finished["data"]["assignment"]["changed_files"][0],
+        "src/lib.rs"
+    );
+    assert_eq!(
+        finished["data"]["evidence"]
+            .as_array()
+            .expect("evidence")
+            .len(),
+        1
+    );
+
+    let evidence = call_tool_json(
+        &client,
+        "list_evidence",
+        json!({
+            "source_item_id": "PROJ-001",
+            "source_task_id": task_id,
+            "kind": "verification"
+        }),
+    )
+    .await?;
+    assert_stage_status("list_evidence", &evidence, "completed");
+    assert_eq!(evidence["data"]["returned"], 1);
 
     client.cancel().await?;
     Ok(())

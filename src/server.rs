@@ -1,6 +1,6 @@
 use crate::{
     approvals, assignments, backlog, bundle, config, dispatch, events, evidence, findings, goal,
-    guidance, host_guidance, integrations, leases,
+    guidance, host_guidance, host_lifecycle, integrations, leases,
     models::{
         AcquireLeaseParams, ActionResult, AgentProfileData, AgentProfilesData, AgentProfilesParams,
         ApprovalListData, ApprovalListParams, ApprovalRespondParams, ApprovalResponseData,
@@ -13,28 +13,28 @@ use crate::{
         EventsReplayData, EventsReplayParams, EvidenceListData, EvidenceRecordData,
         ExternalBacklogDraftData, ExternalReportApprovalData, ExternalReportDispatchData,
         ExternalReportDraftData, FindingDispositionData, FindingListData, FindingRecordData,
-        FindingValidationData, GenerateTaskBundleParams, GitHubIssueImportData,
-        ImportGitHubIssuesParams, InitProjectParams, InspectDependencyGraphParams,
-        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
-        InspectWorkerAssignmentParams, IntegrateWorkerResultParams, LeaseListData, LeaseRecordData,
-        LimitParams, ListEpicsData, ListEvidenceParams, ListFindingsParams, ListLeasesParams,
-        NextSafeActionData, NextSafeActionParams, PingData, PingParams, PlanGoalWorkData,
-        PlanGoalWorkParams, PlanningClassificationData, PrepareWorkerAssignmentParams,
-        ProjectScaffoldData, ProjectStatusData, ReconcileParams, ReconciliationData,
-        RecordEvidenceParams, RecordExternalReportDispatchParams, RecordFindingParams,
-        RecordVerificationEvidenceParams, RecordWorkerEventParams, ReleaseLeaseParams,
-        RenewLeaseParams, RequestExternalReportApprovalParams, RequestPlanningApprovalParams,
-        RootParams, RunTaskVerificationParams, RunnerPrepareParams, RunnerReportData,
-        SendWorkerGuidanceParams, StartGoalWorkData, StartGoalWorkParams,
-        StartWorkerExecutionParams, StorageCapabilityProbeData, StorageCapabilityProbeParams,
-        TaskBundleData, TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData,
-        TaskPlanQueryParams, TaskPlanValidationData, TaskPlanWriteData, TaskRecordData,
-        TaskVerificationRunData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams, WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData,
-        WorkerGuidanceData, WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams,
-        WorkflowFitData, WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams,
-        WorktreeData, WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams,
-        WriteTaskPlanParams,
+        FindingValidationData, FinishWorkData, FinishWorkParams, GenerateTaskBundleParams,
+        GitHubIssueImportData, ImportGitHubIssuesParams, InitProjectParams,
+        InspectDependencyGraphParams, InspectTaskEventsParams, InspectTaskParams,
+        InspectWorkQueueParams, InspectWorkerAssignmentParams, IntegrateWorkerResultParams,
+        LeaseListData, LeaseRecordData, LimitParams, ListEpicsData, ListEvidenceParams,
+        ListFindingsParams, ListLeasesParams, NextSafeActionData, NextSafeActionParams, PingData,
+        PingParams, PlanGoalWorkData, PlanGoalWorkParams, PlanningClassificationData,
+        PrepareWorkData, PrepareWorkParams, PrepareWorkerAssignmentParams, ProjectScaffoldData,
+        ProjectStatusData, ReconcileParams, ReconciliationData, RecordEvidenceParams,
+        RecordExternalReportDispatchParams, RecordFindingParams, RecordVerificationEvidenceParams,
+        RecordWorkerEventParams, ReleaseLeaseParams, RenewLeaseParams,
+        RequestExternalReportApprovalParams, RequestPlanningApprovalParams, RootParams,
+        RunTaskVerificationParams, RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams,
+        StartGoalWorkData, StartGoalWorkParams, StartWorkerExecutionParams,
+        StorageCapabilityProbeData, StorageCapabilityProbeParams, TaskBundleData,
+        TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams,
+        TaskPlanValidationData, TaskPlanWriteData, TaskRecordData, TaskVerificationRunData,
+        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
+        WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData, WorkerGuidanceData,
+        WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams, WorkflowFitData,
+        WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams, WorktreeData,
+        WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
     },
     project, reconcile, runner, storage, tasks, workspace,
 };
@@ -958,6 +958,25 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Prepare Work",
+        description = "Inspect the executable queue and prepare the next host-run action. Direct work returns direct-edit guidance; non-direct work prepares a manual handoff worktree without launching a worker.",
+        annotations(
+            title = "Prepare Work",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn prepare_work(
+        &self,
+        Parameters(params): Parameters<PrepareWorkParams>,
+    ) -> Json<ActionResult<PrepareWorkData>> {
+        Json(host_lifecycle::prepare_work(&self.default_root, params))
+    }
+
+    #[tool(
         title = "Inspect Task",
         description = "Inspect one persisted task record.",
         annotations(
@@ -1322,6 +1341,25 @@ impl PlatypusMcp {
         let mut result = assignments::complete_worker_execution(&self.default_root, params);
         result.action = "complete_worker_task".to_string();
         Json(result)
+    }
+
+    #[tool(
+        title = "Finish Work",
+        description = "Complete a host-run worker assignment and return the next lifecycle action: verify, record findings, integrate, recover, or finish.",
+        annotations(
+            title = "Finish Work",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn finish_work(
+        &self,
+        Parameters(params): Parameters<FinishWorkParams>,
+    ) -> Json<ActionResult<FinishWorkData>> {
+        Json(host_lifecycle::finish_work(&self.default_root, params))
     }
 
     #[tool(
@@ -1856,6 +1894,7 @@ mod tests {
             "write_task_plan",
             "dispatch_next_work",
             "dispatch_ready_work",
+            "prepare_work",
             "inspect_task",
             "claim_next_task",
             "worktree_create",
@@ -1874,6 +1913,7 @@ mod tests {
             "record_worker_progress",
             "complete_worker_execution",
             "complete_worker_task",
+            "finish_work",
             "run_task_verification",
             "runner_prepare_next",
             "inspect_task_events",
@@ -1919,6 +1959,7 @@ mod tests {
             "start_goal_work",
             "dispatch_next_work",
             "dispatch_ready_work",
+            "prepare_work",
             "claim_next_task",
             "worktree_create",
             "worktree_cleanup",
@@ -1931,6 +1972,7 @@ mod tests {
             "record_worker_progress",
             "complete_worker_execution",
             "complete_worker_task",
+            "finish_work",
             "run_task_verification",
             "runner_prepare_next",
             "approval_respond",
@@ -2003,6 +2045,7 @@ mod tests {
         assert_array_items_are_objects(&tools, "import_github_issues", "issues");
         assert_array_items_are_objects(&tools, "create_backlog_item", "external_refs");
         assert_array_items_are_objects(&tools, "create_backlog_items", "items");
+        assert_array_items_are_objects(&tools, "finish_work", "findings");
         assert_property_is_object(&tools, "request_external_report_approval", "draft");
         assert_property_is_object(&tools, "write_task_plan", "plan");
     }
@@ -2170,6 +2213,32 @@ mod tests {
             1,
             10,
         );
+        assert_property_enum_values(
+            &input_schema(&tools, "prepare_work"),
+            "execution_mode",
+            &["auto", "profiled_worker", "manual_handoff"],
+        );
+        assert_property_numeric_bounds(&input_schema(&tools, "prepare_work"), "max_tasks", 1, 10);
+        assert_property_enum_values(
+            &input_schema(&tools, "finish_work"),
+            "status",
+            &["completed", "failed", "cancelled"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "finish_work"),
+            "verification_status",
+            &["passed", "failed", "skipped", "not_run"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "finish_work"),
+            "integration_strategy",
+            &[
+                "merge_commit",
+                "fast_forward",
+                "squash",
+                "apply_changed_files",
+            ],
+        );
         assert_property_numeric_bounds(&input_schema(&tools, "approval_list"), "limit", 1, 200);
         assert_property_numeric_bounds(
             &input_schema(&tools, "acquire_lease"),
@@ -2233,6 +2302,16 @@ mod tests {
         let inspect_task_events = input_schema(&tools, "inspect_task_events");
         assert_property_has_example(&inspect_task_events, "task_id");
         assert_property_numeric_bounds(&inspect_task_events, "limit", 1, 200);
+
+        let prepare_work = input_schema(&tools, "prepare_work");
+        assert_property_has_example(&prepare_work, "item_id");
+        assert_property_has_example(&prepare_work, "worker");
+        assert_property_has_example(&prepare_work, "verification_command");
+
+        let finish_work = input_schema(&tools, "finish_work");
+        assert_property_has_example(&finish_work, "assignment_id");
+        assert_property_has_example(&finish_work, "task_id");
+        assert_property_has_example(&finish_work, "summary");
     }
 
     fn assert_array_items_are_objects(

@@ -13,8 +13,10 @@ profiles, workflow integration configuration, and reconciliation.
 
 Use `inspect_work_queue` to choose executable backlog work and
 `classify_planning_needs` to explain whether an item needs direct, standard, or
-full planning. Use `next_safe_action` as the host-facing guide for the next safe
-lifecycle tool call.
+full planning. Use `prepare_work` to get either direct-edit guidance or a
+host-run worktree handoff, and `finish_work` to connect worker completion,
+verification, findings, integration guidance, and reconciliation. Use
+`next_safe_action` as the host-facing guide when existing state is unclear.
 The preferred workflow is documented in [docs/workflow.md](docs/workflow.md),
 client setup is documented in [docs/install.md](docs/install.md), and the full
 tool surface is documented in [docs/tools.md](docs/tools.md).

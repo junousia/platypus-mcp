@@ -127,6 +127,7 @@ pub fn generate_task_bundle(
         owned_surfaces,
         verification_command,
         execution_mode: crate::execution_mode::default_assignment_execution_mode(),
+        completion_contract: crate::models::default_worker_completion_contract(),
         brief,
     };
 
