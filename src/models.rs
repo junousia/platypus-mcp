@@ -208,6 +208,18 @@ pub enum VerificationStatusSchema {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum HostActionKindSchema {
+    DirectEdit,
+    RunInWorktree,
+    VerifyOrRecordRisk,
+    ResolveFindings,
+    IntegrateResult,
+    InspectOrRecover,
+    Done,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum EvidenceKindSchema {
     Commit,
     Verification,
@@ -275,6 +287,42 @@ pub struct DispatchReadyWorkParams {
     pub dry_run: Option<bool>,
     #[serde(default)]
     /// Verification command to run or record for this item.
+    pub verification_command: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PrepareWorkParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Restrict preparation to this backlog item id instead of selecting from
+    /// the global runnable queue.
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
+    pub item_id: Option<String>,
+    /// Maximum number of tasks to prepare for host-run execution.
+    #[schemars(range(min = 1, max = 10))]
+    pub max_tasks: Option<usize>,
+    /// Worker name associated with this item.
+    #[schemars(example = example_worker())]
+    pub worker: Option<String>,
+    /// Name recorded as the task claimant.
+    pub claimant: Option<String>,
+    /// Execution mode to prepare. Omit this for manual_handoff, which prepares
+    /// a worktree for the MCP host or a human-managed worker without requiring
+    /// a configured worker profile.
+    #[schemars(with = "Option<ExecutionModeSchema>")]
+    pub execution_mode: Option<String>,
+    /// Whether dispatch readiness should require task-plan artifacts for
+    /// non-direct work before preparing a worktree.
+    pub require_task_plan: Option<bool>,
+    /// Whether dispatch readiness should require approved planning for
+    /// non-direct work before preparing a worktree.
+    pub require_planning_approval: Option<bool>,
+    /// Whether preparation should auto-commit tracked backlog and task-plan
+    /// artifacts when those are the only manager workspace changes.
+    pub auto_commit_artifacts: Option<bool>,
+    #[serde(default)]
+    /// Verification command to run or record for this item.
+    #[schemars(example = example_verification_command())]
     pub verification_command: Vec<String>,
 }
 
@@ -1223,6 +1271,81 @@ pub struct CompleteWorkerExecutionParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
+pub struct FinishWorkFindingInput {
+    /// Human-readable title or short label.
+    #[schemars(example = "Worker found missing verification coverage")]
+    pub title: String,
+    /// Human-readable summary of the finding and why it matters.
+    #[schemars(example = example_summary())]
+    pub summary: String,
+    /// Severity level for this follow-up finding.
+    #[schemars(with = "Option<FindingSeveritySchema>")]
+    pub severity: Option<String>,
+    /// Whether this finding must be resolved before the work can be considered done.
+    pub required: Option<bool>,
+    /// Owner name or repository owner, depending on context.
+    pub owner: Option<String>,
+    #[serde(default)]
+    /// References for evidence.
+    pub evidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FinishWorkParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Worker assignment identifier.
+    #[schemars(example = example_assignment_id())]
+    pub assignment_id: Option<String>,
+    /// Task identifier.
+    #[schemars(example = example_task_id())]
+    pub task_id: Option<String>,
+    /// Lifecycle or result status for this worker result. Omit for completed.
+    #[schemars(with = "Option<WorkerTerminalStatusSchema>")]
+    pub status: Option<String>,
+    /// Human-readable summary of the worker result.
+    #[schemars(example = example_summary())]
+    pub summary: String,
+    #[serde(default)]
+    /// Files changed by the worker, relative to the task worktree. Omit to let
+    /// Platypus infer the list from the recorded worktree diff.
+    pub changed_files: Vec<String>,
+    /// Verification status for the worker result.
+    #[schemars(with = "Option<VerificationStatusSchema>")]
+    pub verification_status: Option<String>,
+    /// Summary of verification that should be recorded as evidence when the
+    /// worker reports verification passed.
+    pub verification_summary: Option<String>,
+    #[serde(default)]
+    /// References such as commands, files, commits, URLs, or evidence IDs.
+    pub verification_refs: Vec<String>,
+    #[serde(default)]
+    /// Findings or follow-up work discovered while implementing this task.
+    pub findings: Vec<FinishWorkFindingInput>,
+    /// Set true when the worker explicitly checked for follow-up findings and
+    /// found none. If false or omitted, Platypus will recommend recording or
+    /// confirming findings before final integration.
+    pub findings_reviewed: Option<bool>,
+    /// Whether completion may auto-start a prepared assignment before marking
+    /// it terminal. Defaults to true so same-session MCP hosts can finish a
+    /// prepared task without a separate start_worker_task call.
+    pub auto_start_if_prepared: Option<bool>,
+    /// Whether to integrate the completed task immediately when verification
+    /// and finding gates permit it.
+    pub integrate_if_ready: Option<bool>,
+    /// Permit integration without separately recorded verification evidence.
+    ///
+    /// This is explicit so low-risk work can move without weakening strict project policy.
+    pub allow_unverified: Option<bool>,
+    /// Override workflow.integration.merge_style for this integration.
+    #[schemars(with = "Option<IntegrationStrategySchema>")]
+    pub integration_strategy: Option<String>,
+    /// Remove the task worktree after successful integration when it is clean.
+    pub cleanup_after: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunTaskVerificationParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
@@ -1597,6 +1720,70 @@ impl<T: Serialize + JsonSchema> ActionResult<T> {
             error: Some(error.into()),
         }
     }
+}
+
+#[derive(Debug, Serialize, Clone, JsonSchema)]
+pub struct HostAction {
+    /// Host action category that describes what the MCP client or worker should
+    /// do next.
+    #[schemars(with = "HostActionKindSchema")]
+    pub kind: String,
+    /// Human-readable summary of the recommended host action.
+    pub summary: String,
+    /// Step-by-step instructions for the MCP host, worker, or human operator.
+    pub instructions: Vec<String>,
+    /// Task identifier when the action relates to a task.
+    #[schemars(example = example_task_id())]
+    pub task_id: Option<String>,
+    /// Worker assignment identifier when the action relates to an assignment.
+    #[schemars(example = example_assignment_id())]
+    pub assignment_id: Option<String>,
+    /// Worker name associated with this action.
+    pub worker: Option<String>,
+    /// Filesystem path to the task worktree or target workspace.
+    pub worktree_path: Option<String>,
+    /// Generated task bundle for this action, when a worker handoff exists.
+    pub bundle: Option<TaskBundle>,
+    /// Recommended Platypus MCP tools to call after this action.
+    pub next_tools: Vec<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PrepareWorkData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Summary of the queue or dispatch state inspected by this operation.
+    pub queue_summary: String,
+    /// Number of queue items ready to dispatch before preparation.
+    pub ready_count: usize,
+    /// Number of queue items blocked before dispatch.
+    pub blocked_count: usize,
+    /// High-level actions for the MCP host or human operator.
+    pub host_actions: Vec<HostAction>,
+    /// Dispatch result when a worktree handoff was prepared.
+    pub dispatch: Option<DispatchReadyWorkData>,
+    /// Queue inspection result when no dispatch was performed.
+    pub queue: Option<WorkQueueData>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FinishWorkData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Worker assignment returned or updated by this operation.
+    pub assignment: Option<WorkerAssignment>,
+    /// Bounded worktree diff inspected while finishing.
+    pub worktree_changes: Option<WorktreeDiffData>,
+    /// Evidence records returned or created by this operation.
+    pub evidence: Vec<EvidenceRecord>,
+    /// Finding records returned or created by this operation.
+    pub findings: Vec<FindingRecord>,
+    /// Integration result when finish_work integrated the task.
+    pub integration: Option<WorkerResultIntegrationData>,
+    /// Reconciliation result after integration.
+    pub reconciliation: Option<ReconciliationData>,
+    /// High-level action for the MCP host or human operator.
+    pub host_action: HostAction,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2738,6 +2925,39 @@ pub struct TaskBundleData {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
+pub struct WorkerCompletionContract {
+    /// Human-readable summary of how the worker should report completion.
+    pub summary: String,
+    /// Required fields or concepts the worker must include in its final result.
+    pub required_fields: Vec<String>,
+    /// Rule for reporting changed files relative to the assignment worktree.
+    pub changed_files_rule: String,
+    /// Rule for reporting verification outcome and evidence.
+    pub verification_rule: String,
+    /// Rule for reporting follow-up findings or explicitly confirming none.
+    pub findings_rule: String,
+    /// Rule for relating the result back to task acceptance criteria.
+    pub acceptance_rule: String,
+}
+
+pub fn default_worker_completion_contract() -> WorkerCompletionContract {
+    WorkerCompletionContract {
+        summary: "Finish through `finish_work` or `complete_worker_task`; include summary, changed files, verification status, and findings disposition.".to_string(),
+        required_fields: vec![
+            "status".to_string(),
+            "summary".to_string(),
+            "changed_files".to_string(),
+            "verification_status".to_string(),
+            "findings or findings_reviewed=true".to_string(),
+        ],
+        changed_files_rule: "Report paths relative to the assignment worktree. Omit changed_files only when the host will infer them from inspect_worktree_changes.".to_string(),
+        verification_rule: "Report passed, failed, skipped, or not_run. Include verification_summary and verification_refs when a check passed or was deliberately skipped.".to_string(),
+        findings_rule: "Record limitations, follow-up work, and impediments as findings. Set findings_reviewed=true only after checking that no follow-up finding is needed.".to_string(),
+        acceptance_rule: "Summarize how the result satisfies each acceptance criterion, or record a required finding when it does not.".to_string(),
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
 pub struct TaskBundle {
     /// Task identifier.
     pub task_id: String,
@@ -2769,6 +2989,9 @@ pub struct TaskBundle {
     #[serde(default = "crate::execution_mode::default_assignment_execution_mode")]
     #[schemars(with = "ExecutionModeSchema")]
     pub execution_mode: String,
+    /// Worker completion contract describing how to return result data safely.
+    #[serde(default = "default_worker_completion_contract")]
+    pub completion_contract: WorkerCompletionContract,
     /// Human-readable worker brief generated from the task and backlog item.
     pub brief: String,
 }

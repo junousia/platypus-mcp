@@ -315,10 +315,11 @@ file edits or informal task tracking.
 5. For standard or full work, create and validate `backlog/plans/<ITEM>.yaml`
    with `write_task_plan` and `validate_task_plan`; use `draft_task_plan` only
    when MCP sampling is available.
-6. Dispatch through `dispatch_next_work` and prepare worker context with
-   `prepare_worker_handoff`.
-7. Implement inside the assigned worktree, record progress and evidence, then
-   integrate through Platypus.
+6. Prepare execution with `prepare_work`. Direct items may be handled in the
+   manager workspace; worker items return an assignment bundle and worktree.
+7. Implement inside the assigned worktree, record progress when useful, and
+   finish with `finish_work` so verification, findings, and integration
+   guidance stay connected.
 
 ## Tool Preload
 
@@ -336,10 +337,10 @@ planning group at session start:
 Before dispatch, handoff, verification, or integration work, load the execution
 group:
 
-`inspect_work_queue`, `dispatch_ready_work`, `generate_task_bundle`,
+`inspect_work_queue`, `prepare_work`, `dispatch_ready_work`, `generate_task_bundle`,
 `inspect_task_events`, `events_replay`, `worktree_status`,
 `inspect_worktree_changes`, `send_worker_guidance`, `start_worker_task`,
-`record_worker_progress`, `complete_worker_task`, `run_task_verification`,
+`record_worker_progress`, `complete_worker_task`, `finish_work`, `run_task_verification`,
 `record_verification_evidence`, `record_finding`, `validate_findings`,
 `integrate_worker_result`, `worktree_cleanup`, `reconcile_project`.
 
@@ -424,7 +425,9 @@ mod tests {
         assert!(agents.contains("planning group"));
         assert!(agents.contains("execution"));
         assert!(agents.contains("request_planning_approval"));
+        assert!(agents.contains("prepare_work"));
         assert!(agents.contains("dispatch_ready_work"));
+        assert!(agents.contains("finish_work"));
         let claude = fs::read_to_string(temp.path().join("CLAUDE.md")).expect("claude");
         assert!(claude.contains("spec-driven development"));
         assert!(claude.contains("next_safe_action"));
@@ -433,7 +436,9 @@ mod tests {
         assert!(claude.contains("planning group"));
         assert!(claude.contains("execution"));
         assert!(claude.contains("request_planning_approval"));
+        assert!(claude.contains("prepare_work"));
         assert!(claude.contains("dispatch_ready_work"));
+        assert!(claude.contains("finish_work"));
         assert_eq!(
             agents.replace("Agent Instructions", "Shared Instructions"),
             claude.replace("Claude Instructions", "Shared Instructions")

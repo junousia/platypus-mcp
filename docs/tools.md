@@ -57,14 +57,13 @@ schemas, call the same tools normally when they are needed.
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
    Use `draft_task_plan` only when host sampling is available.
 4. Inspect the executable queue: `inspect_work_queue`.
-5. Dispatch work: prefer `dispatch_ready_work` for one or more ready items.
-   Pass `execution_mode=manual_handoff` when the host will run the returned
-   worktree itself. Use `dispatch_next_work` and `prepare_worker_handoff` only
-   for precise single-step control.
+5. Prepare work: prefer `prepare_work`. It returns `direct_edit` guidance for
+   lightweight manager-workspace work, or a `run_in_worktree` host action with
+   an assignment bundle for host-run worker execution.
 6. Run worker externally: pass the generated bundle/worktree to Codex, Claude,
    or another harness.
 7. Record worker activity: `start_worker_task`, `record_worker_progress`,
-   `complete_worker_task`, `run_task_verification`.
+   `finish_work`, `run_task_verification`.
 8. Inspect and verify: `inspect_worktree_changes`,
    `record_verification_evidence`, `record_finding`, `validate_findings`.
 9. Integrate and clean up: `integrate_worker_result`, `reconcile_project`,
@@ -266,7 +265,13 @@ trailers.
   `active_count` and `active_item_ids`.
 - `classify_planning_needs`: classify runnable items as `direct`, `standard`,
   or `full` planning mode with structured reasons.
-- `dispatch_ready_work`: preferred host flow for executable backlog work. It
+- `prepare_work`: preferred high-level host flow for executable backlog work.
+  It inspects the queue, returns direct-edit guidance for direct items, and
+  prepares one safe manual-handoff assignment for standard/full worker work.
+  The MCP server records state and creates worktrees; it does not launch Codex,
+  Claude, or any other worker process.
+- `dispatch_ready_work`: lower-level batch dispatch for executable backlog
+  work. It
   checks Git readiness, dispatches up to `max_tasks` runnable independent
   items, skips already-active items, and prepares worker assignments,
   worktrees, and bundles in one call.
@@ -312,6 +317,10 @@ trailers.
   flows, completion can auto-start a prepared assignment by default. Set
   `auto_start_if_prepared=false` only when strict running-only completion is
   required.
+- `finish_work`: preferred high-level completion flow. It can infer changed
+  files from the worktree diff, record verification evidence, record findings,
+  optionally integrate when gates are satisfied, and return a structured
+  `host_action` for the next step.
 - `run_task_verification`: execute the assignment verification command in the
   task worktree and persist a verification run event/evidence record.
 - `send_worker_guidance`: persist steering messages for active tasks.

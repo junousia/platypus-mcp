@@ -43,16 +43,17 @@ model turns, and external worker execution.
    `list_task_plans`. Use `draft_task_plan` only when MCP sampling is
    available; otherwise the host model should write the plan directly.
 6. Ask `next_safe_action` before advancing lifecycle state.
-7. Dispatch normal worker work through `dispatch_ready_work`; it prepares
-   assignments, worktrees, and bundles in the same step. Use
-   `execution_mode=profiled_worker` when a configured worker profile must be
-   ready, or `execution_mode=manual_handoff` when this host will execute the
-   returned worktree externally. Use `dispatch_next_work` plus
-   `prepare_worker_handoff` only for low-level lifecycle control.
-8. Start, track, complete, verify, integrate, and reconcile with
-   `start_worker_task`, `record_worker_progress`, `complete_worker_task`,
-   `record_verification_evidence`, `integrate_worker_result`, and
-   `reconcile_project`.
+7. Prepare execution with `prepare_work`. It returns a host action:
+   `direct_edit` for lightweight manager-workspace edits, or `run_in_worktree`
+   with an assignment bundle and worktree for host-run worker execution.
+   `dispatch_ready_work`, `dispatch_next_work`, and `prepare_worker_handoff`
+   remain low-level lifecycle controls.
+8. Start and track active workers with `start_worker_task` and
+   `record_worker_progress` when useful. Finish with `finish_work` so worker
+   completion, changed files, verification evidence, findings, integration
+   guidance, and reconciliation stay connected.
+   Follow its `host_action` to call `integrate_worker_result`,
+   `reconcile_project`, verification, or recovery tools as needed.
 
 Safety gates: keep runtime state in `.platy/platypus.sqlite3`, keep backlog
 markdown declarative, operate workers in task worktrees, and do not bypass
@@ -88,13 +89,16 @@ straight to broad edits. Convert the goal into a controlled loop:
 7. For standard or full items, create a strict task plan with `write_task_plan`
    and `validate_task_plan`; use `draft_task_plan` only as optional
    sampling-assisted help.
-8. Dispatch with `dispatch_ready_work`. If no configured worker profile should
-   run it, pass `execution_mode=manual_handoff`, then run implementation in the
-   assigned worktree from the returned worker assignment.
-9. Record progress, verification evidence, findings, and completion through
-   Platypus tools.
-10. Integrate with `integrate_worker_result`, then reconcile with
-   `reconcile_project`.
+8. Prepare execution with `prepare_work`. Direct items may return a
+   `direct_edit` host action. Standard/full items return a `run_in_worktree`
+   action with a worker assignment bundle; the MCP server does not launch the
+   external worker.
+9. Record progress when useful, then finish with `finish_work`. Workers should
+   report changed files, verification status, acceptance coverage, and findings
+   or explicitly set `findings_reviewed=true`.
+10. Follow the `finish_work.host_action`: verify, record/resolve findings,
+    integrate with `integrate_worker_result`, recover, run
+    `reconcile_project`, or move to the next item.
 
 The host should present this as natural assistance, not as a manual ceremony:
 explain what is being structured, ask for approval only when choices matter,
@@ -170,6 +174,7 @@ Load this group before dispatch, worker handoff, verification, integration, or
 recovery sessions:
 
 - `inspect_work_queue`
+- `prepare_work`
 - `dispatch_ready_work`
 - `generate_task_bundle`
 - `inspect_task_events`
@@ -180,6 +185,7 @@ recovery sessions:
 - `start_worker_task`
 - `record_worker_progress`
 - `complete_worker_task`
+- `finish_work`
 - `run_task_verification`
 - `record_verification_evidence`
 - `record_finding`
@@ -246,26 +252,29 @@ const WORKER_HANDOFF_TEXT: &str = r#"# Worker Handoff Guidance
 Workers run outside the MCP server. Platypus prepares and records their
 execution state.
 
-1. Prefer `dispatch_ready_work` to create durable task records and prepared
-   assignments for one or more ready backlog items. Pass
-   `execution_mode=manual_handoff` when the MCP host or a human-managed worker
-   will execute the assignment outside a configured Platypus worker profile.
-2. For low-level control, use `dispatch_next_work` followed immediately by
+1. Prefer `prepare_work` for normal host-run execution. It inspects the queue,
+   returns direct-edit guidance for direct items, and prepares assignment
+   bundles plus worktrees for standard/full worker work.
+2. Use `dispatch_ready_work` only when the host needs lower-level batch
+   dispatch control. Pass `execution_mode=manual_handoff` when the MCP host or
+   a human-managed worker will execute the assignment outside a configured
+   Platypus worker profile.
+3. For the lowest-level control, use `dispatch_next_work` followed immediately by
    `prepare_worker_handoff`; do not run an external worker from a task id
    without an assignment.
-3. Give the bundle and worktree path to the selected worker harness.
-4. After the external worker harness actually starts, record that lifecycle
+4. Give the bundle, completion contract, and worktree path to the selected
+   worker harness.
+5. After the external worker harness actually starts, record that lifecycle
    transition with `start_worker_task` when you need an explicit running state.
    This tool does not launch a worker.
-5. Persist safe progress with `record_worker_progress`.
-6. Inspect bounded worktree changes with `inspect_worktree_changes`.
-7. Complete with `complete_worker_task`, including terminal status, summary,
-   changed files, and verification status.
+6. Persist safe progress with `record_worker_progress`.
+7. Finish with `finish_work` so completion, changed files, verification
+   evidence, findings, and integration guidance remain one connected result.
+   Use `complete_worker_task` only when you need low-level completion control.
 
-For same-session host-driven edits, `complete_worker_task` can finish a
-prepared assignment directly; it auto-starts prepared assignments by default.
-Set `auto_start_if_prepared=false` when strict running-only completion is
-required.
+For same-session host-driven edits, `finish_work` can finish a prepared
+assignment directly; it auto-starts prepared assignments by default. Set
+`auto_start_if_prepared=false` when strict running-only completion is required.
 
 Do not run worker edits in the manager workspace. Use `send_worker_guidance`
 for steering active work.

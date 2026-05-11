@@ -299,6 +299,7 @@ impl ProjectState for MemoryProjectState {
             verification_command: command.verification_command,
             execution_mode: execution_mode::normalize_assignment(command.execution_mode.as_deref())
                 .map_err(ProjectStateError::invalid_command)?,
+            completion_contract: crate::models::default_worker_completion_contract(),
             brief: "Memory backend test assignment.".to_string(),
         };
         let assignment = AssignmentSnapshot {

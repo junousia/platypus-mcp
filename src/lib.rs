@@ -14,6 +14,7 @@ pub mod git_readiness;
 pub mod goal;
 pub mod guidance;
 pub mod host_guidance;
+pub mod host_lifecycle;
 pub mod integrations;
 pub mod leases;
 pub mod models;

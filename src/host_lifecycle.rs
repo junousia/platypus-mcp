@@ -1,0 +1,1274 @@
+use crate::{
+    assignments, dispatch, evidence, execution_mode, findings, guidance,
+    models::{
+        ActionResult, ActionStatus, CompleteWorkerExecutionParams, DispatchReadyWorkData,
+        DispatchReadyWorkItem, DispatchReadyWorkParams, EvidenceRecord, FinishWorkData,
+        FinishWorkFindingInput, FinishWorkParams, HostAction, IntegrateWorkerResultParams,
+        PrepareWorkData, PrepareWorkParams, ReconcileParams, RecordFindingParams,
+        RecordVerificationEvidenceParams, WorkQueueData, WorkQueueItem, WorkerAssignment,
+        WorktreeDiffData, WorktreeDiffParams,
+    },
+    reconcile, workspace,
+};
+use serde_json::Value;
+use std::{collections::BTreeMap, path::Path};
+
+pub fn prepare_work(
+    default_root: &Path,
+    params: PrepareWorkParams,
+) -> ActionResult<PrepareWorkData> {
+    let action = "prepare_work";
+    let max_tasks = params.max_tasks.unwrap_or(1).clamp(1, 10);
+    let requested_execution_mode = params
+        .execution_mode
+        .as_deref()
+        .unwrap_or(execution_mode::MANUAL_HANDOFF)
+        .to_string();
+    let manual_handoff = execution_mode::is_manual_handoff(&requested_execution_mode);
+    let queue_result = guidance::inspect_work_queue(
+        default_root,
+        crate::models::InspectWorkQueueParams {
+            root: params.root.clone(),
+            limit: Some(if params.item_id.is_some() {
+                200
+            } else {
+                max_tasks
+            }),
+            require_task_plan: params.require_task_plan,
+            require_planning_approval: params.require_planning_approval,
+        },
+    );
+    let queue = match queue_result {
+        ActionResult {
+            status: ActionStatus::Completed | ActionStatus::Skipped,
+            data: Some(data),
+            ..
+        } => data,
+        ActionResult { summary, error, .. } => {
+            return ActionResult::failed(
+                action,
+                "Could not prepare executable work.",
+                error.unwrap_or(summary),
+            )
+        }
+    };
+    let selected =
+        selected_prepare_items(&queue, params.item_id.as_deref(), max_tasks, manual_handoff);
+    if selected.is_empty() {
+        let data = prepare_queue_only_data(
+            queue,
+            vec![HostAction {
+                kind: "inspect_or_recover".to_string(),
+                summary: "No work is ready to prepare.".to_string(),
+                instructions: vec![
+                    "Inspect the queue item reasons and resolve planning, approval, Git, or backlog blockers.".to_string(),
+                    "Call inspect_work_queue or next_safe_action after resolving the blocker.".to_string(),
+                ],
+                task_id: None,
+                assignment_id: None,
+                worker: params.worker,
+                worktree_path: None,
+                bundle: None,
+                next_tools: vec![
+                    "inspect_work_queue".to_string(),
+                    "next_safe_action".to_string(),
+                    "doctor_snapshot".to_string(),
+                ],
+            }],
+        );
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Skipped,
+            summary: "No ready backlog item could be prepared.".to_string(),
+            next_action: Some(
+                "Resolve the reported queue blockers, then retry prepare_work.".to_string(),
+            ),
+            data: Some(data),
+            error: None,
+        };
+    }
+
+    let mut host_actions = selected
+        .iter()
+        .filter(|item| item.planning_mode == "direct")
+        .map(|item| direct_host_action(item, params.worker.clone()))
+        .collect::<Vec<_>>();
+    let non_direct_ids = selected
+        .iter()
+        .filter(|item| item.planning_mode != "direct")
+        .map(|item| item.item_id.clone())
+        .collect::<Vec<_>>();
+
+    if non_direct_ids.is_empty() {
+        let prepared = host_actions.len();
+        let data = prepare_queue_only_data(queue, host_actions);
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Completed,
+            summary: format!("Prepared {prepared} direct host action(s)."),
+            next_action: Some("Use the host's native edit tools in the manager workspace; no worker process was launched.".to_string()),
+            data: Some(data),
+            error: None,
+        };
+    }
+
+    match dispatch_selected_work(
+        default_root,
+        &params,
+        &requested_execution_mode,
+        &non_direct_ids,
+    ) {
+        Ok(dispatch) => {
+            host_actions.extend(
+                dispatch
+                    .items
+                    .iter()
+                    .filter_map(host_action_from_dispatch_item),
+            );
+            let status = if host_actions.is_empty() {
+                ActionStatus::Skipped
+            } else {
+                ActionStatus::Completed
+            };
+            let prepared = host_actions.len();
+            ActionResult {
+                action: action.to_string(),
+                status,
+                summary: format!("Prepared {prepared} host action(s)."),
+                next_action: Some(
+                    "Run returned worktree assignments in the host or selected worker; finish with finish_work.".to_string(),
+                ),
+                data: Some(PrepareWorkData {
+                    root: dispatch.root.clone(),
+                    queue_summary: format!(
+                        "Prepared {} host action(s) from {} selected item(s).",
+                        host_actions.len(),
+                        selected.len()
+                    ),
+                    ready_count: queue.ready_count,
+                    blocked_count: queue.blocked_count,
+                    host_actions,
+                    dispatch: Some(dispatch),
+                    queue: None,
+                }),
+                error: None,
+            }
+        }
+        Err(ActionResult {
+            summary,
+            next_action,
+            data,
+            error,
+            ..
+        }) => ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Failed,
+            summary,
+            next_action,
+            data: data.map(|dispatch| PrepareWorkData {
+                root: dispatch.root.clone(),
+                queue_summary: "Dispatch failed while preparing host-run work.".to_string(),
+                ready_count: queue.ready_count,
+                blocked_count: queue.blocked_count,
+                host_actions: vec![HostAction {
+                    kind: "inspect_or_recover".to_string(),
+                    summary: "Preparation failed before a host-run handoff was available."
+                        .to_string(),
+                    instructions: vec![
+                        "Inspect the dispatch error and project state.".to_string(),
+                        "Retry prepare_work after resolving the blocker.".to_string(),
+                    ],
+                    task_id: None,
+                    assignment_id: None,
+                    worker: params.worker,
+                    worktree_path: None,
+                    bundle: None,
+                    next_tools: vec![
+                        "next_safe_action".to_string(),
+                        "doctor_snapshot".to_string(),
+                        "inspect_work_queue".to_string(),
+                    ],
+                }],
+                dispatch: Some(dispatch),
+                queue: None,
+            }),
+            error,
+        },
+    }
+}
+
+fn ready_for_prepare_work(item: &WorkQueueItem, manual_handoff: bool) -> bool {
+    if item.ready_to_dispatch {
+        return true;
+    }
+    manual_handoff
+        && item.recommended_tool == "configure_agent_profile"
+        && matches!(item.plan.status.as_str(), "valid" | "not_required")
+        && item
+            .planning_approval
+            .as_ref()
+            .is_none_or(|approval| !approval.required || approval.approved)
+}
+
+pub fn finish_work(default_root: &Path, params: FinishWorkParams) -> ActionResult<FinishWorkData> {
+    let action = "finish_work";
+    let root = params.root.clone();
+    let status = params
+        .status
+        .clone()
+        .unwrap_or_else(|| "completed".to_string());
+    let mut task_id = params.task_id.clone();
+    let inspected_assignment = params.assignment_id.as_ref().and_then(|assignment_id| {
+        assignments::inspect_worker_assignment(
+            default_root,
+            crate::models::InspectWorkerAssignmentParams {
+                root: root.clone(),
+                assignment_id: assignment_id.clone(),
+            },
+        )
+        .data
+        .map(|data| data.assignment)
+    });
+    if task_id.is_none() {
+        task_id = inspected_assignment
+            .as_ref()
+            .map(|assignment| assignment.task_id.clone());
+    }
+
+    let worktree_changes = task_id.as_ref().and_then(|task_id| {
+        match workspace::worktree_diff(
+            default_root,
+            WorktreeDiffParams {
+                root: root.clone(),
+                task_id: task_id.clone(),
+            },
+        ) {
+            ActionResult {
+                status: ActionStatus::Completed,
+                data: Some(data),
+                ..
+            } => Some(data),
+            _ => None,
+        }
+    });
+    let mut changed_files = params.changed_files.clone();
+    if changed_files.is_empty() {
+        if let Some(diff) = worktree_changes.as_ref() {
+            changed_files = diff.files.iter().map(|file| file.path.clone()).collect();
+        }
+    }
+
+    let completed = assignments::complete_worker_execution(
+        default_root,
+        CompleteWorkerExecutionParams {
+            root: root.clone(),
+            assignment_id: params.assignment_id.clone(),
+            task_id: task_id.clone(),
+            status: status.clone(),
+            summary: params.summary.clone(),
+            changed_files,
+            verification_status: params.verification_status.clone(),
+            auto_start_if_prepared: params.auto_start_if_prepared,
+        },
+    );
+    let assignment = match completed {
+        ActionResult {
+            status: ActionStatus::Completed,
+            data: Some(data),
+            ..
+        } => data.assignment,
+        ActionResult {
+            summary,
+            next_action,
+            error,
+            ..
+        } => {
+            return finish_failed(
+                action,
+                summary,
+                next_action,
+                error,
+                task_id,
+                params.assignment_id,
+                inspected_assignment,
+                worktree_changes,
+            )
+        }
+    };
+
+    let mut evidence_records = Vec::new();
+    if should_record_verification_evidence(params.verification_status.as_deref(), &params) {
+        let verification = evidence::record_verification_evidence(
+            default_root,
+            RecordVerificationEvidenceParams {
+                root: root.clone(),
+                id: None,
+                source_item_id: Some(assignment.bundle.item_id.clone()),
+                source_task_id: Some(assignment.task_id.clone()),
+                summary: params.verification_summary.clone().unwrap_or_else(|| {
+                    format!(
+                        "Worker reported verification `{}` for `{}`.",
+                        params
+                            .verification_status
+                            .as_deref()
+                            .unwrap_or("not_recorded"),
+                        assignment.task_id
+                    )
+                }),
+                refs: params.verification_refs.clone(),
+                metadata: BTreeMap::new(),
+            },
+        );
+        match verification {
+            ActionResult {
+                status: ActionStatus::Completed,
+                data: Some(data),
+                ..
+            } => evidence_records.push(data.evidence),
+            ActionResult {
+                summary,
+                next_action,
+                error,
+                ..
+            } => {
+                return finish_failed_with_assignment(
+                    action,
+                    summary,
+                    next_action,
+                    error,
+                    assignment,
+                    worktree_changes,
+                    evidence_records,
+                    Vec::new(),
+                )
+            }
+        }
+    }
+
+    let mut finding_records = Vec::new();
+    for finding in params.findings {
+        let record = findings::record_finding(
+            default_root,
+            finish_finding_params(&root, &assignment, finding),
+        );
+        match record {
+            ActionResult {
+                status: ActionStatus::Completed,
+                data: Some(data),
+                ..
+            } => finding_records.push(data.finding),
+            ActionResult {
+                summary,
+                next_action,
+                error,
+                ..
+            } => {
+                return finish_failed_with_assignment(
+                    action,
+                    summary,
+                    next_action,
+                    error,
+                    assignment,
+                    worktree_changes,
+                    evidence_records,
+                    finding_records,
+                )
+            }
+        }
+    }
+
+    let findings_valid = findings::validate_findings(
+        default_root,
+        crate::models::ValidateFindingsParams {
+            root: root.clone(),
+            source_item_id: Some(assignment.bundle.item_id.clone()),
+            source_task_id: Some(assignment.task_id.clone()),
+        },
+    );
+    let unresolved_required = findings_valid
+        .data
+        .as_ref()
+        .map(|data| data.unresolved_required_count)
+        .unwrap_or(0);
+    let findings_reviewed =
+        params.findings_reviewed.unwrap_or(false) || !finding_records.is_empty();
+
+    let mut integration = None;
+    let mut reconciliation = None;
+    if params.integrate_if_ready.unwrap_or(false)
+        && status == "completed"
+        && verification_ready(
+            params.verification_status.as_deref(),
+            params.allow_unverified,
+        )
+        && unresolved_required == 0
+        && findings_reviewed
+    {
+        let integrated = workspace::integrate_worker_result(
+            default_root,
+            IntegrateWorkerResultParams {
+                root: root.clone(),
+                task_id: assignment.task_id.clone(),
+                strategy: params.integration_strategy,
+                allow_unverified: params.allow_unverified,
+                cleanup_after: params.cleanup_after,
+            },
+        );
+        if let ActionResult {
+            status: ActionStatus::Completed,
+            data: Some(data),
+            ..
+        } = integrated
+        {
+            integration = Some(data);
+            if let ActionResult {
+                status: ActionStatus::Completed,
+                data: Some(data),
+                ..
+            } =
+                reconcile::reconcile_project(default_root, ReconcileParams { root: root.clone() })
+            {
+                reconciliation = Some(data);
+            }
+        }
+    }
+
+    let host_action = finish_host_action(
+        &assignment,
+        status.as_str(),
+        params.verification_status.as_deref(),
+        params.allow_unverified.unwrap_or(false),
+        findings_reviewed,
+        unresolved_required,
+        integration.is_some(),
+    );
+    let root = assignment_root(&root, &assignment);
+    let mut result = ActionResult::completed(
+        action,
+        format!("Finished worker assignment `{}`.", assignment.id),
+        FinishWorkData {
+            root,
+            assignment: Some(assignment),
+            worktree_changes,
+            evidence: evidence_records,
+            findings: finding_records,
+            integration,
+            reconciliation,
+            host_action,
+        },
+    );
+    result.next_action = Some(
+        result
+            .data
+            .as_ref()
+            .map(|data| data.host_action.summary.clone())
+            .unwrap_or_else(|| "Inspect the task lifecycle state.".to_string()),
+    );
+    result
+}
+
+fn prepare_queue_only_data(queue: WorkQueueData, host_actions: Vec<HostAction>) -> PrepareWorkData {
+    PrepareWorkData {
+        root: queue.root.clone(),
+        queue_summary: queue.summary.clone(),
+        ready_count: queue.ready_count,
+        blocked_count: queue.blocked_count,
+        host_actions,
+        dispatch: None,
+        queue: Some(queue),
+    }
+}
+
+#[derive(Debug)]
+struct PrepareSelection {
+    item_id: String,
+    title: String,
+    planning_mode: String,
+}
+
+fn selected_prepare_items(
+    queue: &WorkQueueData,
+    requested_item_id: Option<&str>,
+    max_tasks: usize,
+    manual_handoff: bool,
+) -> Vec<PrepareSelection> {
+    queue
+        .items
+        .iter()
+        .filter(|item| requested_item_id.is_none_or(|item_id| item.candidate.item_id == item_id))
+        .filter(|item| ready_for_prepare_work(item, manual_handoff))
+        .take(max_tasks)
+        .map(|item| PrepareSelection {
+            item_id: item.candidate.item_id.clone(),
+            title: item.candidate.title.clone(),
+            planning_mode: item.planning.required_mode.clone(),
+        })
+        .collect()
+}
+
+fn direct_host_action(item: &PrepareSelection, worker: Option<String>) -> HostAction {
+    HostAction {
+        kind: "direct_edit".to_string(),
+        summary: format!(
+            "`{}` is direct work; implement it in the manager workspace.",
+            item.item_id
+        ),
+        instructions: vec![
+            format!("Implement `{}` directly in the project workspace when the user wants a lightweight scaffold or direct edit.", item.title),
+            "Keep changes scoped to the backlog contract and commit with Platypus trailers when complete.".to_string(),
+            "Record verification evidence and findings if the work becomes non-trivial or leaves follow-up risk.".to_string(),
+        ],
+        task_id: None,
+        assignment_id: None,
+        worker,
+        worktree_path: None,
+        bundle: None,
+        next_tools: vec![
+            "record_verification_evidence".to_string(),
+            "record_finding".to_string(),
+            "reconcile_project".to_string(),
+        ],
+    }
+}
+
+fn dispatch_selected_work(
+    default_root: &Path,
+    params: &PrepareWorkParams,
+    requested_execution_mode: &str,
+    item_ids: &[String],
+) -> Result<DispatchReadyWorkData, ActionResult<DispatchReadyWorkData>> {
+    let mut combined: Option<DispatchReadyWorkData> = None;
+    for item_id in item_ids {
+        let result = dispatch::dispatch_ready_work(
+            default_root,
+            DispatchReadyWorkParams {
+                root: params.root.clone(),
+                item_id: Some(item_id.clone()),
+                max_tasks: Some(1),
+                worker: params.worker.clone(),
+                claimant: params.claimant.clone(),
+                execution_mode: Some(requested_execution_mode.to_string()),
+                prepare_handoffs: Some(true),
+                auto_start: Some(false),
+                auto_commit_artifacts: params.auto_commit_artifacts,
+                require_planning_approval: params.require_planning_approval,
+                dry_run: Some(false),
+                verification_command: params.verification_command.clone(),
+            },
+        );
+        let dispatch = match result {
+            ActionResult {
+                status: ActionStatus::Completed | ActionStatus::Skipped,
+                data: Some(data),
+                ..
+            } => data,
+            failed => return Err(failed),
+        };
+        merge_dispatch_data(&mut combined, dispatch);
+    }
+    combined.ok_or_else(|| ActionResult {
+        action: "dispatch_ready_work".to_string(),
+        status: ActionStatus::Skipped,
+        summary: "No non-direct work was selected for dispatch.".to_string(),
+        next_action: Some(
+            "Select direct work or runnable worker work, then retry prepare_work.".to_string(),
+        ),
+        data: None,
+        error: None,
+    })
+}
+
+fn merge_dispatch_data(
+    target: &mut Option<DispatchReadyWorkData>,
+    mut dispatch: DispatchReadyWorkData,
+) {
+    let Some(current) = target.as_mut() else {
+        *target = Some(dispatch);
+        return;
+    };
+    current.requested += dispatch.requested;
+    current.available_before_dispatch = current
+        .available_before_dispatch
+        .max(dispatch.available_before_dispatch);
+    current.selected += dispatch.selected;
+    current.dispatched += dispatch.dispatched;
+    current.prepared += dispatch.prepared;
+    current.started += dispatch.started;
+    current.failed += dispatch.failed;
+    current
+        .preflight_warnings
+        .append(&mut dispatch.preflight_warnings);
+    current.worker_ready |= dispatch.worker_ready;
+    current.ready_worker_profiles = current
+        .ready_worker_profiles
+        .max(dispatch.ready_worker_profiles);
+    if dispatch.stopped_reason != "selection_exhausted"
+        && dispatch.stopped_reason != "max_tasks_reached"
+    {
+        current.stopped_reason = dispatch.stopped_reason;
+    }
+    current.items.append(&mut dispatch.items);
+}
+
+fn host_action_from_dispatch_item(item: &DispatchReadyWorkItem) -> Option<HostAction> {
+    let assignment = item.assignment.as_ref()?;
+    Some(HostAction {
+        kind: "run_in_worktree".to_string(),
+        summary: format!(
+            "Run `{}` in `{}`; MCP prepared the assignment but did not launch a worker.",
+            assignment.id, assignment.worktree_path
+        ),
+        instructions: vec![
+            "Give the bundle brief and worktree path to the selected worker harness or human implementer.".to_string(),
+            "Run edits only inside the returned assignment worktree.".to_string(),
+            "Use start_worker_task if you need an explicit running transition.".to_string(),
+            "Finish through finish_work so changed files, verification, findings, integration guidance, and reconciliation stay connected.".to_string(),
+        ],
+        task_id: Some(assignment.task_id.clone()),
+        assignment_id: Some(assignment.id.clone()),
+        worker: assignment.worker.clone(),
+        worktree_path: Some(assignment.worktree_path.clone()),
+        bundle: Some(assignment.bundle.clone()),
+        next_tools: vec![
+            "start_worker_task".to_string(),
+            "record_worker_progress".to_string(),
+            "finish_work".to_string(),
+            "inspect_task_events".to_string(),
+        ],
+    })
+}
+
+fn should_record_verification_evidence(status: Option<&str>, params: &FinishWorkParams) -> bool {
+    matches!(status, Some("passed")) || params.verification_summary.is_some()
+}
+
+fn verification_ready(status: Option<&str>, allow_unverified: Option<bool>) -> bool {
+    matches!(status, Some("passed")) || allow_unverified.unwrap_or(false)
+}
+
+fn finish_finding_params(
+    root: &Option<String>,
+    assignment: &WorkerAssignment,
+    finding: FinishWorkFindingInput,
+) -> RecordFindingParams {
+    let mut metadata = BTreeMap::new();
+    if let Some(owner) = finding.owner.as_ref() {
+        metadata.insert("owner".to_string(), Value::String(owner.clone()));
+    }
+    RecordFindingParams {
+        root: root.clone(),
+        id: None,
+        source_item_id: Some(assignment.bundle.item_id.clone()),
+        source_task_id: Some(assignment.task_id.clone()),
+        source_finding_ref: None,
+        title: finding.title,
+        summary: finding.summary,
+        severity: finding.severity,
+        required: finding.required,
+        evidence_refs: finding.evidence_refs,
+        metadata,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_host_action(
+    assignment: &WorkerAssignment,
+    status: &str,
+    verification_status: Option<&str>,
+    allow_unverified: bool,
+    findings_reviewed: bool,
+    unresolved_required: usize,
+    integrated: bool,
+) -> HostAction {
+    if status != "completed" {
+        return HostAction {
+            kind: "inspect_or_recover".to_string(),
+            summary: format!("Assignment `{}` ended with `{status}`.", assignment.id),
+            instructions: vec![
+                "Inspect task events and worktree changes before deciding whether to retry, clean up, or create follow-up work.".to_string(),
+            ],
+            task_id: Some(assignment.task_id.clone()),
+            assignment_id: Some(assignment.id.clone()),
+            worker: assignment.worker.clone(),
+            worktree_path: Some(assignment.worktree_path.clone()),
+            bundle: Some(assignment.bundle.clone()),
+            next_tools: vec![
+                "inspect_task_events".to_string(),
+                "inspect_worktree_changes".to_string(),
+                "record_finding".to_string(),
+            ],
+        };
+    }
+    if !verification_ready(verification_status, Some(allow_unverified)) {
+        return HostAction {
+            kind: "verify_or_record_risk".to_string(),
+            summary: "Verification is not passed or explicitly waived; verify before integration.".to_string(),
+            instructions: vec![
+                "Run run_task_verification for the assignment or task when a command is configured.".to_string(),
+                "Record verification evidence for passed checks or record a finding when verification cannot pass.".to_string(),
+                "Use allow_unverified only for an explicit low-risk decision.".to_string(),
+            ],
+            task_id: Some(assignment.task_id.clone()),
+            assignment_id: Some(assignment.id.clone()),
+            worker: assignment.worker.clone(),
+            worktree_path: Some(assignment.worktree_path.clone()),
+            bundle: Some(assignment.bundle.clone()),
+            next_tools: vec![
+                "run_task_verification".to_string(),
+                "record_verification_evidence".to_string(),
+                "record_finding".to_string(),
+            ],
+        };
+    }
+    if unresolved_required > 0 || !findings_reviewed {
+        return HostAction {
+            kind: "resolve_findings".to_string(),
+            summary: if unresolved_required > 0 {
+                format!("{unresolved_required} required finding(s) must be resolved before final integration.")
+            } else {
+                "Confirm findings were reviewed or record follow-up findings before integration.".to_string()
+            },
+            instructions: vec![
+                "Record limitations, impediments, and follow-up work as findings.".to_string(),
+                "Use findings_reviewed=true only after explicitly checking that no findings are needed.".to_string(),
+                "Resolve or accept required findings before integrating.".to_string(),
+            ],
+            task_id: Some(assignment.task_id.clone()),
+            assignment_id: Some(assignment.id.clone()),
+            worker: assignment.worker.clone(),
+            worktree_path: Some(assignment.worktree_path.clone()),
+            bundle: Some(assignment.bundle.clone()),
+            next_tools: vec![
+                "record_finding".to_string(),
+                "validate_findings".to_string(),
+                "update_finding_disposition".to_string(),
+            ],
+        };
+    }
+    if integrated {
+        return HostAction {
+            kind: "done".to_string(),
+            summary: format!("Task `{}` is finished and integrated.", assignment.task_id),
+            instructions: vec![
+                "Review reconciliation output for any remaining gaps.".to_string(),
+                "Select the next safe action or prepare the next item.".to_string(),
+            ],
+            task_id: Some(assignment.task_id.clone()),
+            assignment_id: Some(assignment.id.clone()),
+            worker: assignment.worker.clone(),
+            worktree_path: Some(assignment.worktree_path.clone()),
+            bundle: Some(assignment.bundle.clone()),
+            next_tools: vec!["reconcile_project".to_string(), "prepare_work".to_string()],
+        };
+    }
+    HostAction {
+        kind: "integrate_result".to_string(),
+        summary: format!(
+            "Assignment `{}` is complete; review and integrate the worker result.",
+            assignment.id
+        ),
+        instructions: vec![
+            "Inspect the worktree changes and evidence.".to_string(),
+            "Integrate the worker result when the manager workspace is clean.".to_string(),
+            "Run reconcile_project after integration to surface closure or finding gaps."
+                .to_string(),
+        ],
+        task_id: Some(assignment.task_id.clone()),
+        assignment_id: Some(assignment.id.clone()),
+        worker: assignment.worker.clone(),
+        worktree_path: Some(assignment.worktree_path.clone()),
+        bundle: Some(assignment.bundle.clone()),
+        next_tools: vec![
+            "inspect_worktree_changes".to_string(),
+            "integrate_worker_result".to_string(),
+            "reconcile_project".to_string(),
+        ],
+    }
+}
+
+fn finish_failed(
+    action: &str,
+    summary: String,
+    next_action: Option<String>,
+    error: Option<String>,
+    task_id: Option<String>,
+    assignment_id: Option<String>,
+    assignment: Option<WorkerAssignment>,
+    worktree_changes: Option<WorktreeDiffData>,
+) -> ActionResult<FinishWorkData> {
+    let host_action = HostAction {
+        kind: "inspect_or_recover".to_string(),
+        summary: "Could not finish worker result.".to_string(),
+        instructions: vec![
+            "Inspect the assignment and task events to recover the lifecycle.".to_string(),
+            "Retry finish_work after the assignment is prepared or running.".to_string(),
+        ],
+        task_id,
+        assignment_id,
+        worker: assignment.as_ref().and_then(|value| value.worker.clone()),
+        worktree_path: assignment.as_ref().map(|value| value.worktree_path.clone()),
+        bundle: assignment.as_ref().map(|value| value.bundle.clone()),
+        next_tools: vec![
+            "inspect_worker_assignment".to_string(),
+            "inspect_task_events".to_string(),
+            "next_safe_action".to_string(),
+        ],
+    };
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Failed,
+        summary,
+        next_action,
+        data: Some(FinishWorkData {
+            root: String::new(),
+            assignment,
+            worktree_changes,
+            evidence: Vec::new(),
+            findings: Vec::new(),
+            integration: None,
+            reconciliation: None,
+            host_action,
+        }),
+        error,
+    }
+}
+
+fn finish_failed_with_assignment(
+    action: &str,
+    summary: String,
+    next_action: Option<String>,
+    error: Option<String>,
+    assignment: WorkerAssignment,
+    worktree_changes: Option<WorktreeDiffData>,
+    evidence: Vec<EvidenceRecord>,
+    findings: Vec<crate::models::FindingRecord>,
+) -> ActionResult<FinishWorkData> {
+    let root = assignment_root(&None, &assignment);
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Failed,
+        summary,
+        next_action,
+        data: Some(FinishWorkData {
+            root,
+            assignment: Some(assignment.clone()),
+            worktree_changes,
+            evidence,
+            findings,
+            integration: None,
+            reconciliation: None,
+            host_action: HostAction {
+                kind: "inspect_or_recover".to_string(),
+                summary: "Finish work stopped after a partial lifecycle update.".to_string(),
+                instructions: vec![
+                    "Inspect the assignment, evidence, findings, and task events before retrying."
+                        .to_string(),
+                ],
+                task_id: Some(assignment.task_id.clone()),
+                assignment_id: Some(assignment.id.clone()),
+                worker: assignment.worker.clone(),
+                worktree_path: Some(assignment.worktree_path.clone()),
+                bundle: Some(assignment.bundle.clone()),
+                next_tools: vec![
+                    "inspect_worker_assignment".to_string(),
+                    "list_evidence".to_string(),
+                    "list_findings".to_string(),
+                    "inspect_task_events".to_string(),
+                ],
+            },
+        }),
+        error,
+    }
+}
+
+fn assignment_root(root: &Option<String>, assignment: &WorkerAssignment) -> String {
+    root.clone().unwrap_or_else(|| {
+        let worktree = std::path::Path::new(&assignment.worktree_path);
+        worktree
+            .ancestors()
+            .find(|path| path.file_name().and_then(|name| name.to_str()) == Some(".platy"))
+            .and_then(|path| path.parent())
+            .map(|path| path.display().to_string())
+            .unwrap_or_default()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, process::Command};
+    use tempfile::TempDir;
+
+    #[test]
+    fn prepare_work_returns_direct_action_for_direct_items() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Readme docs",
+            "docs",
+            "docs",
+            &["README.md"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+
+        let result = prepare_work(
+            project.path(),
+            PrepareWorkParams {
+                root: None,
+                item_id: None,
+                max_tasks: None,
+                worker: None,
+                claimant: None,
+                execution_mode: None,
+                require_task_plan: Some(true),
+                require_planning_approval: None,
+                auto_commit_artifacts: None,
+                verification_command: Vec::new(),
+            },
+        );
+        let data = result.data.expect("prepare data");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.host_actions[0].kind, "direct_edit");
+        assert!(data.dispatch.is_none());
+        assert!(data.queue.is_some());
+    }
+
+    #[test]
+    fn prepare_work_prepares_manual_handoff_without_worker_profile() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Feature workflow",
+            "feature",
+            "general",
+            &["src/lib.rs"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add standard backlog"]);
+
+        let result = prepare_work(
+            project.path(),
+            PrepareWorkParams {
+                root: None,
+                item_id: None,
+                max_tasks: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("host".to_string()),
+                execution_mode: None,
+                require_task_plan: Some(false),
+                require_planning_approval: None,
+                auto_commit_artifacts: None,
+                verification_command: Vec::new(),
+            },
+        );
+        let data = result.data.expect("prepare data");
+        let action = &data.host_actions[0];
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(action.kind, "run_in_worktree");
+        assert!(action.assignment_id.is_some());
+        assert!(action.worktree_path.is_some());
+        assert_eq!(data.dispatch.as_ref().expect("dispatch").prepared, 1);
+        let bundle = action.bundle.as_ref().expect("bundle");
+        assert_eq!(bundle.completion_contract.required_fields[0], "status");
+    }
+
+    #[test]
+    fn prepare_work_honors_requested_item_id() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "First feature workflow",
+            "feature",
+            "general",
+            &["src/first.rs"],
+        );
+        write_item(
+            project.path(),
+            "PROJ-002",
+            "Second feature workflow",
+            "feature",
+            "general",
+            &["src/second.rs"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add standard backlog"]);
+
+        let result = prepare_work(
+            project.path(),
+            PrepareWorkParams {
+                root: None,
+                item_id: Some("PROJ-002".to_string()),
+                max_tasks: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("host".to_string()),
+                execution_mode: None,
+                require_task_plan: Some(false),
+                require_planning_approval: None,
+                auto_commit_artifacts: None,
+                verification_command: Vec::new(),
+            },
+        );
+        let action = result
+            .data
+            .expect("prepare data")
+            .host_actions
+            .into_iter()
+            .next()
+            .expect("host action");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(action.bundle.as_ref().expect("bundle").item_id, "PROJ-002");
+    }
+
+    #[test]
+    fn prepare_work_honors_max_tasks_for_multiple_handoffs() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "First feature workflow",
+            "feature",
+            "general",
+            &["src/first.rs"],
+        );
+        write_item(
+            project.path(),
+            "PROJ-002",
+            "Second feature workflow",
+            "feature",
+            "general",
+            &["src/second.rs"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add standard backlog"]);
+
+        let result = prepare_work(
+            project.path(),
+            PrepareWorkParams {
+                root: None,
+                item_id: None,
+                max_tasks: Some(2),
+                worker: Some("coder".to_string()),
+                claimant: Some("host".to_string()),
+                execution_mode: None,
+                require_task_plan: Some(false),
+                require_planning_approval: None,
+                auto_commit_artifacts: None,
+                verification_command: Vec::new(),
+            },
+        );
+        let data = result.data.expect("prepare data");
+        let item_ids = data
+            .host_actions
+            .iter()
+            .filter_map(|action| action.bundle.as_ref().map(|bundle| bundle.item_id.clone()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.host_actions.len(), 2);
+        assert_eq!(data.dispatch.as_ref().expect("dispatch").prepared, 2);
+        assert_eq!(
+            item_ids,
+            vec!["PROJ-001".to_string(), "PROJ-002".to_string()]
+        );
+    }
+
+    #[test]
+    fn finish_work_records_completion_and_returns_verification_action() {
+        let project = prepared_assignment_project();
+        let prepared = prepare_work(
+            project.path(),
+            PrepareWorkParams {
+                root: None,
+                item_id: Some("PROJ-001".to_string()),
+                max_tasks: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("host".to_string()),
+                execution_mode: None,
+                require_task_plan: Some(false),
+                require_planning_approval: None,
+                auto_commit_artifacts: None,
+                verification_command: Vec::new(),
+            },
+        );
+        let action = prepared
+            .data
+            .expect("prepare data")
+            .host_actions
+            .into_iter()
+            .next()
+            .expect("host action");
+        let worktree = action.worktree_path.expect("worktree");
+        fs::write(
+            format!("{worktree}/src/lib.rs"),
+            "pub fn answer() -> u8 { 42 }\n",
+        )
+        .expect("worker edit");
+
+        let result = finish_work(
+            project.path(),
+            FinishWorkParams {
+                root: None,
+                assignment_id: action.assignment_id,
+                task_id: action.task_id,
+                status: None,
+                summary: "Implemented the feature slice.".to_string(),
+                changed_files: Vec::new(),
+                verification_status: Some("skipped".to_string()),
+                verification_summary: None,
+                verification_refs: Vec::new(),
+                findings: Vec::new(),
+                findings_reviewed: Some(true),
+                auto_start_if_prepared: None,
+                integrate_if_ready: Some(false),
+                allow_unverified: None,
+                integration_strategy: None,
+                cleanup_after: None,
+            },
+        );
+        let data = result.data.expect("finish data");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.host_action.kind, "verify_or_record_risk");
+        assert_eq!(
+            data.assignment.as_ref().expect("assignment").changed_files,
+            vec!["src/lib.rs".to_string()]
+        );
+    }
+
+    fn prepared_assignment_project() -> TempDir {
+        let project = backlog_project(false);
+        init_git(project.path());
+        fs::create_dir_all(project.path().join("src")).expect("src");
+        fs::write(
+            project.path().join("src/lib.rs"),
+            "pub fn answer() -> u8 { 0 }\n",
+        )
+        .expect("lib");
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Feature workflow",
+            "feature",
+            "general",
+            &["src/lib.rs"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Initial project"]);
+        project
+    }
+
+    fn backlog_project(with_profiles: bool) -> TempDir {
+        let project = TempDir::new().expect("temp dir");
+        if with_profiles {
+            fs::write(
+                project.path().join("platy.yaml"),
+                r#"agents:
+  profiles:
+    coder:
+      role: worker
+      harness: codex
+      executable: git
+"#,
+            )
+            .expect("profiles");
+        }
+        fs::create_dir_all(project.path().join("backlog/items")).expect("items");
+        fs::create_dir_all(project.path().join("backlog/epics")).expect("epics");
+        fs::write(
+            project.path().join("backlog/epics/general.md"),
+            r#"---
+id: general
+title: General
+status: active
+priority: P1
+area: general
+---
+
+# General
+"#,
+        )
+        .expect("epic");
+        project
+    }
+
+    fn write_item(
+        root: &Path,
+        id: &str,
+        title: &str,
+        item_type: &str,
+        area: &str,
+        owned_surfaces: &[&str],
+    ) {
+        let surfaces = owned_surfaces
+            .iter()
+            .map(|surface| format!("- {surface}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(
+            root.join("backlog/items").join(format!("{id}.md")),
+            format!(
+                r#"---
+id: {id}
+title: {title}
+priority: P1
+type: {item_type}
+area: {area}
+epic: general
+depends_on: []
+suggested_worker: coder
+owned_surfaces:
+{surfaces}
+---
+
+# {id} {title}
+
+## Goal
+
+Deliver the requested work.
+
+## Implementation Contract
+
+Keep the change scoped to owned surfaces.
+
+## Acceptance
+
+- The work is complete.
+"#,
+            ),
+        )
+        .expect("item");
+    }
+
+    fn init_git(root: &Path) {
+        git(root, &["init"]);
+        git(root, &["config", "user.name", "Platypus Test"]);
+        git(root, &["config", "user.email", "platypus@example.invalid"]);
+        fs::write(root.join("README.md"), "# Test\n").expect("readme");
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("git command");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
