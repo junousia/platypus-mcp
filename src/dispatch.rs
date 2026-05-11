@@ -1,6 +1,7 @@
 use crate::{
-    assignments, backlog, config, execution_mode,
+    approvals, assignments, backlog, config, execution_mode,
     git_readiness::inspect_git_readiness,
+    guidance,
     models::{
         ActionResult, ActionStatus, BacklogCandidate, DispatchNextWorkData, DispatchReadyWorkData,
         DispatchReadyWorkItem, DispatchReadyWorkParams, PrepareWorkerAssignmentParams, RootParams,
@@ -206,6 +207,41 @@ pub fn dispatch_ready_work(
         .take(requested)
         .map(|candidate| candidate.item_id.clone())
         .collect::<BTreeSet<_>>();
+    if params.require_planning_approval.unwrap_or(false) {
+        let blocked =
+            planning_approval_blockers(default_root, &root, candidates.iter().take(requested));
+        if !blocked.is_empty() {
+            return ActionResult {
+                action: action.to_string(),
+                status: ActionStatus::Failed,
+                summary: format!(
+                    "{} selected non-direct backlog item(s) require planning approval before dispatch.",
+                    blocked.len()
+                ),
+                next_action: Some(
+                    "Call request_planning_approval for the blocked item(s), approve it with approval_respond, then retry dispatch_ready_work."
+                        .to_string(),
+                ),
+                data: Some(DispatchReadyWorkData {
+                    root,
+                    requested,
+                    available_before_dispatch,
+                    selected: 0,
+                    dispatched: 0,
+                    prepared: 0,
+                    started: 0,
+                    failed: 0,
+                    stopped_reason: "planning_approval_required".to_string(),
+                    execution_mode: requested_execution_mode,
+                    preflight_warnings,
+                    worker_ready,
+                    ready_worker_profiles,
+                    items: blocked,
+                }),
+                error: Some("Planning approval is required before dispatch.".to_string()),
+            };
+        }
+    }
     if !manual_handoff && !selected_item_ids.is_empty() && !worker_ready {
         return ActionResult {
             action: action.to_string(),
@@ -804,6 +840,45 @@ fn filter_candidates_for_dispatch(
         .collect()
 }
 
+fn planning_approval_blockers<'a>(
+    default_root: &Path,
+    root: &str,
+    candidates: impl Iterator<Item = &'a BacklogCandidate>,
+) -> Vec<DispatchReadyWorkItem> {
+    candidates
+        .filter_map(|candidate| {
+            let planning = guidance::classify_candidate(candidate);
+            if planning.required_mode == "direct" {
+                return None;
+            }
+            match approvals::planning_approval_state(
+                default_root,
+                Some(root),
+                &candidate.item_id,
+                true,
+            ) {
+                Ok(state) if state.approved => None,
+                Ok(state) => Some(DispatchReadyWorkItem {
+                    item_id: candidate.item_id.clone(),
+                    title: candidate.title.clone(),
+                    status: "blocked".to_string(),
+                    reason: state.reason,
+                    task: None,
+                    assignment: None,
+                }),
+                Err(error) => Some(DispatchReadyWorkItem {
+                    item_id: candidate.item_id.clone(),
+                    title: candidate.title.clone(),
+                    status: "blocked".to_string(),
+                    reason: format!("Could not inspect planning approval state: {error}"),
+                    task: None,
+                    assignment: None,
+                }),
+            }
+        })
+        .collect()
+}
+
 fn active_source_item_ids(root: &Path) -> BTreeSet<String> {
     let storage = match crate::storage::connect_existing_read_only(root, None) {
         Ok(Some(storage)) => storage,
@@ -860,7 +935,11 @@ fn task_record(task: TaskSnapshot) -> TaskRecord {
 mod tests {
     use super::*;
     use crate::{
-        models::{DispatchReadyWorkParams, InspectTaskEventsParams},
+        approvals::{approval_respond, request_planning_approval},
+        models::{
+            ApprovalRespondParams, DispatchReadyWorkParams, InspectTaskEventsParams,
+            RequestPlanningApprovalParams,
+        },
         tasks,
     };
     use std::{fs, process::Command};
@@ -922,6 +1001,7 @@ mod tests {
                 prepare_handoffs: None,
                 auto_start: None,
                 auto_commit_artifacts: None,
+                require_planning_approval: None,
                 dry_run: None,
                 verification_command: vec!["make check".to_string()],
             },
@@ -964,6 +1044,7 @@ mod tests {
                 prepare_handoffs: Some(false),
                 auto_start: None,
                 auto_commit_artifacts: None,
+                require_planning_approval: None,
                 dry_run: None,
                 verification_command: Vec::new(),
             },
@@ -993,6 +1074,7 @@ mod tests {
                 prepare_handoffs: Some(false),
                 auto_start: None,
                 auto_commit_artifacts: None,
+                require_planning_approval: None,
                 dry_run: Some(true),
                 verification_command: Vec::new(),
             },
@@ -1023,6 +1105,7 @@ mod tests {
                 prepare_handoffs: Some(false),
                 auto_start: None,
                 auto_commit_artifacts: None,
+                require_planning_approval: None,
                 dry_run: Some(true),
                 verification_command: Vec::new(),
             },
@@ -1055,6 +1138,7 @@ mod tests {
                 prepare_handoffs: Some(false),
                 auto_start: None,
                 auto_commit_artifacts: None,
+                require_planning_approval: None,
                 dry_run: Some(true),
                 verification_command: Vec::new(),
             },
@@ -1084,6 +1168,7 @@ mod tests {
                 prepare_handoffs: Some(false),
                 auto_start: None,
                 auto_commit_artifacts: None,
+                require_planning_approval: None,
                 dry_run: None,
                 verification_command: Vec::new(),
             },
@@ -1132,6 +1217,7 @@ mod tests {
                 prepare_handoffs: None,
                 auto_start: None,
                 auto_commit_artifacts: None,
+                require_planning_approval: None,
                 dry_run: None,
                 verification_command: Vec::new(),
             },
@@ -1162,6 +1248,7 @@ mod tests {
                 prepare_handoffs: Some(true),
                 auto_start: Some(true),
                 auto_commit_artifacts: None,
+                require_planning_approval: None,
                 dry_run: None,
                 verification_command: vec!["make check".to_string()],
             },
@@ -1193,6 +1280,7 @@ mod tests {
                 prepare_handoffs: Some(true),
                 auto_start: Some(true),
                 auto_commit_artifacts: None,
+                require_planning_approval: None,
                 dry_run: None,
                 verification_command: Vec::new(),
             },
@@ -1229,6 +1317,7 @@ mod tests {
                 prepare_handoffs: Some(true),
                 auto_start: None,
                 auto_commit_artifacts: None,
+                require_planning_approval: None,
                 dry_run: None,
                 verification_command: Vec::new(),
             },
@@ -1288,6 +1377,7 @@ mod tests {
                 prepare_handoffs: Some(true),
                 auto_start: None,
                 auto_commit_artifacts: None,
+                require_planning_approval: None,
                 dry_run: None,
                 verification_command: Vec::new(),
             },
@@ -1298,6 +1388,79 @@ mod tests {
         assert_eq!(data.stopped_reason, "worker_profile_missing");
         assert_eq!(data.execution_mode, "profiled_worker");
         assert_eq!(data.dispatched, 0);
+    }
+
+    #[test]
+    fn dispatch_ready_work_requires_planning_approval_when_requested() {
+        let project = backlog_project(true);
+
+        let blocked = dispatch_ready_work(
+            project.path(),
+            DispatchReadyWorkParams {
+                root: None,
+                item_id: Some("PROJ-001".to_string()),
+                max_tasks: Some(1),
+                worker: Some("coder".to_string()),
+                claimant: Some("tester".to_string()),
+                execution_mode: Some("manual_handoff".to_string()),
+                prepare_handoffs: Some(true),
+                auto_start: None,
+                auto_commit_artifacts: None,
+                require_planning_approval: Some(true),
+                dry_run: None,
+                verification_command: Vec::new(),
+            },
+        );
+        let blocked_data = blocked.data.expect("blocked data");
+
+        assert!(matches!(blocked.status, ActionStatus::Failed));
+        assert_eq!(blocked_data.stopped_reason, "planning_approval_required");
+        assert_eq!(blocked_data.items[0].status, "blocked");
+
+        let approval = request_planning_approval(
+            project.path(),
+            RequestPlanningApprovalParams {
+                root: None,
+                item_ids: vec!["PROJ-001".to_string()],
+                requested_by: Some("manager".to_string()),
+                summary: None,
+            },
+        )
+        .data
+        .expect("approval")
+        .approval;
+        approval_respond(
+            project.path(),
+            ApprovalRespondParams {
+                root: None,
+                approval_id: approval.id,
+                decision: "approve".to_string(),
+                responder: Some("user".to_string()),
+                reason: Some("Reviewed.".to_string()),
+            },
+        );
+
+        let dispatched = dispatch_ready_work(
+            project.path(),
+            DispatchReadyWorkParams {
+                root: None,
+                item_id: Some("PROJ-001".to_string()),
+                max_tasks: Some(1),
+                worker: Some("coder".to_string()),
+                claimant: Some("tester".to_string()),
+                execution_mode: Some("manual_handoff".to_string()),
+                prepare_handoffs: Some(true),
+                auto_start: None,
+                auto_commit_artifacts: None,
+                require_planning_approval: Some(true),
+                dry_run: None,
+                verification_command: Vec::new(),
+            },
+        );
+        let dispatched_data = dispatched.data.expect("dispatched data");
+
+        assert!(matches!(dispatched.status, ActionStatus::Completed));
+        assert_eq!(dispatched_data.dispatched, 1);
     }
 
     #[test]
@@ -1316,6 +1479,7 @@ mod tests {
                 prepare_handoffs: Some(true),
                 auto_start: Some(true),
                 auto_commit_artifacts: Some(true),
+                require_planning_approval: None,
                 dry_run: Some(true),
                 verification_command: vec!["make check".to_string()],
             },

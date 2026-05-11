@@ -45,6 +45,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"import_github_issues"));
     assert!(tool_names.contains(&"draft_external_report"));
     assert!(tool_names.contains(&"request_external_report_approval"));
+    assert!(tool_names.contains(&"request_planning_approval"));
     assert!(tool_names.contains(&"record_external_report_dispatch"));
     assert!(tool_names.contains(&"draft_task_plan"));
     assert!(tool_names.contains(&"inspect_task_plan"));
@@ -1526,6 +1527,76 @@ async fn stdio_server_dispatches_ready_work_with_handoffs() -> anyhow::Result<()
         .as_str()
         .expect("worktree path")
         .contains(".platy/worktrees"));
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_requests_planning_approval_before_dispatch() -> anyhow::Result<()> {
+    let project = dispatch_project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let blocked = call_tool_json(
+        &client,
+        "dispatch_ready_work",
+        json!({
+            "item_id": "PROJ-001",
+            "max_tasks": 1,
+            "worker": "coder",
+            "prepare_handoffs": false,
+            "require_planning_approval": true
+        }),
+    )
+    .await?;
+    assert_stage_status("dispatch_ready_work planning blocked", &blocked, "failed");
+    assert_eq!(
+        blocked["data"]["stopped_reason"],
+        "planning_approval_required"
+    );
+
+    let approval = call_tool_json(
+        &client,
+        "request_planning_approval",
+        json!({
+            "item_ids": ["PROJ-001"],
+            "requested_by": "manager",
+            "summary": "Approve the first implementation slice before dispatch."
+        }),
+    )
+    .await?;
+    assert_stage_status("request_planning_approval", &approval, "completed");
+    let approval_id = string_at(&approval, &["data", "approval", "id"], "approval id");
+    let approved = call_tool_json(
+        &client,
+        "approval_respond",
+        json!({
+            "approval_id": approval_id,
+            "decision": "approve",
+            "responder": "user"
+        }),
+    )
+    .await?;
+    assert_stage_status("approval_respond planning", &approved, "completed");
+
+    let dispatched = call_tool_json(
+        &client,
+        "dispatch_ready_work",
+        json!({
+            "item_id": "PROJ-001",
+            "max_tasks": 1,
+            "worker": "coder",
+            "prepare_handoffs": false,
+            "require_planning_approval": true
+        }),
+    )
+    .await?;
+    assert_stage_status(
+        "dispatch_ready_work planning approved",
+        &dispatched,
+        "completed",
+    );
+    assert_eq!(dispatched["data"]["dispatched"], 1);
 
     client.cancel().await?;
     Ok(())

@@ -23,17 +23,18 @@ use crate::{
         ProjectScaffoldData, ProjectStatusData, ReconcileParams, ReconciliationData,
         RecordEvidenceParams, RecordExternalReportDispatchParams, RecordFindingParams,
         RecordVerificationEvidenceParams, RecordWorkerEventParams, ReleaseLeaseParams,
-        RenewLeaseParams, RequestExternalReportApprovalParams, RootParams,
-        RunTaskVerificationParams, RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams,
-        StartGoalWorkData, StartGoalWorkParams, StartWorkerExecutionParams,
-        StorageCapabilityProbeData, StorageCapabilityProbeParams, TaskBundleData,
-        TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams,
-        TaskPlanValidationData, TaskPlanWriteData, TaskRecordData, TaskVerificationRunData,
-        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
-        WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData, WorkerGuidanceData,
-        WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams, WorkflowFitData,
-        WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams, WorktreeData,
-        WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
+        RenewLeaseParams, RequestExternalReportApprovalParams, RequestPlanningApprovalParams,
+        RootParams, RunTaskVerificationParams, RunnerPrepareParams, RunnerReportData,
+        SendWorkerGuidanceParams, StartGoalWorkData, StartGoalWorkParams,
+        StartWorkerExecutionParams, StorageCapabilityProbeData, StorageCapabilityProbeParams,
+        TaskBundleData, TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData,
+        TaskPlanQueryParams, TaskPlanValidationData, TaskPlanWriteData, TaskRecordData,
+        TaskVerificationRunData, UpdateFindingDispositionParams, ValidateBacklogParams,
+        ValidateFindingsParams, WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData,
+        WorkerGuidanceData, WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams,
+        WorkflowFitData, WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams,
+        WorktreeData, WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams,
+        WriteTaskPlanParams,
     },
     project, reconcile, runner, storage, tasks, workspace,
 };
@@ -670,6 +671,28 @@ impl PlatypusMcp {
         Parameters(params): Parameters<RequestExternalReportApprovalParams>,
     ) -> Json<ActionResult<ExternalReportApprovalData>> {
         Json(integrations::request_external_report_approval(
+            &self.default_root,
+            params,
+        ))
+    }
+
+    #[tool(
+        title = "Request Planning Approval",
+        description = "Request durable approval for a task plan or backlog tranche before dispatching non-direct work.",
+        annotations(
+            title = "Request Planning Approval",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn request_planning_approval(
+        &self,
+        Parameters(params): Parameters<RequestPlanningApprovalParams>,
+    ) -> Json<ActionResult<crate::models::PlanningApprovalData>> {
+        Json(approvals::request_planning_approval(
             &self.default_root,
             params,
         ))
@@ -1820,6 +1843,7 @@ mod tests {
             "import_github_issues",
             "draft_external_report",
             "request_external_report_approval",
+            "request_planning_approval",
             "record_external_report_dispatch",
             "create_backlog_item",
             "create_backlog_items",
@@ -1890,6 +1914,7 @@ mod tests {
             "write_task_plan",
             "import_github_issues",
             "request_external_report_approval",
+            "request_planning_approval",
             "record_external_report_dispatch",
             "start_goal_work",
             "dispatch_next_work",

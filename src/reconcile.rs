@@ -67,12 +67,16 @@ pub fn reconcile_project(
 mod tests {
     use super::*;
     use crate::{
+        approvals::{approval_respond, request_planning_approval},
         evidence::record_evidence,
         findings::record_finding,
-        models::{ClaimNextTaskParams, RecordEvidenceParams, RecordFindingParams},
+        models::{
+            ApprovalRespondParams, ClaimNextTaskParams, RecordEvidenceParams, RecordFindingParams,
+            RequestPlanningApprovalParams,
+        },
         tasks::{claim_next_task, create_task_record, finish_task, mark_task_running, NewTask},
     };
-    use std::{collections::BTreeMap, fs, process::Command};
+    use std::{collections::BTreeMap, fs, process::Command, time::Duration};
     use tempfile::TempDir;
 
     #[test]
@@ -220,6 +224,93 @@ mod tests {
             .iter()
             .any(|gap| gap.kind == "evidence_for_incomplete_task"
                 && gap.summary.contains(task.id.as_str())));
+    }
+
+    #[test]
+    fn reports_dispatched_planned_work_without_planning_approval() {
+        let project = git_project_without_trailers();
+        fs::create_dir_all(project.path().join("backlog/plans")).expect("plans");
+        fs::write(
+            project.path().join("backlog/plans/PROJ-001.yaml"),
+            "item_id: PROJ-001\nversion: 1\nmode: standard\nrequirements: []\ndesign:\n  summary: Test\n  owned_surfaces: []\ntasks: []\n",
+        )
+        .expect("plan");
+        write_backlog_item(project.path(), "PROJ-001");
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Planned task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+
+        let reconciled = reconcile_project(project.path(), ReconcileParams { root: None });
+        let data = reconciled.data.expect("reconcile data");
+
+        assert!(matches!(
+            reconciled.status,
+            crate::models::ActionStatus::Failed
+        ));
+        assert!(data.gaps.iter().any(|gap| {
+            gap.kind == "planning_approval_missing" && gap.summary.contains(task.id.as_str())
+        }));
+    }
+
+    #[test]
+    fn reports_planned_work_when_approval_happened_after_dispatch() {
+        let project = git_project_without_trailers();
+        fs::create_dir_all(project.path().join("backlog/plans")).expect("plans");
+        fs::write(
+            project.path().join("backlog/plans/PROJ-001.yaml"),
+            "item_id: PROJ-001\nversion: 1\nmode: standard\nrequirements: []\ndesign:\n  summary: Test\n  owned_surfaces: []\ntasks: []\n",
+        )
+        .expect("plan");
+        write_backlog_item(project.path(), "PROJ-001");
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Planned task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        std::thread::sleep(Duration::from_secs(1));
+        let requested = request_planning_approval(
+            project.path(),
+            RequestPlanningApprovalParams {
+                root: None,
+                item_ids: vec!["PROJ-001".to_string()],
+                requested_by: Some("manager".to_string()),
+                summary: Some("Late approval.".to_string()),
+            },
+        );
+        let approval_id = requested.data.expect("approval").approval.id;
+        let responded = approval_respond(
+            project.path(),
+            ApprovalRespondParams {
+                root: None,
+                approval_id,
+                decision: "approve".to_string(),
+                responder: Some("user".to_string()),
+                reason: None,
+            },
+        );
+        assert!(matches!(
+            responded.status,
+            crate::models::ActionStatus::Completed
+        ));
+
+        let reconciled = reconcile_project(project.path(), ReconcileParams { root: None });
+        let data = reconciled.data.expect("reconcile data");
+
+        assert!(data.gaps.iter().any(|gap| {
+            gap.kind == "planning_approval_missing" && gap.summary.contains(task.id.as_str())
+        }));
     }
 
     #[test]
@@ -373,6 +464,23 @@ mod tests {
         git(&project, &["add", "README.md"]);
         git(&project, &["commit", "-m", "Initial commit"]);
         project
+    }
+
+    fn write_backlog_item(root: &Path, item_id: &str) {
+        fs::create_dir_all(root.join("backlog/items")).expect("items");
+        fs::create_dir_all(root.join("backlog/epics")).expect("epics");
+        fs::write(
+            root.join("backlog/epics/general.md"),
+            "---\nid: general\ntitle: General\nstatus: active\npriority: P1\narea: general\n---\n\n# General\n",
+        )
+        .expect("epic");
+        fs::write(
+            root.join("backlog/items").join(format!("{item_id}.md")),
+            format!(
+                "---\nid: {item_id}\ntitle: Planned work\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nsuggested_worker: coder\nowned_surfaces:\n- src/lib.rs\n---\n\n# {item_id} Planned work\n\n## Goal\n\nPlan.\n\n## Implementation Contract\n\nImplement.\n\n## Acceptance\n\n- Done.\n"
+            ),
+        )
+        .expect("item");
     }
 
     fn git_stdout(root: &Path, args: &[&str]) -> String {

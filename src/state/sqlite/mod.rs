@@ -1126,6 +1126,24 @@ impl ProjectState for SqliteProjectState {
             .map_err(|error| ProjectStateError::backend(error.to_string()))?;
         let mut gaps = Vec::new();
 
+        let missing_planning_approvals =
+            query_tasks_missing_planning_approval(&self.connection.connection, &self.root)
+                .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        for task in missing_planning_approvals {
+            gaps.push(ReconcileGap {
+                kind: "planning_approval_missing".to_string(),
+                source_item_id: Some(task.source_item_id.clone()),
+                source_task_id: Some(task.id.clone()),
+                summary: format!(
+                    "Task `{}` for planned backlog item `{}` was dispatched without approved planning.",
+                    task.id, task.source_item_id
+                ),
+                next_action:
+                    "Request planning approval, approve it, then record the approval before relying on this task lifecycle."
+                        .to_string(),
+            });
+        }
+
         for evidence in invalid_task_evidence {
             let Some(source_task_id) = evidence.source_task_id.as_deref() else {
                 continue;
@@ -1836,6 +1854,13 @@ struct CompletedTask {
 }
 
 #[derive(Debug)]
+struct PlannedTaskWithoutApproval {
+    id: String,
+    source_item_id: String,
+    created_at: String,
+}
+
+#[derive(Debug)]
 struct InvalidTaskEvidence {
     id: String,
     source_item_id: Option<String>,
@@ -1862,6 +1887,73 @@ fn query_completed_tasks(
         })
     })?;
     rows.collect()
+}
+
+fn query_tasks_missing_planning_approval(
+    connection: &rusqlite::Connection,
+    root: &Path,
+) -> rusqlite::Result<Vec<PlannedTaskWithoutApproval>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT DISTINCT id, source_item_id, created_at
+        FROM tasks
+        ORDER BY created_at ASC, id ASC
+        "#,
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(PlannedTaskWithoutApproval {
+            id: row.get("id")?,
+            source_item_id: row.get("source_item_id")?,
+            created_at: row.get("created_at")?,
+        })
+    })?;
+    let mut missing = Vec::new();
+    for task in rows {
+        let task = task?;
+        if !root
+            .join("backlog")
+            .join("plans")
+            .join(format!("{}.yaml", task.source_item_id))
+            .is_file()
+        {
+            continue;
+        }
+        if !planning_approval_exists(connection, &task.source_item_id, &task.created_at)? {
+            missing.push(task);
+        }
+    }
+    Ok(missing)
+}
+
+fn planning_approval_exists(
+    connection: &rusqlite::Connection,
+    item_id: &str,
+    task_created_at: &str,
+) -> rusqlite::Result<bool> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT metadata_json
+        FROM approvals
+        WHERE scope = 'planning'
+          AND status = 'approved'
+          AND responded_at IS NOT NULL
+          AND responded_at <= ?1
+        ORDER BY created_at DESC, id DESC
+        "#,
+    )?;
+    let mut rows = statement.query([task_created_at])?;
+    while let Some(row) = rows.next()? {
+        let metadata_json: Option<String> = row.get("metadata_json")?;
+        if metadata_json
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .and_then(|metadata| metadata.get("item_ids").cloned())
+            .and_then(|item_ids| item_ids.as_array().cloned())
+            .is_some_and(|items| items.iter().any(|value| value.as_str() == Some(item_id)))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn query_invalid_task_evidence(

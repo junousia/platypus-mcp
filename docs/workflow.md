@@ -174,12 +174,27 @@ They must not contain runtime fields such as status, completed_at, commit,
 attempts, result, evidence, or worker diary comments. Use `inspect_task_plan`
 and `list_task_plans` to review committed plans.
 
+For review-sensitive work, request planning approval before dispatch:
+
+1. Call `request_planning_approval` with one `item_id` for a task plan, or
+   multiple `item_ids` for a backlog tranche.
+2. Respond with `approval_respond`.
+3. Call `inspect_work_queue` or `dispatch_ready_work` with
+   `require_planning_approval=true`.
+
+Planning approval records live in local approval state, not backlog item
+frontmatter. `reconcile_project` reports planned task lifecycles that were
+created without an approved planning gate.
+
 ## Dispatch And Worker Handoff
 
 1. Call `inspect_work_queue`.
 2. If it requires a task plan, use the recommended task-plan tool first.
-3. Call `next_safe_action`.
-4. Choose execution mode:
+3. If policy requires reviewed planning, call `request_planning_approval`,
+   approve it, and pass `require_planning_approval=true` to queue or dispatch
+   tools.
+4. Call `next_safe_action`.
+5. Choose execution mode:
    - `profiled_worker` requires at least one ready worker profile configured
      with `configure_agent_profile`.
    - `manual_handoff` prepares the same task, assignment, worktree, and bundle
@@ -187,13 +202,13 @@ and `list_task_plans` to review committed plans.
      worker will execute it externally.
    - `auto` is the default and behaves like `profiled_worker` unless
      `manual_handoff` is explicitly requested.
-5. For normal execution, call `dispatch_ready_work`; it dispatches one or more
+6. For normal execution, call `dispatch_ready_work`; it dispatches one or more
    runnable items and prepares assignments, worktrees, and bundles. Pass
    `execution_mode=manual_handoff` when no configured profile should be used.
-6. For low-level debugging only, call `dispatch_next_work` and then immediately
+7. For low-level debugging only, call `dispatch_next_work` and then immediately
    `prepare_worker_handoff`; do not run a worker from a bare task id.
-7. Give the assignment bundle and worktree path to the worker harness.
-8. Mark the worker active with `start_worker_task` when you need an explicit
+8. Give the assignment bundle and worktree path to the worker harness.
+9. Mark the worker active with `start_worker_task` when you need an explicit
    running transition.
 
 The worker should operate in the assigned worktree, not in the manager

@@ -176,6 +176,24 @@ impl ApprovalRepository<'_> {
                 .query_row("SELECT COUNT(*) FROM approvals", [], |row| row.get(0))?;
         Ok(format!("APR-{:03}", existing + 1))
     }
+
+    pub fn list_newest_unbounded(
+        &self,
+        status: Option<&str>,
+    ) -> RepositoryResult<Vec<ApprovalRecord>> {
+        let mut statement = self.connection.prepare(
+            r#"
+            SELECT id, scope, status, title, summary, requested_by, response, responder, reason,
+                   metadata_json, created_at, responded_at
+            FROM approvals
+            WHERE (?1 IS NULL OR status = ?1)
+            ORDER BY created_at DESC, id DESC
+            "#,
+        )?;
+        let rows = statement.query_map(params![status], row_to_approval)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(RepositoryError::from)
+    }
 }
 
 #[derive(Debug, Clone)]

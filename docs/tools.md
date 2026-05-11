@@ -123,6 +123,8 @@ make smoke-storage
   drafted external report.
 - `record_external_report_dispatch`: record the approved host/plugin provider
   dispatch result, including safe evidence and redacted metadata.
+- `request_planning_approval`: create a durable planning approval for a task
+  plan or backlog tranche before non-direct work is dispatched.
 - `create_backlog_item`: write one structured backlog item.
 - `create_backlog_items`: atomically write related backlog items in one call.
 - `create_epic`: write one structured backlog epic.

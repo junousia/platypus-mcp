@@ -15,6 +15,10 @@ fn example_item_id() -> String {
     "PROJ-001".to_string()
 }
 
+fn example_item_ids() -> Vec<String> {
+    vec!["PROJ-001".to_string(), "PROJ-002".to_string()]
+}
+
 fn example_id_prefix() -> String {
     "PROJ".to_string()
 }
@@ -263,6 +267,8 @@ pub struct DispatchReadyWorkParams {
     /// Whether dispatch should auto-commit tracked planning artifacts when local
     /// dirt is limited to `backlog/items/*.md` and `backlog/plans/*.yaml`.
     pub auto_commit_artifacts: Option<bool>,
+    /// Whether non-direct work must have approved planning before dispatch.
+    pub require_planning_approval: Option<bool>,
     /// Preview dispatchable work without mutating task, assignment, or Git
     /// lifecycle state.
     #[schemars(example = example_true())]
@@ -287,6 +293,8 @@ pub struct InspectWorkQueueParams {
     pub limit: Option<usize>,
     /// Whether dispatch readiness should require task-plan artifacts for non-direct work.
     pub require_task_plan: Option<bool>,
+    /// Whether dispatch readiness should require approved planning for non-direct work.
+    pub require_planning_approval: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -491,6 +499,19 @@ pub struct ValidateBacklogParams {
     pub root: Option<String>,
     /// Whether validation errors should be included.
     pub include_errors: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RequestPlanningApprovalParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Backlog item IDs covered by this planning approval.
+    #[schemars(example = example_item_ids())]
+    pub item_ids: Vec<String>,
+    /// Person or agent requesting the approval.
+    pub requested_by: Option<String>,
+    /// Human-readable summary of the plan or backlog tranche being approved.
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1670,11 +1691,29 @@ pub struct WorkQueueItem {
     pub planning: PlanningClassification,
     /// Task plan state or file for this item.
     pub plan: WorkQueuePlanState,
+    /// Planning approval state when queue inspection requires planning approval.
+    pub planning_approval: Option<PlanningApprovalState>,
     /// Whether this item can be dispatched now.
     pub ready_to_dispatch: bool,
     /// Recommended Platypus MCP tool to call next.
     pub recommended_tool: String,
     /// Human-readable reason for the decision or result.
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct PlanningApprovalState {
+    /// Backlog item identifier.
+    pub item_id: String,
+    /// Whether this backlog item currently requires planning approval.
+    pub required: bool,
+    /// Whether an approved planning approval covers this backlog item.
+    pub approved: bool,
+    /// Approval identifier that currently applies, if any.
+    pub approval_id: Option<String>,
+    /// Approval lifecycle status that currently applies.
+    pub status: Option<String>,
+    /// Human-readable reason for the planning approval decision.
     pub reason: String,
 }
 
@@ -2131,6 +2170,16 @@ pub struct ExternalReportApprovalData {
     pub approval: ApprovalRecord,
     /// Durable report key.
     pub report_key: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PlanningApprovalData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Approval record returned or updated by this operation.
+    pub approval: ApprovalRecord,
+    /// Planning approval state for each covered backlog item.
+    pub states: Vec<PlanningApprovalState>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
