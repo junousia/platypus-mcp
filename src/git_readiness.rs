@@ -126,14 +126,12 @@ pub fn inspect_git_readiness(root: &Path, include_dirty: bool) -> GitReadiness {
                         head_commit: Some(head),
                     };
                 }
+                let details = describe_dirty_status(&status);
                 return GitReadiness {
                     status: GitReadinessStatus::Dirty,
                     summary: "Manager workspace has local changes.".to_string(),
-                    next_action: Some(
-                        "Review the manager workspace, then commit, stash, or intentionally discard local changes before integrating worker results."
-                            .to_string(),
-                    ),
-                    details: Some(status),
+                    next_action: Some(dirty_next_action(&details)),
+                    details: Some(details),
                     head_commit: Some(head),
                 };
             }
@@ -245,6 +243,55 @@ fn porcelain_status_path(line: &str) -> &str {
 fn path_is_ignored_runtime(path: &str) -> bool {
     path.split(" -> ")
         .all(|path_part| path_part.starts_with(".platy/"))
+}
+
+fn describe_dirty_status(status: &str) -> String {
+    let mut tracked = Vec::new();
+    let mut untracked = Vec::new();
+    let mut deleted = Vec::new();
+    let mut other = Vec::new();
+    for line in status.lines() {
+        let path = porcelain_status_path(line);
+        if line.starts_with("??") {
+            untracked.push(path.to_string());
+        } else if line.as_bytes().get(0) == Some(&b'D') || line.as_bytes().get(1) == Some(&b'D') {
+            deleted.push(path.to_string());
+        } else if line.as_bytes().first().is_some() || line.as_bytes().get(1).is_some() {
+            tracked.push(path.to_string());
+        } else {
+            other.push(line.to_string());
+        }
+    }
+    let mut parts = Vec::new();
+    if !tracked.is_empty() {
+        parts.push(format!("tracked changes: {}", tracked.join(", ")));
+    }
+    if !untracked.is_empty() {
+        parts.push(format!("untracked files: {}", untracked.join(", ")));
+    }
+    if !deleted.is_empty() {
+        parts.push(format!("deleted files: {}", deleted.join(", ")));
+    }
+    if !other.is_empty() {
+        parts.push(format!("other changes: {}", other.join(", ")));
+    }
+    parts.push(format!("raw status:\n{status}"));
+    parts.join("\n")
+}
+
+fn dirty_next_action(details: &str) -> String {
+    let listed = details
+        .lines()
+        .find(|line| {
+            line.starts_with("tracked changes:")
+                || line.starts_with("untracked files:")
+                || line.starts_with("deleted files:")
+                || line.starts_with("other changes:")
+        })
+        .unwrap_or("workspace changes are present");
+    format!(
+        "Uncommitted workspace changes: {listed}. Run `git status --short`, then commit, stash, ignore, or intentionally discard them before dispatching or integrating worktree-based tasks. If the changes are new Platypus backlog artifacts, stage and commit backlog/items/*.md and backlog/plans/*.yaml before retrying dispatch_ready_work."
+    )
 }
 
 #[cfg(test)]

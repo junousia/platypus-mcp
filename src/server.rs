@@ -1,5 +1,5 @@
 use crate::{
-    approvals, assignments, backlog, bundle, config, dispatch, events, evidence, findings,
+    approvals, assignments, backlog, bundle, config, dispatch, events, evidence, findings, goal,
     guidance, host_guidance, integrations, leases,
     models::{
         AcquireLeaseParams, ActionResult, AgentProfileData, AgentProfilesData, AgentProfilesParams,
@@ -17,20 +17,21 @@ use crate::{
         InspectWorkQueueParams, InspectWorkerAssignmentParams, IntegrateWorkerResultParams,
         LeaseListData, LeaseRecordData, LimitParams, ListEvidenceParams, ListFindingsParams,
         ListLeasesParams, NextSafeActionData, NextSafeActionParams, PingData, PingParams,
-        PlanningClassificationData, PrepareWorkerAssignmentParams, ProjectScaffoldData,
-        ProjectStatusData, ReconcileParams, ReconciliationData, RecordEvidenceParams,
-        RecordExternalReportDispatchParams, RecordFindingParams, RecordVerificationEvidenceParams,
-        RecordWorkerEventParams, ReleaseLeaseParams, RenewLeaseParams,
-        RequestExternalReportApprovalParams, RootParams, RunnerPrepareParams, RunnerReportData,
-        SendWorkerGuidanceParams, StartWorkerExecutionParams, StorageCapabilityProbeData,
-        StorageCapabilityProbeParams, TaskBundleData, TaskEventListData, TaskPlanData,
-        TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams, TaskPlanValidationData,
-        TaskPlanWriteData, TaskRecordData, UpdateFindingDispositionParams, ValidateBacklogParams,
-        ValidateFindingsParams, WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData,
-        WorkerGuidanceData, WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams,
-        WorkflowFitData, WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams,
-        WorktreeData, WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams,
-        WriteTaskPlanParams,
+        PlanGoalWorkData, PlanGoalWorkParams, PlanningClassificationData,
+        PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData, ReconcileParams,
+        ReconciliationData, RecordEvidenceParams, RecordExternalReportDispatchParams,
+        RecordFindingParams, RecordVerificationEvidenceParams, RecordWorkerEventParams,
+        ReleaseLeaseParams, RenewLeaseParams, RequestExternalReportApprovalParams, RootParams,
+        RunTaskVerificationParams, RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams,
+        StartGoalWorkData, StartGoalWorkParams, StartWorkerExecutionParams,
+        StorageCapabilityProbeData, StorageCapabilityProbeParams, TaskBundleData,
+        TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams,
+        TaskPlanValidationData, TaskPlanWriteData, TaskRecordData, TaskVerificationRunData,
+        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
+        WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData, WorkerGuidanceData,
+        WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams, WorkflowFitData,
+        WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams, WorktreeData,
+        WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
     },
     project, reconcile, runner, storage, tasks, workspace,
 };
@@ -38,12 +39,12 @@ use anyhow::Result as AnyhowResult;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
-        GetPromptRequestParams, GetPromptResult, ListPromptsResult, ListResourcesResult,
-        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
-        ServerCapabilities, ServerInfo,
+        ContextInclusion, CreateMessageRequestParams, GetPromptRequestParams, GetPromptResult,
+        ListPromptsResult, ListResourcesResult, PaginatedRequestParams, ReadResourceRequestParams,
+        ReadResourceResult, ResourceContents, SamplingMessage, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
-    tool, tool_handler, tool_router, ErrorData as McpError, Json, RoleServer, ServerHandler,
+    tool, tool_handler, tool_router, ErrorData as McpError, Json, Peer, RoleServer, ServerHandler,
     ServiceExt,
 };
 use serde_json::{Map, Value};
@@ -372,6 +373,44 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Plan Goal Work",
+        description = "Plan a user goal without mutating project state and return the concrete next Platypus tool call.",
+        annotations(
+            title = "Plan Goal Work",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn plan_goal_work(
+        &self,
+        Parameters(params): Parameters<PlanGoalWorkParams>,
+    ) -> Json<ActionResult<PlanGoalWorkData>> {
+        Json(goal::plan_goal_work(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Start Goal Work",
+        description = "Start goal-oriented workflow in one call: classify mode, create or reuse tracking, and optionally dispatch prepared work.",
+        annotations(
+            title = "Start Goal Work",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn start_goal_work(
+        &self,
+        Parameters(params): Parameters<StartGoalWorkParams>,
+    ) -> Json<ActionResult<StartGoalWorkData>> {
+        Json(goal::start_goal_work(&self.default_root, params))
+    }
+
+    #[tool(
         title = "List Backlog",
         description = "List runnable backlog candidates.",
         annotations(
@@ -483,7 +522,7 @@ impl PlatypusMcp {
 
     #[tool(
         title = "Draft Backlog Items",
-        description = "Draft typed backlog candidates from a product goal.",
+        description = "Optionally draft typed backlog candidates from a product goal using MCP client sampling; skips when sampling is unavailable.",
         annotations(
             title = "Draft Backlog Items",
             read_only_hint = true,
@@ -495,9 +534,33 @@ impl PlatypusMcp {
     )]
     pub async fn draft_backlog_items(
         &self,
+        peer: Peer<RoleServer>,
         Parameters(params): Parameters<DraftBacklogItemsParams>,
     ) -> Json<ActionResult<DraftBacklogData>> {
-        Json(backlog::draft_backlog_items(params))
+        if !client_supports_sampling(&peer) {
+            return Json(backlog::draft_backlog_items(params));
+        }
+        let prompt = match backlog::draft_backlog_items_sampling_prompt(&params) {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                return Json(ActionResult::failed(
+                    "draft_backlog_items",
+                    "Could not draft backlog items.",
+                    error,
+                ))
+            }
+        };
+        let text = match sample_text(&peer, "Backlog drafting assistant.", prompt, 4_000).await {
+            Ok(text) => text,
+            Err(error) => {
+                return Json(ActionResult::failed(
+                    "draft_backlog_items",
+                    "Could not draft backlog items.",
+                    error,
+                ))
+            }
+        };
+        Json(backlog::draft_backlog_items_from_sample(&params, &text))
     }
 
     #[tool(
@@ -631,7 +694,7 @@ impl PlatypusMcp {
 
     #[tool(
         title = "Draft Task Plan",
-        description = "Draft a strict task plan for one backlog item without writing it.",
+        description = "Optionally draft a strict task plan using MCP client sampling; skips when sampling is unavailable.",
         annotations(
             title = "Draft Task Plan",
             read_only_hint = true,
@@ -643,9 +706,37 @@ impl PlatypusMcp {
     )]
     pub async fn draft_task_plan(
         &self,
+        peer: Peer<RoleServer>,
         Parameters(params): Parameters<DraftTaskPlanParams>,
     ) -> Json<ActionResult<TaskPlanData>> {
-        Json(backlog::draft_task_plan(&self.default_root, params))
+        if !client_supports_sampling(&peer) {
+            return Json(backlog::draft_task_plan(&self.default_root, params));
+        }
+        let prompt = match backlog::draft_task_plan_sampling_prompt(&self.default_root, &params) {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                return Json(ActionResult::failed(
+                    "draft_task_plan",
+                    "Could not draft task plan.",
+                    error,
+                ))
+            }
+        };
+        let text = match sample_text(&peer, "Task planning assistant.", prompt, 6_000).await {
+            Ok(text) => text,
+            Err(error) => {
+                return Json(ActionResult::failed(
+                    "draft_task_plan",
+                    "Could not draft task plan.",
+                    error,
+                ))
+            }
+        };
+        Json(backlog::draft_task_plan_from_sample(
+            &self.default_root,
+            &params,
+            &text,
+        ))
     }
 
     #[tool(
@@ -1005,7 +1096,7 @@ impl PlatypusMcp {
 
     #[tool(
         title = "Start Worker Execution",
-        description = "Mark a prepared worker assignment and its task as running.",
+        description = "Record that an external worker harness has begun a prepared assignment. This only updates Platypus lifecycle state; it does not launch a worker process.",
         annotations(
             title = "Start Worker Execution",
             read_only_hint = false,
@@ -1027,7 +1118,7 @@ impl PlatypusMcp {
 
     #[tool(
         title = "Start Worker Task",
-        description = "Friendly alias for start_worker_execution. Mark a prepared worker handoff as running.",
+        description = "Friendly alias for start_worker_execution. Record that an external worker harness has begun a prepared handoff; this does not launch a worker process.",
         annotations(
             title = "Start Worker Task",
             read_only_hint = false,
@@ -1127,6 +1218,28 @@ impl PlatypusMcp {
         let mut result = assignments::complete_worker_execution(&self.default_root, params);
         result.action = "complete_worker_task".to_string();
         Json(result)
+    }
+
+    #[tool(
+        title = "Run Task Verification",
+        description = "Run the assignment verification command in the task worktree and persist a verification run event. Requires assignment_id or task_id.",
+        annotations(
+            title = "Run Task Verification",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn run_task_verification(
+        &self,
+        Parameters(params): Parameters<RunTaskVerificationParams>,
+    ) -> Json<ActionResult<TaskVerificationRunData>> {
+        Json(assignments::run_task_verification(
+            &self.default_root,
+            params,
+        ))
     }
 
     #[tool(
@@ -1560,6 +1673,41 @@ pub async fn serve_stdio() -> AnyhowResult<()> {
     Ok(())
 }
 
+fn client_supports_sampling(peer: &Peer<RoleServer>) -> bool {
+    peer.peer_info()
+        .map(|info| info.capabilities.sampling.is_some())
+        .unwrap_or(false)
+}
+
+async fn sample_text(
+    peer: &Peer<RoleServer>,
+    system_prompt: &str,
+    prompt: String,
+    max_tokens: u32,
+) -> Result<String, String> {
+    let result = peer
+        .create_message(CreateMessageRequestParams {
+            meta: None,
+            task: None,
+            messages: vec![SamplingMessage::user_text(prompt)],
+            model_preferences: None,
+            system_prompt: Some(system_prompt.to_string()),
+            include_context: Some(ContextInclusion::ThisServer),
+            temperature: Some(0.2),
+            max_tokens,
+            stop_sequences: None,
+            metadata: None,
+            tools: None,
+            tool_choice: None,
+        })
+        .await
+        .map_err(|error| format!("client sampling failed: {error}"))?;
+    result
+        .validate()
+        .map_err(|error| format!("client sampling response was invalid: {error}"))?;
+    crate::sampling::message_text(&result.message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1578,6 +1726,8 @@ mod tests {
             "inspect_work_queue",
             "classify_planning_needs",
             "classify_workflow_fit",
+            "plan_goal_work",
+            "start_goal_work",
             "list_backlog",
             "inspect_backlog_inventory",
             "validate_backlog",
@@ -1615,6 +1765,7 @@ mod tests {
             "record_worker_progress",
             "complete_worker_execution",
             "complete_worker_task",
+            "run_task_verification",
             "runner_prepare_next",
             "inspect_task_events",
             "approval_list",
@@ -1653,6 +1804,7 @@ mod tests {
             "import_github_issues",
             "request_external_report_approval",
             "record_external_report_dispatch",
+            "start_goal_work",
             "dispatch_next_work",
             "dispatch_ready_work",
             "claim_next_task",
@@ -1667,6 +1819,7 @@ mod tests {
             "record_worker_progress",
             "complete_worker_execution",
             "complete_worker_task",
+            "run_task_verification",
             "runner_prepare_next",
             "approval_respond",
             "acquire_lease",
@@ -1776,6 +1929,177 @@ mod tests {
         }
     }
 
+    #[test]
+    fn tool_schemas_have_human_field_descriptions() {
+        let server = PlatypusMcp::new();
+        let tools = server.tool_router.list_all();
+
+        for tool in tools {
+            let input = serde_json::to_value(tool.input_schema.as_ref()).expect("input schema");
+            assert_schema_properties_have_descriptions(
+                &input,
+                &format!("{}.inputSchema", tool.name),
+            );
+
+            if let Some(output_schema) = tool.output_schema.as_ref() {
+                let output = serde_json::to_value(output_schema.as_ref()).expect("output schema");
+                assert_schema_properties_have_descriptions(
+                    &output,
+                    &format!("{}.outputSchema", tool.name),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tool_input_schemas_expose_enum_and_bound_constraints() {
+        let server = PlatypusMcp::new();
+        let tools = server.tool_router.list_all();
+
+        assert_property_enum_values(
+            &input_schema(&tools, "create_backlog_item"),
+            "priority",
+            &["P0", "P1", "P2"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "create_backlog_item"),
+            "type",
+            &["foundation", "feature", "safety", "ux", "test", "docs"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "start_goal_work"),
+            "mode",
+            &["auto", "direct_scaffold", "hybrid", "platypus_workflow"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "plan_goal_work"),
+            "mode",
+            &["auto", "direct_scaffold", "hybrid", "platypus_workflow"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "approval_respond"),
+            "decision",
+            &["approve", "deny"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "complete_worker_task"),
+            "status",
+            &["completed", "failed", "cancelled"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "complete_worker_task"),
+            "verification_status",
+            &["passed", "failed", "skipped", "not_run"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "integrate_worker_result"),
+            "strategy",
+            &[
+                "merge_commit",
+                "fast_forward",
+                "squash",
+                "apply_changed_files",
+            ],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "configure_agent_profile"),
+            "role",
+            &["manager", "worker"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "configure_agent_profile"),
+            "harness",
+            &["codex", "claude", "fake", "custom"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "record_evidence"),
+            "kind",
+            &[
+                "commit",
+                "verification",
+                "file_summary",
+                "worker_finding",
+                "manager_disposition",
+                "external_report",
+                "note",
+            ],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "update_finding_disposition"),
+            "status",
+            &[
+                "open",
+                "accepted",
+                "resolved",
+                "rejected",
+                "deferred",
+                "duplicate",
+            ],
+        );
+        assert_property_numeric_bounds(
+            &input_schema(&tools, "dispatch_ready_work"),
+            "max_tasks",
+            1,
+            10,
+        );
+        assert_property_numeric_bounds(&input_schema(&tools, "approval_list"), "limit", 1, 200);
+        assert_property_numeric_bounds(
+            &input_schema(&tools, "acquire_lease"),
+            "ttl_seconds",
+            1,
+            86400,
+        );
+        assert_property_numeric_bounds(
+            &input_schema(&tools, "run_task_verification"),
+            "timeout_seconds",
+            1,
+            600,
+        );
+    }
+
+    #[test]
+    fn tool_input_schemas_expose_examples_and_patterns() {
+        let server = PlatypusMcp::new();
+        let tools = server.tool_router.list_all();
+
+        let create_backlog_item = input_schema(&tools, "create_backlog_item");
+        assert_property_has_example(&create_backlog_item, "title");
+        assert_property_has_example(&create_backlog_item, "goal");
+        assert_property_pattern(&create_backlog_item, "id", r"^[A-Z]+-[0-9]{3}$");
+        assert_property_pattern(&create_backlog_item, "id_prefix", r"^[A-Z]+$");
+        assert_array_item_pattern(&create_backlog_item, "depends_on", r"^[A-Z]+-[0-9]{3}$");
+
+        let start_goal_work = input_schema(&tools, "start_goal_work");
+        assert_property_has_example(&start_goal_work, "goal");
+        assert_property_has_example(&start_goal_work, "owned_surfaces");
+        assert_property_has_example(&start_goal_work, "verification_command");
+        assert!(
+            start_goal_work
+                .get("properties")
+                .and_then(Value::as_object)
+                .map(|properties| !properties.contains_key("scaffold_in_place"))
+                .unwrap_or(true),
+            "start_goal_work schema must not advertise removed scaffold_in_place flag"
+        );
+
+        let plan_goal_work = input_schema(&tools, "plan_goal_work");
+        assert_property_has_example(&plan_goal_work, "goal");
+        assert_property_has_example(&plan_goal_work, "owned_surfaces");
+
+        let record_worker_event = input_schema(&tools, "record_worker_event");
+        assert_property_has_example(&record_worker_event, "assignment_id");
+        assert_property_has_example(&record_worker_event, "summary");
+        assert_property_pattern(
+            &record_worker_event,
+            "event_type",
+            r"^[A-Za-z0-9_.:-]{1,80}$",
+        );
+
+        let inspect_task_events = input_schema(&tools, "inspect_task_events");
+        assert_property_has_example(&inspect_task_events, "task_id");
+        assert_property_numeric_bounds(&inspect_task_events, "limit", 1, 200);
+    }
+
     fn assert_array_items_are_objects(
         tools: &[rmcp::model::Tool],
         tool_name: &str,
@@ -1873,5 +2197,248 @@ mod tests {
             }
             _ => {}
         }
+    }
+
+    fn assert_schema_properties_have_descriptions(schema: &Value, path: &str) {
+        match schema {
+            Value::Object(object) => {
+                if let Some(Value::Object(properties)) = object.get("properties") {
+                    for (property_name, property_schema) in properties {
+                        let property_path = format!("{path}.properties.{property_name}");
+                        let description = property_schema
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or_else(|| {
+                                panic!("{property_path} missing description: {property_schema:#}")
+                            });
+                        assert_human_description(description, &property_path);
+                    }
+                }
+                for (key, value) in object {
+                    assert_schema_properties_have_descriptions(value, &format!("{path}.{key}"));
+                }
+            }
+            Value::Array(items) => {
+                for (index, value) in items.iter().enumerate() {
+                    assert_schema_properties_have_descriptions(value, &format!("{path}[{index}]"));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn assert_human_description(description: &str, path: &str) {
+        let disallowed = [
+            "Value for ",
+            "Project root for this request or result.",
+            "Status value for this record or operation.",
+            "Human-readable summary.",
+            "Reason or rationale for this result.",
+            "Kind or category value.",
+            "Record identifier.",
+        ];
+        for prefix in disallowed {
+            assert!(
+                !description.starts_with(prefix),
+                "{path} has placeholder description: {description}"
+            );
+        }
+    }
+
+    fn assert_property_enum_values(schema: &Value, property_name: &str, expected: &[&str]) {
+        let property = property_schema(schema, property_name);
+        let mut actual = Vec::new();
+        collect_enum_values(schema, property, &mut actual);
+        actual.sort();
+        actual.dedup();
+
+        let mut expected = expected
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(
+            actual, expected,
+            "{property_name} enum values did not match in schema: {property:#}"
+        );
+    }
+
+    fn assert_property_numeric_bounds(
+        schema: &Value,
+        property_name: &str,
+        expected_minimum: i64,
+        expected_maximum: i64,
+    ) {
+        let property = property_schema(schema, property_name);
+        let mut bounds = Vec::new();
+        collect_numeric_bounds(schema, property, &mut bounds);
+        assert!(
+            bounds
+                .iter()
+                .any(|(minimum, maximum)| *minimum == Some(expected_minimum)
+                    && *maximum == Some(expected_maximum)),
+            "{property_name} missing numeric bounds {expected_minimum}..{expected_maximum}: {property:#}"
+        );
+    }
+
+    fn assert_property_has_example(schema: &Value, property_name: &str) {
+        let property = property_schema(schema, property_name);
+        let mut examples = Vec::new();
+        collect_examples(schema, property, &mut examples);
+        assert!(
+            !examples.is_empty(),
+            "{property_name} missing example in schema: {property:#}"
+        );
+    }
+
+    fn assert_property_pattern(schema: &Value, property_name: &str, expected_pattern: &str) {
+        let property = property_schema(schema, property_name);
+        let mut patterns = Vec::new();
+        collect_patterns(schema, property, &mut patterns);
+        assert!(
+            patterns.iter().any(|pattern| pattern == expected_pattern),
+            "{property_name} missing pattern {expected_pattern}: {property:#}"
+        );
+    }
+
+    fn assert_array_item_pattern(schema: &Value, property_name: &str, expected_pattern: &str) {
+        let property = property_schema(schema, property_name);
+        let Some(items) = property.get("items") else {
+            panic!("{property_name} missing items schema: {property:#}");
+        };
+        let mut patterns = Vec::new();
+        collect_patterns(schema, items, &mut patterns);
+        assert!(
+            patterns.iter().any(|pattern| pattern == expected_pattern),
+            "{property_name} items missing pattern {expected_pattern}: {property:#}"
+        );
+    }
+
+    fn collect_enum_values(root: &Value, schema: &Value, values: &mut Vec<String>) {
+        match schema {
+            Value::Object(object) => {
+                if let Some(Value::String(reference)) = object.get("$ref") {
+                    if let Some(resolved) = resolve_schema_ref(root, reference) {
+                        collect_enum_values(root, resolved, values);
+                    }
+                }
+                if let Some(Value::Array(enums)) = object.get("enum") {
+                    values.extend(enums.iter().filter_map(Value::as_str).map(str::to_string));
+                }
+                for key in ["anyOf", "oneOf", "allOf"] {
+                    if let Some(Value::Array(items)) = object.get(key) {
+                        for item in items {
+                            collect_enum_values(root, item, values);
+                        }
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    collect_enum_values(root, item, values);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_examples(root: &Value, schema: &Value, examples: &mut Vec<Value>) {
+        match schema {
+            Value::Object(object) => {
+                if let Some(Value::String(reference)) = object.get("$ref") {
+                    if let Some(resolved) = resolve_schema_ref(root, reference) {
+                        collect_examples(root, resolved, examples);
+                    }
+                }
+                if let Some(Value::Array(values)) = object.get("examples") {
+                    examples.extend(values.iter().cloned());
+                }
+                if let Some(value) = object.get("example") {
+                    examples.push(value.clone());
+                }
+                for key in ["anyOf", "oneOf", "allOf"] {
+                    if let Some(Value::Array(items)) = object.get(key) {
+                        for item in items {
+                            collect_examples(root, item, examples);
+                        }
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    collect_examples(root, item, examples);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_patterns(root: &Value, schema: &Value, patterns: &mut Vec<String>) {
+        match schema {
+            Value::Object(object) => {
+                if let Some(Value::String(reference)) = object.get("$ref") {
+                    if let Some(resolved) = resolve_schema_ref(root, reference) {
+                        collect_patterns(root, resolved, patterns);
+                    }
+                }
+                if let Some(Value::String(pattern)) = object.get("pattern") {
+                    patterns.push(pattern.to_string());
+                }
+                for key in ["anyOf", "oneOf", "allOf"] {
+                    if let Some(Value::Array(items)) = object.get(key) {
+                        for item in items {
+                            collect_patterns(root, item, patterns);
+                        }
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    collect_patterns(root, item, patterns);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_numeric_bounds(
+        root: &Value,
+        schema: &Value,
+        bounds: &mut Vec<(Option<i64>, Option<i64>)>,
+    ) {
+        match schema {
+            Value::Object(object) => {
+                if let Some(Value::String(reference)) = object.get("$ref") {
+                    if let Some(resolved) = resolve_schema_ref(root, reference) {
+                        collect_numeric_bounds(root, resolved, bounds);
+                    }
+                }
+                let minimum = object.get("minimum").and_then(Value::as_i64);
+                let maximum = object.get("maximum").and_then(Value::as_i64);
+                if minimum.is_some() || maximum.is_some() {
+                    bounds.push((minimum, maximum));
+                }
+                for key in ["anyOf", "oneOf", "allOf"] {
+                    if let Some(Value::Array(items)) = object.get(key) {
+                        for item in items {
+                            collect_numeric_bounds(root, item, bounds);
+                        }
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    collect_numeric_bounds(root, item, bounds);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn resolve_schema_ref<'a>(root: &'a Value, reference: &str) -> Option<&'a Value> {
+        reference.strip_prefix("#/").and_then(|path| {
+            path.split('/')
+                .try_fold(root, |value, part| value.get(part))
+        })
     }
 }

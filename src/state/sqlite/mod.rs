@@ -162,6 +162,12 @@ impl ProjectState for SqliteProjectState {
                     .as_deref()
                     .is_none_or(|worker| candidate.suggested_worker.as_deref() == Some(worker))
             })
+            .filter(|candidate| {
+                command
+                    .source_item_id
+                    .as_deref()
+                    .is_none_or(|item_id| candidate.item_id == item_id)
+            })
             .collect::<Vec<_>>();
         if candidates.is_empty() {
             return Err(ProjectStateError::not_found(
@@ -314,6 +320,20 @@ impl ProjectState for SqliteProjectState {
                 )));
             }
         };
+        if let Err(error) = crate::assignments::ensure_owned_surface_dirs_for(
+            &worktree.path,
+            &bundle.owned_surfaces,
+        ) {
+            self.record_handoff_failure(
+                &task.id,
+                claimant.as_str(),
+                "preparing owned-surface directories",
+                &error,
+            );
+            return Err(ProjectStateError::backend(format!(
+                "owned-surface preparation failed: {error}"
+            )));
+        }
         let storage = self.connect_storage().inspect_err(|error| {
             self.record_handoff_failure(
                 &task.id,
@@ -450,9 +470,9 @@ impl ProjectState for SqliteProjectState {
         let storage = self.connect_storage()?;
         let assignment = load_assignment(&storage.connection, &command.assignment_id)
             .map_err(map_assignment_load_error)?;
-        if assignment.status != "running" {
+        if assignment.status != "running" && assignment.status != "prepared" {
             return Err(ProjectStateError::conflict(format!(
-                "worker assignment `{}` is `{}`; record progress only after start_execution",
+                "worker assignment `{}` is `{}`; record progress only for prepared or running assignments",
                 command.assignment_id, assignment.status
             )));
         }
@@ -781,6 +801,33 @@ impl ProjectState for SqliteProjectState {
                     [("root", root.as_str()), ("max_tasks", "1")],
                 ));
             }
+        }
+
+        let backlog_items_dir = self.root.join("backlog/items");
+        let backlog_item_files = std::fs::read_dir(&backlog_items_dir)
+            .ok()
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .filter(|entry| {
+                        entry
+                            .path()
+                            .extension()
+                            .is_some_and(|extension| extension == "md")
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        if backlog_item_files > 0 {
+            return Ok(safe_action(
+                "inspect_work_queue",
+                format!(
+                    "Backlog has {} item file(s), but none are ready to dispatch yet.",
+                    backlog_item_files
+                ),
+                "Inspect queue readiness and planning requirements before creating new items.",
+                [("root", root.as_str())],
+            ));
         }
 
         Ok(safe_action(
@@ -2010,6 +2057,7 @@ mod tests {
             .dispatch_work(DispatchWorkCommand {
                 summary: None,
                 preferred_worker: None,
+                source_item_id: None,
             })
             .expect("first dispatch");
         assert_eq!(first.task.source_item_id, "PROJ-001");
@@ -2018,6 +2066,7 @@ mod tests {
             .dispatch_work(DispatchWorkCommand {
                 summary: None,
                 preferred_worker: None,
+                source_item_id: None,
             })
             .expect_err("all active items should be skipped");
 

@@ -24,19 +24,25 @@ model turns, and external worker execution.
 
 1. Inspect setup with `doctor_snapshot`, `inspect_status`, and
    `inspect_workflow_config`.
-2. Shape work with `draft_backlog_items`, `create_backlog_item`,
-   `validate_backlog`, `list_backlog`, and `inspect_backlog_inventory`.
-3. Use `inspect_work_queue` or `classify_planning_needs` to choose executable
+2. For broad user goals, call `plan_goal_work` when you need read-only
+   guidance, then call `start_goal_work` only when you are ready to create or
+   reuse tracking and optionally dispatch tasks.
+3. Shape advanced/manual work by using the host model to call
+   `create_backlog_item` directly, then `validate_backlog`, `list_backlog`,
+   and `inspect_backlog_inventory`. Use `draft_backlog_items` only when the MCP
+   client supports sampling.
+4. Use `inspect_work_queue` or `classify_planning_needs` to choose executable
    backlog work and understand direct, standard, or full planning needs.
-4. For non-trivial work, use `draft_task_plan`, `write_task_plan`,
-   `validate_task_plan`, `inspect_task_plan`, and `list_task_plans` to create a
-   committed executable plan.
-5. Ask `next_safe_action` before advancing lifecycle state.
-6. Dispatch normal worker work through `dispatch_ready_work`; it prepares
+5. For non-trivial work, create a committed executable plan with
+   `write_task_plan`, `validate_task_plan`, `inspect_task_plan`, and
+   `list_task_plans`. Use `draft_task_plan` only when MCP sampling is
+   available; otherwise the host model should write the plan directly.
+6. Ask `next_safe_action` before advancing lifecycle state.
+7. Dispatch normal worker work through `dispatch_ready_work`; it prepares
    assignments, worktrees, and bundles in the same step. Use
    `dispatch_next_work` plus `prepare_worker_handoff` only for low-level
    lifecycle control.
-7. Start, track, complete, verify, integrate, and reconcile with
+8. Start, track, complete, verify, integrate, and reconcile with
    `start_worker_task`, `record_worker_progress`, `complete_worker_task`,
    `record_verification_evidence`, `integrate_worker_result`, and
    `reconcile_project`.
@@ -54,22 +60,30 @@ straight to broad edits. Convert the goal into a controlled loop:
 
 1. Inspect the project with `doctor_snapshot`, `inspect_status`, and
    `next_safe_action`.
-2. Use `classify_workflow_fit` for broad user goals. If it recommends
-   `direct_scaffold`, let the host scaffold the first files directly, then
-   return to Platypus for follow-up backlog work.
-3. Draft a small backlog set with `draft_backlog_items`. Keep items
-   independently reviewable and executable.
-4. Persist only accepted items with `create_backlog_item`; then run
-   `validate_backlog`.
-5. Use `inspect_work_queue` and `classify_planning_needs` to determine whether
+2. Use `plan_goal_work` for broad user goals when you need read-only guidance.
+   It wraps `classify_workflow_fit` and returns concrete next-tool arguments
+   without changing project state.
+3. If it recommends `direct_scaffold`, prefer the recommended
+   `start_goal_work` arguments with `dispatch=true` so tracking and the first
+   task worktree are prepared in one mutating call. Use `dispatch=false` only
+   when direct manager-workspace edits are intentional. No Platypus scaffold
+   tool is involved: use the host's native file edits or scaffold command,
+   commit the baseline, then return to Platypus for follow-up backlog work.
+4. For manual control, create a small concrete backlog set with
+   `create_backlog_item`. Keep items independently reviewable and executable.
+5. Use `draft_backlog_items` only as optional sampling-assisted drafting; if it
+   returns skipped, create the items directly. Run `validate_backlog` after
+   backlog writes.
+6. Use `inspect_work_queue` and `classify_planning_needs` to determine whether
    the next item is direct, standard, or full.
-6. For standard or full items, create a strict task plan with
-   `draft_task_plan`, `write_task_plan`, and `validate_task_plan`.
-7. Dispatch with `dispatch_ready_work`, then run implementation in the
+7. For standard or full items, create a strict task plan with `write_task_plan`
+   and `validate_task_plan`; use `draft_task_plan` only as optional
+   sampling-assisted help.
+8. Dispatch with `dispatch_ready_work`, then run implementation in the
    assigned worktree from the returned worker assignment.
-8. Record progress, verification evidence, findings, and completion through
+9. Record progress, verification evidence, findings, and completion through
    Platypus tools.
-9. Integrate with `integrate_worker_result`, then reconcile with
+10. Integrate with `integrate_worker_result`, then reconcile with
    `reconcile_project`.
 
 The host should present this as natural assistance, not as a manual ceremony:
@@ -89,12 +103,13 @@ Use status tools before making assumptions about the repository or task queue.
 - `inspect_workflow_config` reports integration policy such as merge style and
   verification gates.
 - `list_agent_profiles` shows manager and worker roles.
-- `inspect_work_queue` combines runnable backlog candidates with planning mode
-  and task-plan readiness.
+- `inspect_work_queue` combines runnable backlog candidates with active task
+  counts, planning mode, and task-plan readiness.
 - `classify_planning_needs` explains whether runnable items need direct,
   standard, or full planning.
 - `classify_workflow_fit` decides whether a broad goal should use direct
   scaffolding first, full Platypus workflow, or a hybrid flow.
+- `plan_goal_work` converts a broad goal into read-only next-tool guidance.
 - `next_safe_action` converts the current lifecycle state into the next safe
   tool call.
 
@@ -104,9 +119,11 @@ missing state from chat context.
 
 const BACKLOG_AUTHORING_TEXT: &str = r#"# Backlog Authoring Guidance
 
-Create concise, agent-readable backlog items. Use `draft_backlog_items` for
-candidates and `create_backlog_item` for accepted work. Validate with
-`validate_backlog`, inspect runnable work with `list_backlog`, and use
+Create concise, agent-readable backlog items with `create_backlog_item`.
+`draft_backlog_items` is optional and requires MCP client sampling support;
+when it returns skipped, use the host model's own judgment and call
+`create_backlog_item` directly. Validate with `validate_backlog`, inspect
+runnable work with `list_backlog`, and use
 `inspect_backlog_inventory` when the host needs to explain closed or blocked
 items.
 
@@ -134,8 +151,9 @@ There is no manual `backlog/index.md`; hosts should compute queue state through
 `list_backlog`, `inspect_work_queue`, `inspect_status`, and `next_safe_action`.
 
 For non-trivial items, use `draft_task_plan` and `write_task_plan` to create
-`backlog/plans/<ITEM>.yaml`. Plan YAML is strict and reviewable, but still not
-runtime state.
+`backlog/plans/<ITEM>.yaml` only when sampling is available. Otherwise use the
+host model to write a concrete plan directly with `write_task_plan`. Plan YAML
+is strict and reviewable, but still not runtime state.
 
 Planning policy is deterministic: direct items can be dispatched from the
 backlog contract; standard and full items require a valid task plan first.
@@ -152,11 +170,18 @@ execution state.
    `prepare_worker_handoff`; do not run an external worker from a task id
    without an assignment.
 3. Give the bundle and worktree path to the selected worker harness.
-4. Mark execution with `start_worker_task`.
+4. After the external worker harness actually starts, record that lifecycle
+   transition with `start_worker_task` when you need an explicit running state.
+   This tool does not launch a worker.
 5. Persist safe progress with `record_worker_progress`.
 6. Inspect bounded worktree changes with `inspect_worktree_changes`.
 7. Complete with `complete_worker_task`, including terminal status, summary,
    changed files, and verification status.
+
+For same-session host-driven edits, `complete_worker_task` can finish a
+prepared assignment directly; it auto-starts prepared assignments by default.
+Set `auto_start_if_prepared=false` when strict running-only completion is
+required.
 
 Do not run worker edits in the manager workspace. Use `send_worker_guidance`
 for steering active work.

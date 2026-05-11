@@ -69,30 +69,44 @@ mechanism is verified.
 
 ## Backlog Shaping
 
-1. Use `classify_workflow_fit` for broad goals. Simple greenfield scaffolds
-   can start with the host's native scaffold command, then return to Platypus
-   after the first commit.
-2. Use `draft_backlog_items` for a deterministic first pass from a goal when
-   the classifier recommends `platypus_workflow` or `hybrid`.
-3. Persist selected work with `create_backlog_item`.
-4. Run `validate_backlog`.
-5. Use `list_backlog` to see runnable candidates.
-6. Use `inspect_backlog_inventory` when the runnable queue is empty or unclear;
+1. Use `plan_goal_work` for broad goals when the host needs read-only guidance.
+   It classifies whether the next step should be direct scaffolding, a hybrid
+   flow, or tracked Platypus workflow, and returns concrete next tool
+   arguments without changing project state.
+2. If the host wants Platypus intake in one call, use `start_goal_work`.
+   - `start_goal_work` + `dispatch=true` runs tracked dispatch/worktree flow.
+   - `start_goal_work` + `dispatch=false` creates or reuses a tracking anchor
+     and leaves baseline file edits to the host in the manager workspace. Use
+     this only when direct manager-workspace edits are intentional.
+3. Use the host model to create concrete backlog items with
+   `create_backlog_item` when the classifier recommends `platypus_workflow` or
+   `hybrid`. `draft_backlog_items` is optional and skips unless MCP sampling is
+   available.
+4. Persist selected work with `create_backlog_item`.
+5. Run `validate_backlog`.
+6. Use `list_backlog` to see runnable candidates.
+7. Use `inspect_backlog_inventory` when the runnable queue is empty or unclear;
    it explains closed items from Git trailers and blocked items from open
    dependencies without requiring hosts to read markdown directly.
-7. Use `inspect_work_queue` to combine runnable candidates, task-plan state,
-   and the recommended next tool.
+8. Use `inspect_work_queue` to combine runnable candidates, active task state,
+   task-plan state, and the recommended next tool.
 
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime
 status, task attempts, PR metadata, or closure state.
 
-When creating backlog items through tools, use the strict schema:
+When creating backlog items through tools, use the typed schema:
 
-- required fields: `title`, `goal`, `implementation_contract` or `contract`,
-  and at least one `acceptance` criterion
+- minimal input: a meaningful `goal` or `title`; Platypus derives conservative
+  defaults for missing title, goal, implementation contract, and first
+  acceptance criterion
+- rich input: explicit `title`, `goal`, `implementation_contract` or
+  `contract`, and `acceptance` criteria when the work is complex or generated
+  defaults would be too broad
 - priority values: `P0`, `P1`, `P2`
 - type values: `foundation`, `feature`, `safety`, `ux`, `test`, `docs`
+- default values when omitted: priority `P1`, type `feature`, epic `general`,
+  suggested worker `coder`
 - `suggested_worker` names a Platypus worker profile, not a host-specific
   subagent type
 
@@ -153,7 +167,8 @@ and `list_task_plans` to review committed plans.
 5. For low-level debugging only, call `dispatch_next_work` and then immediately
    `prepare_worker_handoff`; do not run a worker from a bare task id.
 6. Give the assignment bundle and worktree path to the worker harness.
-7. Mark the worker active with `start_worker_task`.
+7. Mark the worker active with `start_worker_task` when you need an explicit
+   running transition.
 
 The worker should operate in the assigned worktree, not in the manager
 workspace.
@@ -168,6 +183,14 @@ Use `record_worker_progress` for safe progress summaries. Use
 - summary
 - changed files
 - verification status
+
+For same-session host-driven edits, `complete_worker_task` can complete a
+prepared assignment directly; it auto-starts prepared assignments by default.
+Set `auto_start_if_prepared=false` when strict lifecycle enforcement is needed.
+
+When a verification command is configured in the assignment bundle, run
+`run_task_verification` after completion to execute it in the task worktree and
+persist verification run evidence.
 
 If verification did not pass, record explicit verification evidence or findings
 so reconciliation can report the remaining gap.

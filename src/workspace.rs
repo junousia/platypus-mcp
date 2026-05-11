@@ -218,6 +218,8 @@ pub fn worktree_create(
             path: canonical_worktree.display().to_string(),
             branch,
             base_ref: commit,
+            ready: true,
+            exists: true,
             created: true,
         },
     )
@@ -298,19 +300,57 @@ pub fn worktree_diff(
         Ok(status) => status,
         Err(error) => return ActionResult::failed(action, "Could not inspect worktree.", error),
     };
-    let files = parse_status_files(&status);
-    let diff = match run_git(&worktree.path, &["diff", "--stat", "--patch"]) {
-        Ok(diff) => diff,
+    let mut files = parse_status_files(&status);
+    let dirty = !files.is_empty();
+    let committed_files = match changed_files_between(&root, &worktree.base_ref, &worktree.branch) {
+        Ok(files) => files,
         Err(error) => {
             return ActionResult::failed(action, "Could not inspect worktree diff.", error)
         }
+    };
+    if !committed_files.is_empty() {
+        merge_committed_files(&mut files, &committed_files);
+    }
+    let has_committed_changes = !committed_files.is_empty();
+    let meaningful_changes = dirty || has_committed_changes;
+    let state_reason = worktree_change_reason(&worktree, dirty, has_committed_changes);
+    let mut diff_sections = Vec::new();
+    if dirty {
+        let workspace_diff = match run_git(&worktree.path, &["diff", "--stat", "--patch"]) {
+            Ok(diff) => diff,
+            Err(error) => {
+                return ActionResult::failed(action, "Could not inspect worktree diff.", error)
+            }
+        };
+        if !workspace_diff.trim().is_empty() {
+            diff_sections.push(workspace_diff);
+        }
+    }
+    if has_committed_changes {
+        let range = format!("{}..{}", worktree.base_ref, worktree.branch);
+        let committed_diff = match run_git(&root, &["diff", "--stat", "--patch", range.as_str()]) {
+            Ok(diff) => diff,
+            Err(error) => {
+                return ActionResult::failed(action, "Could not inspect worktree diff.", error)
+            }
+        };
+        if !committed_diff.trim().is_empty() {
+            diff_sections.push(committed_diff);
+        }
+    }
+    let diff = if diff_sections.is_empty() {
+        String::new()
+    } else {
+        diff_sections.join("\n\n")
     };
     let truncated = diff.ends_with("...");
     let data = WorktreeDiffData {
         root: root.display().to_string(),
         task_id: worktree.task_id,
         path: worktree.path.display().to_string(),
-        dirty: !files.is_empty(),
+        dirty,
+        meaningful_changes,
+        state_reason,
         files,
         diff,
         truncated,
@@ -477,7 +517,7 @@ pub fn integrate_worker_result(
         return ActionResult::skipped(
             action,
             format!("Task `{task_id}` is `{}`.", worktree.task_status),
-            "Complete the worker task before integrating its result.",
+            integration_prerequisite_guidance(&worktree.task_status),
         );
     }
     let verification = match latest_verification_summary(&state, &task_id) {
@@ -543,7 +583,7 @@ pub fn integrate_worker_result(
         return ActionResult::skipped(
             action,
             format!("Task `{task_id}` branch has no changes to integrate."),
-            "Inspect the task worktree before integrating.",
+            "Inspect the task worktree before integrating. Ensure edits were made in the task worktree branch, not in the manager workspace.",
         );
     }
 
@@ -659,9 +699,18 @@ pub fn integrate_worker_result(
     } else {
         (false, None)
     };
-    let next_action = cleanup_error
-        .as_ref()
-        .map(|error| format!("Worker result was integrated, but cleanup failed: {error}"));
+    let next_action = if let Some(error) = cleanup_error.as_ref() {
+        Some(format!(
+            "Worker result was integrated, but cleanup failed: {error}"
+        ))
+    } else if params.cleanup_after.unwrap_or(false) {
+        Some("Worker result was integrated and the clean worktree was removed.".to_string())
+    } else {
+        Some(
+            "Worker result was integrated. Run worktree_cleanup for the task when the worktree is no longer needed, or pass cleanup_after=true on future integrations."
+                .to_string(),
+        )
+    };
 
     ActionResult {
         action: action.to_string(),
@@ -939,6 +988,95 @@ fn integration_strategy(requested: Option<&str>, configured: &str) -> Result<Str
     }
 }
 
+fn integration_prerequisite_guidance(task_status: &str) -> &'static str {
+    match task_status {
+        "queued" => {
+            "Claim the task and run the worker lifecycle first: claim_next_task, start_worker_task, then complete_worker_task. Only completed tasks can be integrated."
+        }
+        "claimed" => {
+            "The task is claimed but not running or complete. Use start_worker_task when the external worker begins, then complete_worker_task after it writes its result. Only completed tasks can be integrated."
+        }
+        "running" => {
+            "The task is still running. Use complete_worker_task after the external worker finishes and writes its result. Only completed tasks can be integrated."
+        }
+        "failed" | "cancelled" => {
+            "This task ended without a completed worker result. Inspect task events, create a follow-up task if needed, or retry dispatch before integration."
+        }
+        _ => "Complete the worker task before integrating its result.",
+    }
+}
+
+fn worktree_change_reason(
+    worktree: &RecordedWorktree,
+    dirty: bool,
+    has_committed_changes: bool,
+) -> String {
+    if dirty {
+        return format!(
+            "Worktree has local changes for `{}` while task is `{}`.",
+            worktree.title, worktree.task_status
+        );
+    }
+    if has_committed_changes {
+        return format!(
+            "Worktree branch for task `{}` has committed changes ahead of `{}`.",
+            worktree.task_id, worktree.base_ref
+        );
+    }
+    match worktree.task_status.as_str() {
+        "queued" | "claimed" | "running" => format!(
+            "No meaningful worker changes are present yet; task `{}` is `{}` and may not have produced output.",
+            worktree.task_id, worktree.task_status
+        ),
+        "completed" => format!(
+            "No worktree changes remain for completed task `{}`; the result may already be integrated or the worker produced no file changes.",
+            worktree.task_id
+        ),
+        status => format!(
+            "No worktree changes are present while task `{}` is `{status}`.",
+            worktree.task_id
+        ),
+    }
+}
+
+fn merge_committed_files(files: &mut Vec<WorktreeDiffFile>, committed_files: &[ChangedFile]) {
+    let mut by_path = files
+        .iter()
+        .enumerate()
+        .map(|(index, file)| (file.path.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    for file in committed_files {
+        let status = normalize_changed_file_status(&file.status);
+        if let Some(index) = by_path.get(&file.path).copied() {
+            files[index].status = status;
+            continue;
+        }
+        files.push(WorktreeDiffFile {
+            status,
+            path: file.path.clone(),
+        });
+        by_path.insert(file.path.clone(), files.len() - 1);
+    }
+}
+
+fn normalize_changed_file_status(status: &str) -> String {
+    if status.starts_with('A') {
+        "A".to_string()
+    } else if status.starts_with('M') {
+        "M".to_string()
+    } else if status.starts_with('D') {
+        "D".to_string()
+    } else if status.starts_with('R') {
+        "R".to_string()
+    } else if status.starts_with('C') {
+        "C".to_string()
+    } else if status.starts_with('?') {
+        "??".to_string()
+    } else {
+        status.to_string()
+    }
+}
+
 fn in_progress_git_operation(root: &Path) -> Option<String> {
     let git_dir = git_dir(root).ok()?;
     [
@@ -1067,6 +1205,8 @@ fn existing_workspace_data(
             path: canonical.display().to_string(),
             branch: branch.clone(),
             base_ref: base_ref.clone(),
+            ready: true,
+            exists: true,
             created,
         }),
         error: None,
@@ -1368,7 +1508,8 @@ mod tests {
         events::events_replay,
         evidence::{list_evidence, record_evidence},
         models::{
-            ClaimNextTaskParams, EventsReplayParams, ListEvidenceParams, RecordEvidenceParams,
+            ClaimNextTaskParams, EventsReplayParams, IntegrateWorkerResultParams,
+            ListEvidenceParams, RecordEvidenceParams,
         },
         tasks::{create_task_record, inspect_task_events, NewTask},
     };
@@ -1471,6 +1612,7 @@ mod tests {
         let diff_data = diff.data.expect("diff data");
         assert!(matches!(diff.status, ActionStatus::Completed));
         assert!(diff_data.dirty);
+        assert!(diff_data.meaningful_changes);
         assert!(
             diff_data
                 .files
@@ -1530,6 +1672,147 @@ mod tests {
             .events
             .iter()
             .any(|event| event.event_type == "worktree_cleaned_up"));
+    }
+
+    #[test]
+    fn clean_untouched_worktree_reports_no_worker_output_yet() {
+        let project = git_project();
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Workspace task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        )
+        .data
+        .expect("worktree data");
+
+        let diff = worktree_diff(
+            project.path(),
+            WorktreeDiffParams {
+                root: None,
+                task_id: task.id,
+            },
+        );
+        let data = diff.data.expect("diff data");
+
+        assert!(matches!(diff.status, ActionStatus::Completed));
+        assert!(!data.dirty);
+        assert!(!data.meaningful_changes);
+        assert!(data.state_reason.contains("may not have produced output"));
+    }
+
+    #[test]
+    fn worktree_diff_reports_committed_changes_ahead_of_base() {
+        let project = git_project();
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Workspace task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        let created = worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        )
+        .data
+        .expect("worktree data");
+        fs::create_dir_all(Path::new(&created.path).join("backend")).expect("create backend dir");
+        fs::write(
+            Path::new(&created.path).join("backend/main.py"),
+            "from fastapi import FastAPI\napp = FastAPI()\n",
+        )
+        .expect("write backend file");
+        run_git(Path::new(&created.path), &["add", "backend/main.py"]).expect("git add");
+        run_git(
+            Path::new(&created.path),
+            &["commit", "-m", "Add backend stub"],
+        )
+        .expect("git commit");
+
+        let diff = worktree_diff(
+            project.path(),
+            WorktreeDiffParams {
+                root: None,
+                task_id: task.id,
+            },
+        );
+        let data = diff.data.expect("diff data");
+        assert!(matches!(diff.status, ActionStatus::Completed));
+        assert!(!data.dirty);
+        assert!(data.meaningful_changes);
+        assert!(data.state_reason.contains("committed changes ahead"));
+        assert!(data.files.iter().any(|file| file.path == "backend/main.py"));
+        assert!(data.diff.contains("backend/main.py"));
+    }
+
+    #[test]
+    fn integrate_claimed_task_explains_worker_lifecycle_prerequisites() {
+        let project = git_project();
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Workspace task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        )
+        .data
+        .expect("worktree data");
+        tasks::claim_next_task(
+            project.path(),
+            ClaimNextTaskParams {
+                root: None,
+                worker: None,
+                claimant: Some("runner".to_string()),
+            },
+        );
+
+        let result = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id: task.id,
+                strategy: None,
+                allow_unverified: None,
+                cleanup_after: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Skipped));
+        let next_action = result.next_action.expect("next action");
+        assert!(next_action.contains("start_worker_task"));
+        assert!(next_action.contains("complete_worker_task"));
+        assert!(next_action.contains("Only completed tasks can be integrated"));
     }
 
     #[test]

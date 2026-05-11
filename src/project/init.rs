@@ -217,7 +217,7 @@ fn gitignore_has_rule(content: &str, rule: &str) -> bool {
 
 fn project_config(project_name: &str) -> String {
     format!(
-        "project:\n  name: {}\nbacklog:\n  id_prefix: PROJ\n  items: backlog/items\n  epics: backlog/epics\nworkflow:\n  integration:\n    merge_style: merge_commit\n    require_clean_manager_workspace: true\n    require_verification_evidence: false\n",
+        "project:\n  name: {}\nbacklog:\n  id_prefix: PROJ\n  items: backlog/items\n  epics: backlog/epics\nworkflow:\n  integration:\n    merge_style: merge_commit\n    require_clean_manager_workspace: true\n    require_verification_evidence: false\n  dispatch:\n    auto_commit_artifacts_default: false\n",
         yaml_string(project_name)
     )
 }
@@ -234,12 +234,14 @@ worktrees before integration.
 
 1. Inspect setup with `doctor_snapshot`, `inspect_status`, and
    `next_safe_action`.
-2. Turn goals into declarative backlog items with `draft_backlog_items`,
-   `create_backlog_item`, and `validate_backlog`.
+2. Turn goals into declarative backlog items with the host model and
+   `create_backlog_item`, then `validate_backlog`. Use `draft_backlog_items`
+   only when the MCP client supports sampling.
 3. Inspect the queue with `inspect_work_queue` and
    `classify_planning_needs`.
-4. For standard or full work, create a strict task plan with
-   `draft_task_plan`, `write_task_plan`, and `validate_task_plan`.
+4. For standard or full work, create a strict task plan with `write_task_plan`
+   and `validate_task_plan`; use `draft_task_plan` only when MCP sampling is
+   available.
 5. Dispatch and prepare work with `dispatch_next_work` and
    `prepare_worker_handoff`.
 6. Run implementation in the assigned worktree, not in the manager workspace.
@@ -268,12 +270,11 @@ Reviewable task plans for non-trivial items live in `backlog/plans/`.
 
 Use the Platypus MCP tools to keep planning reproducible:
 
-- `draft_backlog_items` turns a product goal into candidate work.
 - `create_backlog_item` writes accepted backlog items.
 - `validate_backlog` checks item and epic schema.
 - `inspect_work_queue` shows runnable items and task-plan requirements.
-- `draft_task_plan`, `write_task_plan`, and `validate_task_plan` make
-  non-trivial work executable.
+- `write_task_plan` and `validate_task_plan` make non-trivial work executable;
+  `draft_task_plan` is optional sampling-assisted help.
 - `next_safe_action` computes the next lifecycle step from current state.
 
 Do not manually maintain queue indexes or runtime status in markdown. Queue
@@ -302,12 +303,13 @@ file edits or informal task tracking.
 ## Default Flow
 
 1. Inspect first: `doctor_snapshot`, `inspect_status`, and `next_safe_action`.
-2. Convert user goals into backlog candidates with `draft_backlog_items`.
-3. Persist approved work with `create_backlog_item` and validate with
-   `validate_backlog`.
+2. Convert user goals into concrete backlog items with the host model and
+   `create_backlog_item`.
+3. Validate persisted work with `validate_backlog`.
 4. Use `inspect_work_queue` and `classify_planning_needs` before dispatch.
 5. For standard or full work, create and validate `backlog/plans/<ITEM>.yaml`
-   with `draft_task_plan`, `write_task_plan`, and `validate_task_plan`.
+   with `write_task_plan` and `validate_task_plan`; use `draft_task_plan` only
+   when MCP sampling is available.
 6. Dispatch through `dispatch_next_work` and prepare worker context with
    `prepare_worker_handoff`.
 7. Implement inside the assigned worktree, record progress and evidence, then
@@ -335,7 +337,7 @@ fn item_template() -> String {
 }
 
 fn plan_template() -> String {
-    "item_id: PROJ-000\nversion: 1\nmode: standard\nrequirements:\n  - id: R1\n    text: Describe a required outcome.\ndesign:\n  summary: Describe the implementation approach.\n  owned_surfaces:\n    - src/example.rs\n  notes: null\ntasks:\n  - id: PROJ-000-T01\n    title: Implement the first task\n    goal: Deliver one executable implementation slice.\n    requirement_refs:\n      - R1\n    depends_on: []\n    owned_surfaces:\n      - src/example.rs\n    suggested_worker: coder\n    verification:\n      - make check\n    acceptance:\n      - The task is complete and verified.\n    notes: null\n".to_string()
+    "item_id: PROJ-000\nversion: 1\nmode: standard\nrequirements:\n  - id: R1\n    text: Describe a required outcome.\ndesign:\n  summary: Describe the implementation approach.\n  owned_surfaces:\n    - src/example.rs\n  notes: null\ntasks:\n  - id: PROJ-000-T001\n    title: Implement the first task\n    goal: Deliver one executable implementation slice.\n    requirement_refs:\n      - R1\n    depends_on: []\n    owned_surfaces:\n      - src/example.rs\n    suggested_worker: coder\n    verification:\n      - make check\n    acceptance:\n      - The task is complete and verified.\n    notes: null\n".to_string()
 }
 
 fn epic_template() -> String {

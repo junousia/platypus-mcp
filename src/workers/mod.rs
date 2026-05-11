@@ -3,14 +3,15 @@ pub mod codex;
 
 use serde_json::Value;
 use std::{
-    io::{ErrorKind, Write},
+    io::{ErrorKind, Read, Write},
     path::Path,
     process::{Command, Stdio},
-    thread,
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
 pub(crate) const HARNESS_TIMEOUT: Duration = Duration::from_secs(120);
+const HARNESS_CAPTURE_LIMIT: usize = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct WorkerRequest {
@@ -68,6 +69,7 @@ pub trait WorkerAdapter {
 
 pub(crate) struct HarnessOutput {
     pub success: bool,
+    pub exit_code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
 }
@@ -88,9 +90,16 @@ pub(crate) fn run_harness_process(
         .spawn()
         .map_err(|error| format!("failed to start worker harness: {error}"))?;
 
+    let stdout_handle = child.stdout.take().map(spawn_output_reader);
+    let stderr_handle = child.stderr.take().map(spawn_output_reader);
+
     if let Some(mut child_stdin) = child.stdin.take() {
         if let Err(error) = child_stdin.write_all(stdin.as_bytes()) {
             if error.kind() != ErrorKind::BrokenPipe {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = join_output(stdout_handle);
+                let _ = join_output(stderr_handle);
                 return Err(format!("failed to write worker brief: {error}"));
             }
         }
@@ -99,27 +108,66 @@ pub(crate) fn run_harness_process(
     let started = Instant::now();
     loop {
         match child.try_wait() {
-            Ok(Some(_status)) => {
-                let output = child
-                    .wait_with_output()
-                    .map_err(|error| format!("failed to collect worker output: {error}"))?;
+            Ok(Some(status)) => {
+                let stdout = join_output(stdout_handle);
+                let stderr = join_output(stderr_handle);
                 return Ok(HarnessOutput {
-                    success: output.status.success(),
-                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                    success: status.success(),
+                    exit_code: status.code(),
+                    stdout,
+                    stderr,
                 });
             }
             Ok(None) => {
                 if started.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();
+                    let _ = join_output(stdout_handle);
+                    let _ = join_output(stderr_handle);
                     return Err("worker harness timed out".to_string());
                 }
                 thread::sleep(Duration::from_millis(20));
             }
-            Err(error) => return Err(format!("failed to poll worker harness: {error}")),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = join_output(stdout_handle);
+                let _ = join_output(stderr_handle);
+                return Err(format!("failed to poll worker harness: {error}"));
+            }
         }
     }
+}
+
+fn spawn_output_reader<R>(mut reader: R) -> JoinHandle<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut captured = Vec::new();
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(bytes_read) => {
+                    let remaining = HARNESS_CAPTURE_LIMIT.saturating_sub(captured.len());
+                    if remaining > 0 {
+                        let to_capture = bytes_read.min(remaining);
+                        captured.extend_from_slice(&buffer[..to_capture]);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        captured
+    })
+}
+
+fn join_output(handle: Option<JoinHandle<Vec<u8>>>) -> String {
+    handle
+        .and_then(|handle| handle.join().ok())
+        .map(|output| String::from_utf8_lossy(&output).into_owned())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +229,8 @@ impl WorkerAdapter for FakeWorkerAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{path::Path, time::Duration};
+    use tempfile::TempDir;
 
     #[test]
     fn fake_adapter_emits_event_and_returns_result() {
@@ -200,5 +250,23 @@ mod tests {
         assert_eq!(result.status, WorkerExitStatus::Completed);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, "worker_message");
+    }
+
+    #[test]
+    fn run_harness_process_drains_large_output_while_running() {
+        let project = TempDir::new().expect("temp dir");
+        let script = "i=0; while [ \"$i\" -lt 20000 ]; do printf 1234567890; i=$((i + 1)); done";
+        let output = run_harness_process(
+            Path::new("sh"),
+            &["-c".to_string(), script.to_string()],
+            project.path().to_str().expect("utf8 path"),
+            "",
+            Duration::from_secs(5),
+        )
+        .expect("harness output");
+
+        assert!(output.success);
+        assert_eq!(output.stdout.len(), 200_000);
+        assert!(output.stderr.is_empty());
     }
 }

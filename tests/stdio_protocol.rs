@@ -1,15 +1,18 @@
 use rmcp::{
     model::{
-        CallToolRequestParams, GetPromptRequestParams, JsonObject, PromptMessageContent,
-        ReadResourceRequestParams, ResourceContents,
+        CallToolRequestParams, ClientCapabilities, ClientInfo, CreateMessageRequestParams,
+        CreateMessageResult, GetPromptRequestParams, JsonObject, PromptMessageContent,
+        ReadResourceRequestParams, ResourceContents, SamplingMessage,
     },
+    service::RequestContext,
     transport::TokioChildProcess,
-    ServiceExt,
+    ClientHandler, ErrorData as McpError, RoleClient, ServiceExt,
 };
 use serde_json::{json, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -31,6 +34,8 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"inspect_work_queue"));
     assert!(tool_names.contains(&"classify_planning_needs"));
     assert!(tool_names.contains(&"classify_workflow_fit"));
+    assert!(tool_names.contains(&"plan_goal_work"));
+    assert!(tool_names.contains(&"start_goal_work"));
     assert!(tool_names.contains(&"record_finding"));
     assert!(tool_names.contains(&"draft_external_backlog_items"));
     assert!(tool_names.contains(&"import_github_issues"));
@@ -60,6 +65,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"record_worker_progress"));
     assert!(tool_names.contains(&"complete_worker_execution"));
     assert!(tool_names.contains(&"complete_worker_task"));
+    assert!(tool_names.contains(&"run_task_verification"));
     assert!(tool_names.contains(&"runner_prepare_next"));
     assert!(tool_names.contains(&"approval_list"));
     assert!(tool_names.contains(&"approval_respond"));
@@ -99,6 +105,66 @@ async fn stdio_server_calls_structured_ping_tool() -> anyhow::Result<()> {
     assert_eq!(response["action"], "ping");
     assert_eq!(response["status"], "completed");
     assert_eq!(response["data"]["echo"], "hello");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_skips_backlog_drafting_without_sampling() -> anyhow::Result<()> {
+    let client = start_client(None).await?;
+
+    let drafted = call_tool_json(
+        &client,
+        "draft_backlog_items",
+        json!({ "goal": "Build a FastAPI and React app with authentication" }),
+    )
+    .await?;
+
+    assert_stage_status("draft_backlog_items", &drafted, "skipped");
+    assert_eq!(drafted["data"]["drafts"].as_array().unwrap().len(), 0);
+    assert!(drafted["next_action"]
+        .as_str()
+        .unwrap_or("")
+        .contains("create_backlog_item"));
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_samples_backlog_drafts_when_client_supports_sampling() -> anyhow::Result<()> {
+    let client = start_sampling_client(
+        None,
+        r#"{
+          "drafts": [
+            {
+              "candidate_id": "draft-1",
+              "title": "Scaffold FastAPI authentication backend",
+              "objective": "Create a concrete backend auth foundation.",
+              "type": "foundation",
+              "area": "backend",
+              "owned_surfaces": ["backend/"],
+              "suggested_worker": "coder",
+              "verification_command": ["make check"]
+            }
+          ]
+        }"#,
+    )
+    .await?;
+
+    let drafted = call_tool_json(
+        &client,
+        "draft_backlog_items",
+        json!({ "goal": "Build a FastAPI and React app with authentication" }),
+    )
+    .await?;
+
+    assert_stage_status("draft_backlog_items", &drafted, "completed");
+    assert_eq!(
+        drafted["data"]["drafts"][0]["title"],
+        "Scaffold FastAPI authentication backend"
+    );
 
     client.cancel().await?;
     Ok(())
@@ -296,22 +362,24 @@ async fn stdio_server_calls_project_doctor_with_configured_root() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn stdio_server_drafts_writes_and_validates_task_plan() -> anyhow::Result<()> {
+async fn stdio_server_skips_draft_then_writes_and_validates_task_plan() -> anyhow::Result<()> {
     let project = assignment_project_fixture();
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
 
     let drafted =
         call_tool_json(&client, "draft_task_plan", json!({ "item_id": "PROJ-001" })).await?;
     assert_stage_status("draft_task_plan", &drafted, "completed");
-    assert_eq!(drafted["data"]["plan"]["item_id"], "PROJ-001");
-    assert_eq!(drafted["data"]["plan"]["tasks"][0]["id"], "PROJ-001-T01");
+    assert!(drafted["next_action"]
+        .as_str()
+        .unwrap_or("")
+        .contains("write_task_plan"));
 
     let written = call_tool_json(
         &client,
         "write_task_plan",
         json!({
             "item_id": "PROJ-001",
-            "plan": drafted["data"]["plan"].clone()
+            "plan": task_plan_json()
         }),
     )
     .await?;
@@ -347,6 +415,27 @@ async fn stdio_server_drafts_writes_and_validates_task_plan() -> anyhow::Result<
 }
 
 #[tokio::test]
+async fn stdio_server_samples_task_plan_when_client_supports_sampling() -> anyhow::Result<()> {
+    let project = assignment_project_fixture();
+    let sampled = json!({ "plan": task_plan_json() }).to_string();
+    let client =
+        start_sampling_client(Some(project.path().to_string_lossy().as_ref()), &sampled).await?;
+
+    let drafted =
+        call_tool_json(&client, "draft_task_plan", json!({ "item_id": "PROJ-001" })).await?;
+
+    assert_stage_status("draft_task_plan", &drafted, "completed");
+    assert_eq!(drafted["data"]["plan"]["item_id"], "PROJ-001");
+    assert_eq!(
+        drafted["data"]["plan"]["tasks"][0]["verification"][0],
+        "make check"
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_inspects_work_queue_with_task_plan_state() -> anyhow::Result<()> {
     let project = assignment_project_fixture();
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
@@ -366,14 +455,12 @@ async fn stdio_server_inspects_work_queue_with_task_plan_state() -> anyhow::Resu
     assert_eq!(missing["data"]["items"][0]["plan"]["status"], "missing");
     assert_eq!(missing["data"]["items"][0]["ready_to_dispatch"], false);
 
-    let drafted =
-        call_tool_json(&client, "draft_task_plan", json!({ "item_id": "PROJ-001" })).await?;
     let written = call_tool_json(
         &client,
         "write_task_plan",
         json!({
             "item_id": "PROJ-001",
-            "plan": drafted["data"]["plan"].clone()
+            "plan": task_plan_json()
         }),
     )
     .await?;
@@ -420,6 +507,80 @@ async fn stdio_server_classifies_planning_needs() -> anyhow::Result<()> {
         classified["data"]["classifications"][0]["required_artifact"],
         "backlog/plans/PROJ-001.yaml"
     );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_plans_goal_work_without_mutating_project() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let result = call_tool_json(
+        &client,
+        "plan_goal_work",
+        json!({ "goal": "create a simple web app" }),
+    )
+    .await?;
+
+    assert_stage_status("plan_goal_work", &result, "completed");
+    assert_eq!(result["data"]["recommended_mode"], "direct_scaffold");
+    assert_eq!(result["data"]["recommended_tool"], "start_goal_work");
+    assert_eq!(
+        result["data"]["recommended_arguments"]["dispatch"],
+        serde_json::Value::Bool(true)
+    );
+    assert!(!project.path().join("platy.yaml").exists());
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_starts_goal_work_with_direct_scaffold_guidance() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let result = call_tool_json(
+        &client,
+        "start_goal_work",
+        json!({ "goal": "create a simple web app" }),
+    )
+    .await?;
+
+    assert_stage_status("start_goal_work", &result, "completed");
+    assert_eq!(result["data"]["recommended_mode"], "direct_scaffold");
+    assert_eq!(result["data"]["created_items"].as_array().unwrap().len(), 1);
+    assert_eq!(result["data"]["created_item_id"], "PROJ-001");
+    assert!(result["data"]["next_action"]
+        .as_str()
+        .expect("next action")
+        .to_ascii_lowercase()
+        .contains("scaffold"));
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_rejects_removed_scaffold_in_place_flag() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let result = call_tool_json(
+        &client,
+        "start_goal_work",
+        json!({ "goal": "create a simple web app", "scaffold_in_place": true }),
+    )
+    .await?;
+
+    assert_stage_status("start_goal_work", &result, "failed");
+    assert!(result["error"]
+        .as_str()
+        .expect("error")
+        .contains("plan_goal_work"));
+    assert!(!project.path().join("platy.yaml").exists());
 
     client.cancel().await?;
     Ok(())
@@ -1745,7 +1906,7 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
     assert_eq!(progress["status"], "completed");
     assert_eq!(progress["action"], "record_worker_progress");
 
-    let rejected_completion = client
+    let completed_without_verification = client
         .call_tool(CallToolRequestParams {
             meta: None,
             name: "complete_worker_task".into(),
@@ -1758,38 +1919,27 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
             task: None,
         })
         .await?;
-    let rejected_completion = rejected_completion
+    let completed_without_verification = completed_without_verification
         .structured_content
-        .expect("rejected completion content");
-    assert_eq!(rejected_completion["status"], "failed");
-    assert_eq!(rejected_completion["action"], "complete_worker_task");
-    assert!(rejected_completion["error"]
-        .as_str()
-        .expect("error")
-        .contains("verification_status is required"));
+        .expect("completed content");
+    assert_eq!(completed_without_verification["status"], "completed");
+    assert_eq!(
+        completed_without_verification["action"],
+        "complete_worker_task"
+    );
+    assert_eq!(
+        completed_without_verification["data"]["assignment"]["verification_status"],
+        "not_run"
+    );
 
-    let completed = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "complete_worker_task".into(),
-            arguments: Some(json_args(json!({
-                "assignment_id": assignment_id,
-                "status": "completed",
-                "summary": "README updated.",
-                "changed_files": ["README.md"],
-                "verification_status": "not_run"
-            }))),
-            task: None,
-        })
-        .await?;
-    let completed = completed.structured_content.expect("completed content");
-    assert_eq!(completed["status"], "completed");
-    assert_eq!(completed["action"], "complete_worker_task");
-    assert_eq!(completed["data"]["assignment"]["status"], "completed");
-    assert!(completed["next_action"]
+    assert_eq!(
+        completed_without_verification["data"]["assignment"]["status"],
+        "completed"
+    );
+    assert!(completed_without_verification["next_action"]
         .as_str()
         .expect("next action")
-        .contains("record_verification_evidence"));
+        .contains("run_task_verification"));
 
     let integration_guidance = client
         .call_tool(CallToolRequestParams {
@@ -2122,6 +2272,46 @@ async fn start_client(
     Ok(().serve(transport).await?)
 }
 
+#[derive(Clone)]
+struct SamplingClient {
+    response: Arc<String>,
+}
+
+impl ClientHandler for SamplingClient {
+    fn get_info(&self) -> ClientInfo {
+        let mut info = ClientInfo::default();
+        info.capabilities = ClientCapabilities::builder().enable_sampling().build();
+        info
+    }
+
+    async fn create_message(
+        &self,
+        _params: CreateMessageRequestParams,
+        _context: RequestContext<RoleClient>,
+    ) -> Result<CreateMessageResult, McpError> {
+        Ok(CreateMessageResult {
+            message: SamplingMessage::assistant_text(self.response.as_ref().clone()),
+            model: "test-sampling-model".to_string(),
+            stop_reason: Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()),
+        })
+    }
+}
+
+async fn start_sampling_client(
+    project_root: Option<&str>,
+    response: &str,
+) -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleClient, SamplingClient>> {
+    let mut command = Command::new(server_binary());
+    if let Some(root) = project_root {
+        command.env("PLATYPUS_MCP_ROOT", root);
+    }
+    let transport = TokioChildProcess::new(command)?;
+    let handler = SamplingClient {
+        response: Arc::new(response.to_string()),
+    };
+    Ok(handler.serve(transport).await?)
+}
+
 fn server_binary() -> PathBuf {
     let mut path = std::env::current_exe().expect("current test executable");
     path.pop();
@@ -2136,8 +2326,38 @@ fn json_args(value: Value) -> JsonObject {
     value.as_object().expect("JSON object").clone()
 }
 
+fn task_plan_json() -> Value {
+    json!({
+        "item_id": "PROJ-001",
+        "version": 1,
+        "mode": "standard",
+        "requirements": [
+            { "id": "R1", "text": "Deliver the backlog item." }
+        ],
+        "design": {
+            "summary": "Implement a focused assignment fixture slice.",
+            "owned_surfaces": ["src/lib.rs"],
+            "notes": null
+        },
+        "tasks": [
+            {
+                "id": "PROJ-001-T001",
+                "title": "Implement assignment fixture",
+                "goal": "Complete the assignment fixture behavior.",
+                "requirement_refs": ["R1"],
+                "depends_on": [],
+                "owned_surfaces": ["src/lib.rs"],
+                "suggested_worker": "coder",
+                "verification": ["make check"],
+                "acceptance": ["Backlog item acceptance is satisfied."],
+                "notes": null
+            }
+        ]
+    })
+}
+
 async fn call_tool_json(
-    client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
+    client: &rmcp::service::RunningService<rmcp::RoleClient, impl ClientHandler>,
     name: &str,
     arguments: Value,
 ) -> anyhow::Result<Value> {

@@ -2,7 +2,7 @@ use crate::{
     models::{
         ActionResult, AgentProfile, AgentProfileData, AgentProfilesData, AgentProfilesParams,
         ConfigureAgentProfileParams, WorkflowConfigData, WorkflowConfigParams,
-        WorkflowIntegrationConfig,
+        WorkflowDispatchConfig, WorkflowIntegrationConfig,
     },
     storage,
 };
@@ -55,6 +55,8 @@ struct AgentProfileConfig {
 struct WorkflowConfig {
     #[serde(default)]
     integration: WorkflowIntegrationConfigFile,
+    #[serde(default)]
+    dispatch: WorkflowDispatchConfigFile,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -74,22 +76,29 @@ impl Default for WorkflowIntegrationConfigFile {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct WorkflowDispatchConfigFile {
+    auto_commit_artifacts_default: Option<bool>,
+}
+
+impl Default for WorkflowDispatchConfigFile {
+    fn default() -> Self {
+        Self {
+            auto_commit_artifacts_default: Some(false),
+        }
+    }
+}
+
 pub fn list_agent_profiles(
     default_root: &Path,
     params: AgentProfilesParams,
 ) -> ActionResult<AgentProfilesData> {
     let action = "list_agent_profiles";
-    let storage = match storage::open(default_root, params.root.as_deref()) {
-        Ok(storage) => storage,
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not open project config.",
-                error.to_string(),
-            )
-        }
+    let root = match crate::project::paths::resolve_root(default_root, params.root.as_deref()) {
+        Ok(root) => root,
+        Err(error) => return ActionResult::failed(action, "Could not open project config.", error),
     };
-    let config = match read_config(&storage.root) {
+    let config = match read_config(&root) {
         Ok(config) => config,
         Err(error) => return ActionResult::failed(action, "Could not read project config.", error),
     };
@@ -101,7 +110,7 @@ pub fn list_agent_profiles(
         .collect::<Vec<_>>();
     let returned = profiles.len();
     let data = AgentProfilesData {
-        root: storage.root.display().to_string(),
+        root: root.display().to_string(),
         profiles,
         returned,
     };
@@ -127,17 +136,32 @@ pub fn inspect_workflow_config(
             )
         }
     };
-    match effective_workflow_config(&storage.root) {
-        Ok(integration) => ActionResult::completed(
-            action,
-            "Inspected workflow integration config.",
-            WorkflowConfigData {
-                root: storage.root.display().to_string(),
-                integration,
-            },
-        ),
-        Err(error) => ActionResult::failed(action, "Could not inspect workflow config.", error),
-    }
+    let config = match read_config(&storage.root) {
+        Ok(config) => config,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect workflow config.", error);
+        }
+    };
+    let integration = match effective_integration_config(&config.workflow.integration) {
+        Ok(integration) => integration,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect workflow config.", error);
+        }
+    };
+    ActionResult::completed(
+        action,
+        "Inspected workflow integration config.",
+        WorkflowConfigData {
+            root: storage.root.display().to_string(),
+            integration,
+            dispatch: effective_dispatch_config(&config.workflow.dispatch),
+        },
+    )
+}
+
+pub fn effective_dispatch_defaults(root: &Path) -> Result<WorkflowDispatchConfig, String> {
+    let config = read_config(root)?;
+    Ok(effective_dispatch_config(&config.workflow.dispatch))
 }
 
 pub fn effective_workflow_config(root: &Path) -> Result<WorkflowIntegrationConfig, String> {
@@ -232,6 +256,12 @@ fn effective_integration_config(
         require_clean_manager_workspace: config.require_clean_manager_workspace.unwrap_or(true),
         require_verification_evidence: config.require_verification_evidence.unwrap_or(false),
     })
+}
+
+fn effective_dispatch_config(config: &WorkflowDispatchConfigFile) -> WorkflowDispatchConfig {
+    WorkflowDispatchConfig {
+        auto_commit_artifacts_default: config.auto_commit_artifacts_default.unwrap_or(false),
+    }
 }
 
 fn read_config(root: &Path) -> Result<ProjectConfig, String> {
@@ -425,6 +455,28 @@ mod tests {
     }
 
     #[test]
+    fn list_agent_profiles_reads_config_without_opening_state_database() {
+        let project = TempDir::new().expect("temp dir");
+        fs::write(
+            project.path().join("platy.yaml"),
+            r#"agents:
+  profiles:
+    coder:
+      role: worker
+      harness: fake
+      executable: cargo
+"#,
+        )
+        .expect("config");
+
+        let listed = list_agent_profiles(project.path(), AgentProfilesParams { root: None });
+        let data = listed.data.expect("profiles");
+
+        assert_eq!(data.returned, 1);
+        assert!(!project.path().join(".platy/platypus.sqlite3").exists());
+    }
+
+    #[test]
     fn inspects_default_workflow_integration_config() {
         let project = TempDir::new().expect("temp dir");
 
@@ -438,6 +490,7 @@ mod tests {
         assert_eq!(data.integration.merge_style, "merge_commit");
         assert!(data.integration.require_clean_manager_workspace);
         assert!(!data.integration.require_verification_evidence);
+        assert!(!data.dispatch.auto_commit_artifacts_default);
     }
 
     #[test]
