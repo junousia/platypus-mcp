@@ -79,10 +79,11 @@ mechanism is verified.
      and leaves baseline file edits to the host in the manager workspace. Use
      this only when direct manager-workspace edits are intentional.
 3. Use the host model to create concrete backlog items with
-   `create_backlog_item` when the classifier recommends `platypus_workflow` or
-   `hybrid`. `draft_backlog_items` is optional and skips unless MCP sampling is
-   available.
-4. Persist selected work with `create_backlog_item`.
+   `create_backlog_item` or `create_backlog_items` when the classifier
+   recommends `platypus_workflow` or `hybrid`. `draft_backlog_items` is
+   optional and skips unless MCP sampling is available.
+4. Persist selected work with `create_backlog_items` when related items should
+   be created atomically, or `create_backlog_item` for a single item.
 5. Run `validate_backlog`.
 6. Use `list_backlog` to see runnable candidates.
 7. Use `inspect_backlog_inventory` when the runnable queue is empty or unclear;
@@ -114,6 +115,9 @@ When creating backlog items through tools, use the typed schema:
   explicitly asks for a file edit
 - use `list_epics` before assigning a non-default epic, and `create_epic` when
   a new grouping is needed
+- use `client_key` plus `depends_on_keys` in `create_backlog_items` for
+  dependencies between newly created items; the tool resolves those keys to
+  concrete backlog IDs before writing files
 
 Backlog items may include `external_refs` for intake and reporting surfaces
 such as GitHub, Linear, Jira, GitLab, support tickets, specs, or local design

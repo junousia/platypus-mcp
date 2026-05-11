@@ -9,7 +9,7 @@ mod status;
 mod types;
 mod validate;
 
-pub use create::create_backlog_item;
+pub use create::{create_backlog_item, create_backlog_items};
 pub use draft::{
     draft_backlog_items, draft_backlog_items_from_sample, draft_backlog_items_sampling_prompt,
 };
@@ -81,9 +81,10 @@ pub(crate) fn backlog_item_snapshot(
 mod tests {
     use super::*;
     use crate::models::{
-        ActionStatus, CreateBacklogItemParams, CreateEpicParams, DraftBacklogItemsParams,
-        PlannedTask, RootParams, TaskPlanDesign, TaskPlanFile, TaskPlanItemParams,
-        TaskPlanQueryParams, TaskPlanRequirement, WriteTaskPlanParams,
+        ActionStatus, CreateBacklogItemParams, CreateBacklogItemsEntry, CreateBacklogItemsParams,
+        CreateEpicParams, DraftBacklogItemsParams, PlannedTask, RootParams, TaskPlanDesign,
+        TaskPlanFile, TaskPlanItemParams, TaskPlanQueryParams, TaskPlanRequirement,
+        WriteTaskPlanParams,
     };
     use std::{fs, path::Path, process::Command};
     use tempfile::TempDir;
@@ -827,6 +828,248 @@ mod tests {
             .contains("init_project"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn create_backlog_item_rejects_preexisting_symlink_target() {
+        let temp = project_fixture();
+        let outside = TempDir::new().expect("outside temp dir");
+        let outside_target = outside.path().join("outside.md");
+        std::os::unix::fs::symlink(
+            &outside_target,
+            temp.path().join("backlog/items/PROJ-001.md"),
+        )
+        .expect("symlink");
+
+        let result = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-001".to_string()),
+                id_prefix: None,
+                title: "Symlink target".to_string(),
+                priority: Some("P1".to_string()),
+                item_type: Some("feature".to_string()),
+                area: Some("general".to_string()),
+                epic: Some("general".to_string()),
+                depends_on: Vec::new(),
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: "Goal.".to_string(),
+                implementation_contract: Some("Contract.".to_string()),
+                contract: None,
+                acceptance: vec!["Done.".to_string()],
+                notes: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result.error.as_deref().unwrap_or("").contains("symlink"));
+        assert!(!outside_target.exists());
+    }
+
+    #[test]
+    fn create_backlog_items_creates_chain_atomically() {
+        let temp = project_fixture();
+
+        let result = create_backlog_items(
+            temp.path(),
+            CreateBacklogItemsParams {
+                root: Some(root_arg(temp.path())),
+                id_prefix: Some("WEB".to_string()),
+                items: vec![
+                    batch_entry("foundation", None, "Shape web foundation", vec![]),
+                    batch_entry(
+                        "implementation",
+                        None,
+                        "Implement web foundation",
+                        vec!["foundation".to_string()],
+                    ),
+                ],
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let data = result.data.expect("batch data");
+        assert_eq!(data.created, 2);
+        assert_eq!(data.items[0].client_key.as_deref(), Some("foundation"));
+        assert_eq!(data.items[0].item_id, "WEB-001");
+        assert_eq!(data.items[1].item_id, "WEB-002");
+        assert_eq!(data.items[1].depends_on, vec!["WEB-001"]);
+        assert!(temp.path().join("backlog/items/WEB-001.md").is_file());
+        assert!(temp.path().join("backlog/items/WEB-002.md").is_file());
+
+        let validation = validate_backlog(temp.path(), Some(root_arg(temp.path()).as_str()), true);
+        assert!(matches!(validation.status, ActionStatus::Completed));
+    }
+
+    #[test]
+    fn create_backlog_items_supports_explicit_and_auto_ids() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Existing", "P1", &[]);
+
+        let result = create_backlog_items(
+            temp.path(),
+            CreateBacklogItemsParams {
+                root: Some(root_arg(temp.path())),
+                id_prefix: None,
+                items: vec![
+                    batch_entry("explicit", Some("PROJ-010"), "Explicit item", vec![]),
+                    batch_entry("auto", None, "Auto item", vec!["explicit".to_string()]),
+                ],
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let data = result.data.expect("batch data");
+        assert_eq!(data.items[0].item_id, "PROJ-010");
+        assert_eq!(data.items[1].item_id, "PROJ-011");
+        assert_eq!(data.items[1].depends_on, vec!["PROJ-010"]);
+    }
+
+    #[test]
+    fn create_backlog_items_rolls_back_unknown_epic() {
+        let temp = project_fixture();
+
+        let result = create_backlog_items(
+            temp.path(),
+            CreateBacklogItemsParams {
+                root: Some(root_arg(temp.path())),
+                id_prefix: None,
+                items: vec![
+                    batch_entry("ok", None, "Would be valid", vec![]),
+                    CreateBacklogItemsEntry {
+                        epic: Some("missing".to_string()),
+                        ..batch_entry("bad", None, "Bad epic", vec![])
+                    },
+                ],
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result.error.as_deref().unwrap_or("").contains("item[1]"));
+        assert!(result.error.as_deref().unwrap_or("").contains("bad"));
+        assert!(!temp.path().join("backlog/items/PROJ-001.md").exists());
+        assert!(!temp.path().join("backlog/items/PROJ-002.md").exists());
+    }
+
+    #[test]
+    fn create_backlog_items_rolls_back_duplicate_id() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Existing", "P1", &[]);
+
+        let result = create_backlog_items(
+            temp.path(),
+            CreateBacklogItemsParams {
+                root: Some(root_arg(temp.path())),
+                id_prefix: None,
+                items: vec![
+                    batch_entry("ok", Some("PROJ-002"), "Would be valid", vec![]),
+                    batch_entry("duplicate", Some("PROJ-001"), "Duplicate", vec![]),
+                ],
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("duplicate backlog id `PROJ-001`"));
+        assert!(!temp.path().join("backlog/items/PROJ-002.md").exists());
+    }
+
+    #[test]
+    fn create_backlog_items_rejects_invalid_dependency_key_without_writes() {
+        let temp = project_fixture();
+
+        let result = create_backlog_items(
+            temp.path(),
+            CreateBacklogItemsParams {
+                root: Some(root_arg(temp.path())),
+                id_prefix: None,
+                items: vec![batch_entry(
+                    "implementation",
+                    None,
+                    "Implement web foundation",
+                    vec!["missing-key".to_string()],
+                )],
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("unknown dependency client_key `missing-key`"));
+        assert!(!temp.path().join("backlog/items/PROJ-001.md").exists());
+    }
+
+    #[test]
+    fn create_backlog_items_rejects_dependency_key_cycles_without_writes() {
+        let temp = project_fixture();
+
+        let result = create_backlog_items(
+            temp.path(),
+            CreateBacklogItemsParams {
+                root: Some(root_arg(temp.path())),
+                id_prefix: None,
+                items: vec![
+                    batch_entry(
+                        "shape",
+                        None,
+                        "Shape web foundation",
+                        vec!["build".to_string()],
+                    ),
+                    batch_entry(
+                        "build",
+                        None,
+                        "Build web foundation",
+                        vec!["shape".to_string()],
+                    ),
+                ],
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("cyclic batch dependency"));
+        assert!(!temp.path().join("backlog/items/PROJ-001.md").exists());
+        assert!(!temp.path().join("backlog/items/PROJ-002.md").exists());
+    }
+
+    #[test]
+    fn create_backlog_items_rejects_explicit_id_cycles_without_writes() {
+        let temp = project_fixture();
+
+        let mut first = batch_entry("first", Some("PROJ-001"), "First", vec![]);
+        first.depends_on = vec!["PROJ-002".to_string()];
+        let mut second = batch_entry("second", Some("PROJ-002"), "Second", vec![]);
+        second.depends_on = vec!["PROJ-001".to_string()];
+
+        let result = create_backlog_items(
+            temp.path(),
+            CreateBacklogItemsParams {
+                root: Some(root_arg(temp.path())),
+                id_prefix: None,
+                items: vec![first, second],
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("cyclic batch dependency"));
+        assert!(!temp.path().join("backlog/items/PROJ-001.md").exists());
+        assert!(!temp.path().join("backlog/items/PROJ-002.md").exists());
+    }
+
     #[test]
     fn draft_backlog_items_skips_without_sampling() {
         let result = draft_backlog_items(DraftBacklogItemsParams {
@@ -1333,6 +1576,34 @@ tasks:
             "---\nid: {id}\ntitle: {title}\npriority: {priority}\ntype: feature\narea: tooling\nepic: general\ndepends_on: {depends}\nsuggested_worker: coder\nowned_surfaces: []\n---\n\n# {id} {title}\n\n## Goal\n\nGoal.\n\n## Implementation Contract\n\nContract.\n\n## Acceptance\n\n- Done.\n"
         );
         fs::write(root.join(format!("backlog/items/{id}.md")), text).expect("item");
+    }
+
+    fn batch_entry(
+        client_key: &str,
+        id: Option<&str>,
+        title: &str,
+        depends_on_keys: Vec<String>,
+    ) -> CreateBacklogItemsEntry {
+        CreateBacklogItemsEntry {
+            client_key: Some(client_key.to_string()),
+            depends_on_keys,
+            id: id.map(ToOwned::to_owned),
+            id_prefix: None,
+            title: title.to_string(),
+            priority: Some("P1".to_string()),
+            item_type: Some("feature".to_string()),
+            area: Some("general".to_string()),
+            epic: Some("general".to_string()),
+            depends_on: Vec::new(),
+            suggested_worker: Some("coder".to_string()),
+            owned_surfaces: Vec::new(),
+            external_refs: Vec::new(),
+            goal: format!("{title}."),
+            implementation_contract: Some(format!("Implement {title}.")),
+            contract: None,
+            acceptance: vec![format!("{title} is complete.")],
+            notes: None,
+        }
     }
 
     fn root_arg(root: &Path) -> String {

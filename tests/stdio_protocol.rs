@@ -28,6 +28,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
 
     assert!(tool_names.contains(&"inspect_status"));
     assert!(tool_names.contains(&"create_backlog_item"));
+    assert!(tool_names.contains(&"create_backlog_items"));
     assert!(tool_names.contains(&"create_epic"));
     assert!(tool_names.contains(&"list_epics"));
     assert!(tool_names.contains(&"doctor_snapshot"));
@@ -120,6 +121,78 @@ async fn stdio_server_creates_and_lists_epics() -> anyhow::Result<()> {
     assert_stage_status("list_epics", &listed, "completed");
     assert_eq!(listed["data"]["returned"], 2);
     assert_eq!(listed["data"]["epics"][1]["id"], "webapp");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_creates_backlog_items_atomically() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+    let initialized = call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "Batch Smoke" }),
+    )
+    .await?;
+    assert_stage_status("init_project", &initialized, "completed");
+
+    let created = call_tool_json(
+        &client,
+        "create_backlog_items",
+        json!({
+            "id_prefix": "WEB",
+            "items": [
+                {
+                    "client_key": "shape",
+                    "title": "Shape web app",
+                    "type": "feature",
+                    "goal": "Shape the web app.",
+                    "implementation_contract": "Define the initial web app structure.",
+                    "acceptance": ["The web app shape is documented."]
+                },
+                {
+                    "client_key": "implement",
+                    "depends_on_keys": ["shape"],
+                    "title": "Implement web app",
+                    "type": "feature",
+                    "goal": "Implement the web app.",
+                    "implementation_contract": "Create the initial web app.",
+                    "acceptance": ["The web app implementation validates."]
+                }
+            ]
+        }),
+    )
+    .await?;
+    assert_stage_status("create_backlog_items", &created, "completed");
+    assert_eq!(created["data"]["created"], 2);
+    assert_eq!(created["data"]["items"][0]["item_id"], "WEB-001");
+    assert_eq!(created["data"]["items"][1]["item_id"], "WEB-002");
+    assert_eq!(created["data"]["items"][1]["depends_on"][0], "WEB-001");
+
+    let failed = call_tool_json(
+        &client,
+        "create_backlog_items",
+        json!({
+            "items": [
+                {
+                    "client_key": "ok",
+                    "title": "Would be valid",
+                    "goal": "Would be valid."
+                },
+                {
+                    "client_key": "bad",
+                    "title": "Bad epic",
+                    "epic": "missing",
+                    "goal": "Bad epic."
+                }
+            ]
+        }),
+    )
+    .await?;
+    assert_stage_status("create_backlog_items", &failed, "failed");
+    assert!(!project.path().join("backlog/items/PROJ-001.md").exists());
 
     client.cancel().await?;
     Ok(())
