@@ -109,6 +109,9 @@ When creating backlog items through tools, use the typed schema:
   suggested worker `coder`
 - `suggested_worker` names a Platypus worker profile, not a host-specific
   subagent type
+- failed authoring calls include a specific `next_action`; follow it before
+  retrying instead of falling back to manual markdown unless the recovery
+  explicitly asks for a file edit
 
 Backlog items may include `external_refs` for intake and reporting surfaces
 such as GitHub, Linear, Jira, GitLab, support tickets, specs, or local design

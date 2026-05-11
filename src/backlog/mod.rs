@@ -443,7 +443,16 @@ mod tests {
                 notes: None,
             },
         );
-        assert!(invalid_priority.error.unwrap().contains("P0, P1, P2"));
+        assert!(invalid_priority
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("P0, P1, P2"));
+        assert!(invalid_priority
+            .next_action
+            .as_deref()
+            .unwrap_or("")
+            .contains("Set priority to one of"));
 
         let invalid_type = create_backlog_item(
             temp.path(),
@@ -498,6 +507,175 @@ mod tests {
         assert!(missing_error.contains("goal"));
         assert!(missing_error.contains("implementation_contract|contract"));
         assert!(missing_error.contains("acceptance"));
+    }
+
+    #[test]
+    fn create_backlog_item_reports_actionable_recovery_guidance() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Existing", "P1", &[]);
+
+        let duplicate = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-001".to_string()),
+                id_prefix: None,
+                title: "Duplicate".to_string(),
+                priority: Some("P1".to_string()),
+                item_type: Some("feature".to_string()),
+                area: Some("general".to_string()),
+                epic: Some("general".to_string()),
+                depends_on: Vec::new(),
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: "Goal.".to_string(),
+                implementation_contract: Some("Contract.".to_string()),
+                contract: None,
+                acceptance: vec!["Done.".to_string()],
+                notes: None,
+            },
+        );
+        assert!(matches!(duplicate.status, ActionStatus::Failed));
+        assert!(duplicate
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("backlog/items/PROJ-001.md"));
+        assert!(duplicate
+            .next_action
+            .as_deref()
+            .unwrap_or("")
+            .contains("Omit id"));
+
+        let unknown_epic = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-002".to_string()),
+                id_prefix: None,
+                title: "Unknown epic".to_string(),
+                priority: Some("P1".to_string()),
+                item_type: Some("feature".to_string()),
+                area: Some("general".to_string()),
+                epic: Some("webapp".to_string()),
+                depends_on: Vec::new(),
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: "Goal.".to_string(),
+                implementation_contract: Some("Contract.".to_string()),
+                contract: None,
+                acceptance: vec!["Done.".to_string()],
+                notes: None,
+            },
+        );
+        assert!(matches!(unknown_epic.status, ActionStatus::Failed));
+        assert!(unknown_epic
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("unknown epic `webapp`; existing epics: general"));
+        assert!(unknown_epic
+            .next_action
+            .as_deref()
+            .unwrap_or("")
+            .contains("backlog/epics/webapp.md"));
+
+        let path_shaped_epic = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-002".to_string()),
+                id_prefix: None,
+                title: "Path shaped epic".to_string(),
+                priority: Some("P1".to_string()),
+                item_type: Some("feature".to_string()),
+                area: Some("general".to_string()),
+                epic: Some("../../README".to_string()),
+                depends_on: Vec::new(),
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: "Goal.".to_string(),
+                implementation_contract: Some("Contract.".to_string()),
+                contract: None,
+                acceptance: vec!["Done.".to_string()],
+                notes: None,
+            },
+        );
+        let path_shaped_next = path_shaped_epic.next_action.as_deref().unwrap_or("");
+        assert!(path_shaped_next.contains("existing epics: general"));
+        assert!(!path_shaped_next.contains("backlog/epics/../../README.md"));
+
+        let missing_dependency = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-002".to_string()),
+                id_prefix: None,
+                title: "Missing dependency".to_string(),
+                priority: Some("P1".to_string()),
+                item_type: Some("feature".to_string()),
+                area: Some("general".to_string()),
+                epic: Some("general".to_string()),
+                depends_on: vec!["PROJ-999".to_string()],
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: "Goal.".to_string(),
+                implementation_contract: Some("Contract.".to_string()),
+                contract: None,
+                acceptance: vec!["Done.".to_string()],
+                notes: None,
+            },
+        );
+        assert!(matches!(missing_dependency.status, ActionStatus::Failed));
+        assert!(missing_dependency
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("unknown dependency `PROJ-999`"));
+        assert!(missing_dependency
+            .next_action
+            .as_deref()
+            .unwrap_or("")
+            .contains("Create the missing dependency item first"));
+    }
+
+    #[test]
+    fn create_backlog_item_reports_missing_directory_recovery() {
+        let temp = TempDir::new().expect("temp dir");
+
+        let result = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-001".to_string()),
+                id_prefix: None,
+                title: "Missing directory".to_string(),
+                priority: Some("P1".to_string()),
+                item_type: Some("feature".to_string()),
+                area: Some("general".to_string()),
+                epic: Some("general".to_string()),
+                depends_on: Vec::new(),
+                suggested_worker: Some("coder".to_string()),
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: "Goal.".to_string(),
+                implementation_contract: Some("Contract.".to_string()),
+                contract: None,
+                acceptance: vec!["Done.".to_string()],
+                notes: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .next_action
+            .as_deref()
+            .unwrap_or("")
+            .contains("init_project"));
     }
 
     #[test]
