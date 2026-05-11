@@ -38,8 +38,9 @@ deterministic and references the current public tool names.
 1. Bootstrap and inspect: `platypus-mcp bootstrap <host> --init-project` for
    fresh projects, or `init_project`, `doctor_snapshot`, `inspect_status`,
    `inspect_workflow_config` from an MCP host.
-2. Shape backlog: `create_backlog_item`, `validate_backlog`, `list_backlog`,
-   `draft_external_backlog_items`, `import_github_issues`. Use
+2. Shape backlog: `create_backlog_item` or `create_backlog_items`,
+   `validate_backlog`, `list_backlog`, `draft_external_backlog_items`,
+   `import_github_issues`. Use
    `draft_backlog_items` only when host sampling is available.
 3. Plan non-trivial work: `write_task_plan`,
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
@@ -122,6 +123,7 @@ make smoke-storage
 - `record_external_report_dispatch`: record the approved host/plugin provider
   dispatch result, including safe evidence and redacted metadata.
 - `create_backlog_item`: write one structured backlog item.
+- `create_backlog_items`: atomically write related backlog items in one call.
 - `create_epic`: write one structured backlog epic.
 - `list_epics`: list existing backlog epics and their metadata.
 - `validate_backlog`: validate backlog item and epic files.
@@ -140,6 +142,9 @@ Backlog schema quick reference:
 - Rich `create_backlog_item` input: provide explicit `title`, `goal`,
   `implementation_contract` or `contract`, and `acceptance` when the work is
   complex or the generated defaults would be too broad.
+- Use `create_backlog_items` for related items that should land together. It
+  accepts per-item `client_key` values and resolves `depends_on_keys` to the
+  created item IDs; if any item fails validation, no batch files are written.
 - Priority values: `P0`, `P1`, `P2`.
 - Type values: `foundation`, `feature`, `safety`, `ux`, `test`, `docs`.
 - Defaults when omitted: priority `P1`, type `feature`, epic `general`,

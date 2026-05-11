@@ -235,8 +235,8 @@ worktrees before integration.
 1. Inspect setup with `doctor_snapshot`, `inspect_status`, and
    `next_safe_action`.
 2. Turn goals into declarative backlog items with the host model and
-   `create_backlog_item`, then `validate_backlog`. Use `draft_backlog_items`
-   only when the MCP client supports sampling.
+   `create_backlog_item` or `create_backlog_items`, then `validate_backlog`.
+   Use `draft_backlog_items` only when the MCP client supports sampling.
 3. Inspect the queue with `inspect_work_queue` and
    `classify_planning_needs`.
 4. For standard or full work, create a strict task plan with `write_task_plan`
@@ -270,7 +270,9 @@ Reviewable task plans for non-trivial items live in `backlog/plans/`.
 
 Use the Platypus MCP tools to keep planning reproducible:
 
-- `create_backlog_item` writes accepted backlog items.
+- `create_backlog_item` writes one accepted backlog item.
+- `create_backlog_items` atomically writes a related set and resolves
+  `depends_on_keys`.
 - `validate_backlog` checks item and epic schema.
 - `inspect_work_queue` shows runnable items and task-plan requirements.
 - `write_task_plan` and `validate_task_plan` make non-trivial work executable;
@@ -304,7 +306,7 @@ file edits or informal task tracking.
 
 1. Inspect first: `doctor_snapshot`, `inspect_status`, and `next_safe_action`.
 2. Convert user goals into concrete backlog items with the host model and
-   `create_backlog_item`.
+   `create_backlog_item` or `create_backlog_items`.
 3. Validate persisted work with `validate_backlog`.
 4. Use `inspect_work_queue` and `classify_planning_needs` before dispatch.
 5. For standard or full work, create and validate `backlog/plans/<ITEM>.yaml`

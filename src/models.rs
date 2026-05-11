@@ -23,6 +23,10 @@ fn example_epic_id() -> String {
     "webapp".to_string()
 }
 
+fn example_client_key() -> String {
+    "frontend_foundation".to_string()
+}
+
 fn example_task_id() -> String {
     "PROJ-001-T001".to_string()
 }
@@ -690,6 +694,85 @@ pub struct CreateBacklogItemParams {
     /// directories for early scaffolding, for example `backend/` and `frontend/`.
     /// These values guide planning mode and later changed-file validation; use an
     /// empty list only when the surface is genuinely unknown.
+    #[schemars(example = example_owned_surfaces())]
+    pub owned_surfaces: Vec<String>,
+    #[serde(default)]
+    /// External references tied to this record.
+    pub external_refs: Vec<ExternalRef>,
+    #[serde(default)]
+    /// Goal text that drives this request or record.
+    #[schemars(example = example_goal())]
+    pub goal: String,
+    /// Implementation contract text for this backlog item.
+    pub implementation_contract: Option<String>,
+    /// Optional contract text for this backlog item.
+    pub contract: Option<String>,
+    #[serde(default)]
+    /// Acceptance criteria for this item.
+    pub acceptance: Vec<String>,
+    /// Optional notes for this item.
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateBacklogItemsParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Identifier prefix used when allocating new local backlog item IDs when an
+    /// item id is omitted. Item-level id_prefix overrides this value.
+    #[schemars(example = example_id_prefix(), pattern(r"^[A-Z]+$"))]
+    pub id_prefix: Option<String>,
+    #[serde(default)]
+    /// Backlog items to create atomically. If any item is invalid, no item files
+    /// are written.
+    pub items: Vec<CreateBacklogItemsEntry>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
+pub struct CreateBacklogItemsEntry {
+    /// Caller-provided key for this item inside the batch. Use it from
+    /// depends_on_keys to express dependencies between new items before IDs are
+    /// allocated.
+    #[schemars(example = example_client_key())]
+    pub client_key: Option<String>,
+    #[serde(default)]
+    /// Client keys from this same batch that this item depends on. Platypus
+    /// resolves these keys to allocated or explicit backlog item IDs before
+    /// writing files.
+    pub depends_on_keys: Vec<String>,
+    /// Stable local record identifier. Usually omit this and let Platypus allocate
+    /// the next ID from id_prefix; provide it only when mirroring an existing
+    /// external identifier or preserving a human-chosen sequence.
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
+    pub id: Option<String>,
+    /// Identifier prefix used when allocating this item ID when id is omitted.
+    #[schemars(example = example_id_prefix(), pattern(r"^[A-Z]+$"))]
+    pub id_prefix: Option<String>,
+    #[serde(default)]
+    /// Human-readable title or short label.
+    #[schemars(example = example_title())]
+    pub title: String,
+    /// Backlog priority. Supported values: P0, P1, P2.
+    #[schemars(with = "Option<BacklogPrioritySchema>")]
+    pub priority: Option<String>,
+    /// Backlog item type. Supported values: foundation, feature, safety, ux, test, docs.
+    #[serde(rename = "type")]
+    #[schemars(with = "Option<BacklogItemTypeSchema>")]
+    pub item_type: Option<String>,
+    /// Primary area or surface for this item.
+    pub area: Option<String>,
+    /// Epic or grouping identifier for this item.
+    pub epic: Option<String>,
+    #[serde(default)]
+    /// Existing backlog item IDs that must be satisfied before this item.
+    #[schemars(inner(pattern(r"^[A-Z]+-[0-9]{3}$")))]
+    pub depends_on: Vec<String>,
+    /// Suggested worker name for this item.
+    #[schemars(example = example_worker())]
+    pub suggested_worker: Option<String>,
+    #[serde(default)]
+    /// Relative paths or top-level areas the work is expected to touch.
     #[schemars(example = example_owned_surfaces())]
     pub owned_surfaces: Vec<String>,
     #[serde(default)]
@@ -1951,6 +2034,30 @@ pub struct CreatedBacklogItemData {
     pub item_id: String,
     /// Filesystem path for the local file or workspace.
     pub path: String,
+    /// Whether this tool call created the file, record, or workspace.
+    pub created: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CreatedBacklogItemsData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Backlog items created by this batch.
+    pub items: Vec<CreatedBacklogBatchItem>,
+    /// Number of records created.
+    pub created: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CreatedBacklogBatchItem {
+    /// Caller-provided key for this item inside the batch.
+    pub client_key: Option<String>,
+    /// Backlog item identifier.
+    pub item_id: String,
+    /// Filesystem path for the local file or workspace.
+    pub path: String,
+    /// Dependencies resolved to backlog item IDs.
+    pub depends_on: Vec<String>,
     /// Whether this tool call created the file, record, or workspace.
     pub created: bool,
 }

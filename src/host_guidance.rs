@@ -119,11 +119,12 @@ missing state from chat context.
 
 const BACKLOG_AUTHORING_TEXT: &str = r#"# Backlog Authoring Guidance
 
-Create concise, agent-readable backlog items with `create_backlog_item`.
+Create concise, agent-readable backlog items with `create_backlog_item` for one
+item or `create_backlog_items` for an atomic related set.
 `draft_backlog_items` is optional and requires MCP client sampling support;
 when it returns skipped, use the host model's own judgment and call
-`create_backlog_item` directly. Validate with `validate_backlog`, inspect
-runnable work with `list_backlog`, and use
+`create_backlog_item` or `create_backlog_items` directly. Validate with
+`validate_backlog`, inspect runnable work with `list_backlog`, and use
 `inspect_backlog_inventory` when the host needs to explain closed or blocked
 items.
 
@@ -146,6 +147,9 @@ Backlog schema quick reference:
 - Defaults: priority `P1`, type `feature`, epic `general`, worker `coder`.
 - `suggested_worker` is a Platypus worker profile name, not necessarily a
   host-specific subagent type.
+- For related items, prefer `create_backlog_items`. Give each item a
+  `client_key` and use `depends_on_keys` to reference other items in the same
+  batch before their IDs are known. The batch is all-or-nothing.
 - Use `list_epics` before assigning a non-default epic. Use `create_epic` to
   add a missing grouping; do not hand-write epic files unless a recovery step
   explicitly asks for manual file edits.
