@@ -1,11 +1,12 @@
 use crate::{
-    backlog, config,
+    approvals, backlog, config,
     git_readiness::{inspect_git_readiness, GitReadinessStatus},
     models::{
         ActionResult, ActionStatus, BacklogCandidate, BacklogListData, ClassifyPlanningNeedsParams,
         ClassifyWorkflowFitParams, InspectWorkQueueParams, NextSafeActionData,
-        NextSafeActionParams, PlanningClassification, PlanningClassificationData,
-        TaskPlanQueryParams, WorkQueueData, WorkQueueItem, WorkQueuePlanState, WorkflowFitData,
+        NextSafeActionParams, PlanningApprovalState, PlanningClassification,
+        PlanningClassificationData, TaskPlanQueryParams, WorkQueueData, WorkQueueItem,
+        WorkQueuePlanState, WorkflowFitData,
     },
     state::{sqlite::SqliteProjectState, NextSafeActionQuery, ProjectState},
 };
@@ -152,6 +153,7 @@ pub fn inspect_work_queue(
 ) -> ActionResult<WorkQueueData> {
     let action = "inspect_work_queue";
     let require_task_plan = params.require_task_plan.unwrap_or(false);
+    let require_planning_approval = params.require_planning_approval.unwrap_or(false);
     let requested_limit = params.limit.unwrap_or(10).clamp(1, 200);
     let listed = backlog::list_backlog(default_root, params.root.as_deref(), Some(200));
     let (root, candidates) = match listed {
@@ -188,7 +190,14 @@ pub fn inspect_work_queue(
         .take(requested_limit)
         .enumerate()
         .map(|(index, candidate)| {
-            work_queue_item(default_root, &root, index + 1, candidate, require_task_plan)
+            work_queue_item(
+                default_root,
+                &root,
+                index + 1,
+                candidate,
+                require_task_plan,
+                require_planning_approval,
+            )
         })
         .collect();
     let mut preflight_warnings = Vec::new();
@@ -623,6 +632,7 @@ fn work_queue_item(
     position: usize,
     candidate: BacklogCandidate,
     require_task_plan: bool,
+    require_planning_approval: bool,
 ) -> WorkQueueItem {
     let planning = classify_candidate(&candidate);
     let mut plan = task_plan_state(default_root, root, &candidate.item_id);
@@ -632,21 +642,64 @@ fn work_queue_item(
         plan.status = "not_required".to_string();
         plan.errors.clear();
     }
-    let ready_to_dispatch = !planning_required || plan_valid;
+    let plan_ready = !planning_required || plan_valid;
+    let approval_required = require_planning_approval && planning.required_mode != "direct";
+    let planning_approval = if approval_required {
+        match approvals::planning_approval_state(default_root, Some(root), &candidate.item_id, true)
+        {
+            Ok(state) => Some(state),
+            Err(error) => Some(PlanningApprovalState {
+                item_id: candidate.item_id.clone(),
+                required: true,
+                approved: false,
+                approval_id: None,
+                status: None,
+                reason: format!("Could not inspect planning approval state: {error}"),
+            }),
+        }
+    } else if require_planning_approval {
+        Some(PlanningApprovalState {
+            item_id: candidate.item_id.clone(),
+            required: false,
+            approved: true,
+            approval_id: None,
+            status: None,
+            reason: "Direct work does not require planning approval.".to_string(),
+        })
+    } else {
+        None
+    };
+    let approval_ready = planning_approval
+        .as_ref()
+        .is_none_or(|state| !state.required || state.approved);
+    let ready_to_dispatch = plan_ready && approval_ready;
     let (recommended_tool, reason) = if ready_to_dispatch {
         (
             "dispatch_ready_work".to_string(),
             "Backlog item is runnable.".to_string(),
         )
-    } else if plan.status == "missing" {
+    } else if !plan_ready && plan.status == "missing" {
         (
             "draft_task_plan".to_string(),
             "A task plan is required before dispatch.".to_string(),
         )
-    } else {
+    } else if !plan_ready {
         (
             "validate_task_plan".to_string(),
             "Task plan must be fixed before dispatch.".to_string(),
+        )
+    } else if approval_required {
+        (
+            "request_planning_approval".to_string(),
+            planning_approval
+                .as_ref()
+                .map(|state| state.reason.clone())
+                .unwrap_or_else(|| "Planning approval is required before dispatch.".to_string()),
+        )
+    } else {
+        (
+            "inspect_work_queue".to_string(),
+            "Backlog item is not ready to dispatch.".to_string(),
         )
     };
     WorkQueueItem {
@@ -654,6 +707,7 @@ fn work_queue_item(
         candidate,
         planning,
         plan,
+        planning_approval,
         ready_to_dispatch,
         recommended_tool,
         reason,
@@ -692,7 +746,7 @@ fn meaningful_project_entries(root: &Path) -> usize {
         .count()
 }
 
-fn classify_candidate(candidate: &BacklogCandidate) -> PlanningClassification {
+pub(crate) fn classify_candidate(candidate: &BacklogCandidate) -> PlanningClassification {
     let mut reasons = Vec::new();
     let mut mode = "direct";
     let text = format!(
@@ -958,6 +1012,8 @@ fn worker_profile_params(root: &str) -> BTreeMap<String, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::approvals::{approval_respond, request_planning_approval};
+    use crate::models::{ApprovalRespondParams, RequestPlanningApprovalParams};
     use crate::tasks::{create_task_record, NewTask};
     use std::{fs, process::Command};
     use tempfile::TempDir;
@@ -1166,6 +1222,7 @@ acceptance:
                 root: None,
                 limit: Some(10),
                 require_task_plan: None,
+                require_planning_approval: Some(true),
             },
         );
         assert_eq!(result.status, ActionStatus::Completed);
@@ -1186,6 +1243,7 @@ acceptance:
                 root: None,
                 limit: Some(10),
                 require_task_plan: None,
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
@@ -1208,6 +1266,7 @@ acceptance:
                 root: None,
                 limit: Some(10),
                 require_task_plan: None,
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
@@ -1216,6 +1275,83 @@ acceptance:
         assert_eq!(data.recommended_tool, "doctor_snapshot");
         assert!(!data.items[0].ready_to_dispatch);
         assert!(data.reason.contains("initial commit"));
+    }
+
+    #[test]
+    fn inspect_work_queue_can_require_planning_approval() {
+        let project = backlog_project();
+        write_item(project.path(), "PROJ-001", "Ready item");
+        init_git(project.path());
+
+        let blocked = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: None,
+                require_planning_approval: Some(true),
+            },
+        );
+        let blocked_data = blocked.data.expect("blocked queue");
+
+        assert_eq!(blocked.status, ActionStatus::Completed);
+        assert!(!blocked_data.items[0].ready_to_dispatch);
+        assert_eq!(
+            blocked_data.items[0].recommended_tool,
+            "request_planning_approval"
+        );
+        assert_eq!(
+            blocked_data.items[0]
+                .planning_approval
+                .as_ref()
+                .expect("planning approval")
+                .required,
+            true
+        );
+
+        let approval = request_planning_approval(
+            project.path(),
+            RequestPlanningApprovalParams {
+                root: None,
+                item_ids: vec!["PROJ-001".to_string()],
+                requested_by: Some("manager".to_string()),
+                summary: None,
+            },
+        )
+        .data
+        .expect("approval")
+        .approval;
+        approval_respond(
+            project.path(),
+            ApprovalRespondParams {
+                root: None,
+                approval_id: approval.id,
+                decision: "approve".to_string(),
+                responder: Some("user".to_string()),
+                reason: Some("Reviewed.".to_string()),
+            },
+        );
+
+        let ready = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: None,
+                require_planning_approval: Some(true),
+            },
+        );
+        let ready_data = ready.data.expect("ready queue");
+
+        assert!(ready_data.items[0].ready_to_dispatch);
+        assert_eq!(ready_data.items[0].recommended_tool, "dispatch_ready_work");
+        assert!(
+            ready_data.items[0]
+                .planning_approval
+                .as_ref()
+                .expect("planning approval")
+                .approved
+        );
     }
 
     #[test]
@@ -1229,6 +1365,7 @@ acceptance:
                 root: None,
                 limit: Some(10),
                 require_task_plan: Some(true),
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
@@ -1264,6 +1401,7 @@ acceptance:
                 root: None,
                 limit: Some(10),
                 require_task_plan: Some(true),
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
@@ -1297,6 +1435,7 @@ acceptance:
                 root: None,
                 limit: Some(10),
                 require_task_plan: Some(true),
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
@@ -1332,6 +1471,7 @@ acceptance:
                 root: None,
                 limit: Some(10),
                 require_task_plan: Some(true),
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
@@ -1385,6 +1525,7 @@ acceptance:
                 root: None,
                 limit: Some(10),
                 require_task_plan: Some(true),
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
@@ -1420,6 +1561,7 @@ acceptance:
                 root: None,
                 limit: Some(10),
                 require_task_plan: Some(true),
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
@@ -1454,6 +1596,7 @@ acceptance:
                 root: None,
                 limit: Some(10),
                 require_task_plan: Some(true),
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
@@ -1654,6 +1797,7 @@ tasks:
                 root: None,
                 limit: Some(10),
                 require_task_plan: Some(true),
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
@@ -1687,6 +1831,7 @@ tasks:
                 root: None,
                 limit: Some(10),
                 require_task_plan: Some(false),
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
@@ -1733,6 +1878,7 @@ tasks:
                 root: None,
                 limit: Some(1),
                 require_task_plan: Some(false),
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
@@ -1774,6 +1920,7 @@ tasks:
                 root: None,
                 limit: Some(101),
                 require_task_plan: Some(false),
+                require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");

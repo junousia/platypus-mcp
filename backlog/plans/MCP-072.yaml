@@ -1,0 +1,108 @@
+item_id: MCP-072
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: Hosts can request planning approval for one task plan or a backlog tranche before dispatch.
+- id: R2
+  text: Planning approval responses are stored outside backlog markdown using the existing approval state.
+- id: R3
+  text: Queue inspection and dispatch can require approval for non-direct planning modes and provide recovery guidance when approval is missing.
+- id: R4
+  text: Reconciliation reports dispatched planned work that has no approved planning gate.
+design:
+  summary: Add a planning-scoped approval wrapper over the existing approval store. The gate is opt-in for queue and dispatch tools so hosts can enforce review before execution without adding runtime fields to backlog item markdown. Reconciliation treats committed task-plan files as evidence that work was non-trivial and reports dispatched tasks for those items when no approved planning approval exists.
+  owned_surfaces:
+  - src/approvals.rs
+  - src/guidance.rs
+  - src/dispatch.rs
+  - src/models.rs
+  - src/reconcile.rs
+  - src/state/sqlite/mod.rs
+  - docs/workflow.md
+  - tests
+  notes: Keep the gate lightweight and deterministic. Do not require approval for direct items unless a host explicitly models them as part of a reviewed tranche.
+tasks:
+- id: MCP-072-T01
+  title: Add planning approval state
+  goal: Add typed request and response models plus a request_planning_approval tool backed by the approval store.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/approvals.rs
+  - src/models.rs
+  - src/server.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test approvals::tests
+  acceptance:
+  - Planning approval request creates a scope=planning approval with item IDs in metadata.
+  - approval_respond can approve or deny the request without touching backlog markdown.
+  - Empty or unknown item IDs fail with concrete guidance.
+  notes:
+  - Reuse existing approval IDs and response lifecycle.
+- id: MCP-072-T02
+  title: Gate queue and dispatch
+  goal: Add opt-in require_planning_approval behavior to inspect_work_queue and dispatch_ready_work.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-072-T01
+  owned_surfaces:
+  - src/guidance.rs
+  - src/dispatch.rs
+  - src/models.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test guidance::tests
+  - cargo test dispatch::tests
+  acceptance:
+  - Queue inspection blocks non-direct items without approved planning and recommends request_planning_approval.
+  - dispatch_ready_work refuses unapproved non-direct work when require_planning_approval=true.
+  - Approved planning allows dispatch to proceed.
+  notes:
+  - Keep default behavior compatible by leaving the gate opt-in.
+- id: MCP-072-T03
+  title: Reconcile missing planning gates
+  goal: Report dispatched planned work that bypassed planning approval.
+  requirement_refs:
+  - R4
+  depends_on:
+  - MCP-072-T02
+  owned_surfaces:
+  - src/reconcile.rs
+  - src/state/sqlite/mod.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test reconcile::tests
+  acceptance:
+  - Reconciliation reports a planning_approval_missing gap for tasks tied to item plans without approved planning approval.
+  - Direct or unplanned tasks do not gain false-positive planning gaps.
+  notes:
+  - Use plan artifact presence as the durable signal that a planning gate should have existed.
+- id: MCP-072-T04
+  title: Document planning gate usage
+  goal: Document request, response, queue, dispatch, and reconciliation behavior.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  - R4
+  depends_on:
+  - MCP-072-T03
+  owned_surfaces:
+  - docs/workflow.md
+  - docs/tools.md
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Public tool list includes request_planning_approval.
+  - Workflow docs explain that approval state lives outside backlog markdown.
+  - Stdio coverage exercises planning approval request and approved dispatch.

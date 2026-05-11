@@ -376,6 +376,7 @@ pub fn start_goal_work(
                 prepare_handoffs: params.prepare_handoffs.or(Some(true)),
                 auto_start: params.auto_start.or(Some(false)),
                 auto_commit_artifacts,
+                require_planning_approval: None,
                 dry_run: Some(false),
                 verification_command: params.verification_command.clone(),
             },

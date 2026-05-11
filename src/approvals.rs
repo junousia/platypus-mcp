@@ -1,8 +1,10 @@
 use crate::{
+    backlog,
     events::{self, NewEvent},
     models::{
         ActionResult, ActionStatus, ApprovalListData, ApprovalListParams, ApprovalRecord,
-        ApprovalRespondParams, ApprovalResponseData,
+        ApprovalRespondParams, ApprovalResponseData, PlanningApprovalData, PlanningApprovalState,
+        RequestPlanningApprovalParams,
     },
     storage::{self, ApprovalInsert},
     storage::{ApprovalStore, RepositoryError},
@@ -12,6 +14,7 @@ use std::{collections::BTreeMap, path::Path};
 
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 200;
+const PLANNING_APPROVAL_SCOPE: &str = "planning";
 
 #[derive(Debug, Clone)]
 pub struct NewApproval {
@@ -211,6 +214,114 @@ pub fn approval_respond(
     )
 }
 
+pub fn request_planning_approval(
+    default_root: &Path,
+    params: RequestPlanningApprovalParams,
+) -> ActionResult<PlanningApprovalData> {
+    let action = "request_planning_approval";
+    let item_ids = match clean_item_ids(params.item_ids) {
+        Ok(item_ids) => item_ids,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not request planning approval.", error)
+        }
+    };
+    for item_id in &item_ids {
+        if let Err(error) =
+            backlog::backlog_item_snapshot(default_root, params.root.as_deref(), item_id)
+        {
+            return ActionResult::failed(
+                action,
+                "Could not request planning approval.",
+                format!("unknown backlog item `{item_id}`: {error}"),
+            );
+        }
+    }
+    let root = match backlog::resolve_backlog_root(default_root, params.root.as_deref()) {
+        Ok(root) => root,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not request planning approval.", error)
+        }
+    };
+    let summary = clean_optional(params.summary).unwrap_or_else(|| {
+        format!(
+            "Approve planning before dispatch for backlog item(s): {}.",
+            item_ids.join(", ")
+        )
+    });
+    let mut metadata = BTreeMap::new();
+    metadata.insert(
+        "item_ids".to_string(),
+        Value::Array(item_ids.iter().cloned().map(Value::String).collect()),
+    );
+    metadata.insert(
+        "approval_kind".to_string(),
+        Value::String(if item_ids.len() == 1 {
+            "task_plan".to_string()
+        } else {
+            "backlog_tranche".to_string()
+        }),
+    );
+    let approval = match create_approval(
+        default_root,
+        params.root.as_deref(),
+        NewApproval {
+            scope: PLANNING_APPROVAL_SCOPE.to_string(),
+            title: planning_approval_title(&item_ids),
+            summary,
+            requested_by: clean_optional(params.requested_by),
+            metadata,
+        },
+    ) {
+        Ok(approval) => approval,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not request planning approval.", error)
+        }
+    };
+    let states = item_ids
+        .iter()
+        .map(|item_id| planning_state_from_record(item_id, true, Some(&approval)))
+        .collect::<Vec<_>>();
+    ActionResult::completed(
+        action,
+        format!("Planning approval `{}` requested.", approval.id),
+        PlanningApprovalData {
+            root: root.display().to_string(),
+            approval,
+            states,
+        },
+    )
+}
+
+pub fn planning_approval_state(
+    default_root: &Path,
+    root: Option<&str>,
+    item_id: &str,
+    required: bool,
+) -> Result<PlanningApprovalState, String> {
+    let approval = latest_planning_approval_for_item(default_root, root, item_id)?;
+    Ok(planning_state_from_record(
+        item_id,
+        required,
+        approval.as_ref(),
+    ))
+}
+
+pub fn planning_approval_is_approved(
+    default_root: &Path,
+    root: Option<&str>,
+    item_id: &str,
+) -> Result<bool, String> {
+    Ok(planning_approval_state(default_root, root, item_id, true)?.approved)
+}
+
+pub(crate) fn approval_covers_item(approval: &ApprovalRecord, item_id: &str) -> bool {
+    approval
+        .metadata
+        .get("item_ids")
+        .and_then(Value::as_array)
+        .is_some_and(|items| items.iter().any(|value| value.as_str() == Some(item_id)))
+}
+
 fn clean_scope(value: &str) -> Result<String, String> {
     let scope = clean_required("scope", value)?;
     if scope
@@ -220,6 +331,89 @@ fn clean_scope(value: &str) -> Result<String, String> {
         Ok(scope)
     } else {
         Err("scope must contain lowercase ASCII letters, '-' or '_'".to_string())
+    }
+}
+
+fn latest_planning_approval_for_item(
+    default_root: &Path,
+    root: Option<&str>,
+    item_id: &str,
+) -> Result<Option<ApprovalRecord>, String> {
+    let Some(storage) = storage::connect_existing_read_only(default_root, root)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let approvals = storage
+        .repository()
+        .approvals()
+        .list_newest_unbounded(None)
+        .map_err(|error| error.to_string())?;
+    Ok(approvals.into_iter().find(|approval| {
+        approval.scope == PLANNING_APPROVAL_SCOPE && approval_covers_item(approval, item_id)
+    }))
+}
+
+fn planning_state_from_record(
+    item_id: &str,
+    required: bool,
+    approval: Option<&ApprovalRecord>,
+) -> PlanningApprovalState {
+    let approved = approval.is_some_and(|approval| approval.status == "approved");
+    let reason = match approval {
+        Some(approval) if approval.status == "approved" => {
+            format!("Planning approval `{}` is approved.", approval.id)
+        }
+        Some(approval) if approval.status == "pending" => {
+            format!("Planning approval `{}` is still pending.", approval.id)
+        }
+        Some(approval) if approval.status == "denied" => {
+            format!("Planning approval `{}` was denied.", approval.id)
+        }
+        Some(approval) => format!(
+            "Planning approval `{}` has unsupported status `{}`.",
+            approval.id, approval.status
+        ),
+        None if required => {
+            "Planning approval is required before dispatch and has not been requested.".to_string()
+        }
+        None => "Planning approval is not required.".to_string(),
+    };
+    PlanningApprovalState {
+        item_id: item_id.to_string(),
+        required,
+        approved,
+        approval_id: approval.map(|approval| approval.id.clone()),
+        status: approval.map(|approval| approval.status.clone()),
+        reason,
+    }
+}
+
+fn clean_item_ids(item_ids: Vec<String>) -> Result<Vec<String>, String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut cleaned = Vec::new();
+    for item_id in item_ids {
+        let item_id = item_id.trim();
+        if item_id.is_empty() {
+            continue;
+        }
+        if !seen.insert(item_id.to_string()) {
+            continue;
+        }
+        cleaned.push(item_id.to_string());
+    }
+    if cleaned.is_empty() {
+        Err("item_ids must include at least one backlog item id".to_string())
+    } else {
+        Ok(cleaned)
+    }
+}
+
+fn planning_approval_title(item_ids: &[String]) -> String {
+    if item_ids.len() == 1 {
+        format!("Approve planning for {}", item_ids[0])
+    } else {
+        format!("Approve planning for {} backlog items", item_ids.len())
     }
 }
 
@@ -264,8 +458,9 @@ mod tests {
     use super::*;
     use crate::{
         events::events_replay,
-        models::{ApprovalRespondParams, EventsReplayParams},
+        models::{ApprovalRespondParams, EventsReplayParams, RequestPlanningApprovalParams},
     };
+    use std::fs;
     use tempfile::TempDir;
 
     #[test]
@@ -386,5 +581,107 @@ mod tests {
         );
 
         assert!(matches!(result.status, ActionStatus::Skipped));
+    }
+
+    #[test]
+    fn planning_approval_is_stored_outside_backlog_markdown() {
+        let project = backlog_project();
+        let item_path = project.path().join("backlog/items/PROJ-001.md");
+        let before = fs::read_to_string(&item_path).expect("item before");
+
+        let requested = request_planning_approval(
+            project.path(),
+            RequestPlanningApprovalParams {
+                root: None,
+                item_ids: vec!["PROJ-001".to_string()],
+                requested_by: Some("manager".to_string()),
+                summary: Some("Review the task plan before dispatch.".to_string()),
+            },
+        );
+        let approval = requested.data.expect("planning approval").approval;
+
+        assert!(matches!(requested.status, ActionStatus::Completed));
+        assert_eq!(approval.scope, "planning");
+        assert!(approval_covers_item(&approval, "PROJ-001"));
+        assert_eq!(
+            fs::read_to_string(&item_path).expect("item after"),
+            before,
+            "planning approval must not write runtime state into backlog markdown"
+        );
+
+        let state = planning_approval_state(project.path(), None, "PROJ-001", true)
+            .expect("planning state");
+        assert!(!state.approved);
+        assert_eq!(state.status.as_deref(), Some("pending"));
+
+        let approved = approval_respond(
+            project.path(),
+            ApprovalRespondParams {
+                root: None,
+                approval_id: approval.id,
+                decision: "approve".to_string(),
+                responder: Some("user".to_string()),
+                reason: Some("Reviewed.".to_string()),
+            },
+        );
+        assert!(matches!(approved.status, ActionStatus::Completed));
+        assert!(
+            planning_approval_is_approved(project.path(), None, "PROJ-001")
+                .expect("approved state")
+        );
+    }
+
+    #[test]
+    fn planning_approval_lookup_includes_newest_records_beyond_first_page() {
+        let project = backlog_project();
+        for index in 0..1001 {
+            create_approval(
+                project.path(),
+                None,
+                NewApproval {
+                    scope: "general".to_string(),
+                    title: format!("Approval {index}"),
+                    summary: "Filler approval.".to_string(),
+                    requested_by: None,
+                    metadata: BTreeMap::new(),
+                },
+            )
+            .expect("filler approval");
+        }
+
+        let requested = request_planning_approval(
+            project.path(),
+            RequestPlanningApprovalParams {
+                root: None,
+                item_ids: vec!["PROJ-001".to_string()],
+                requested_by: Some("manager".to_string()),
+                summary: Some("Review the plan.".to_string()),
+            },
+        );
+        let approval = requested.data.expect("planning approval").approval;
+
+        let state = planning_approval_state(project.path(), None, "PROJ-001", true)
+            .expect("planning approval state");
+
+        assert_eq!(state.approval_id.as_deref(), Some(approval.id.as_str()));
+        assert_eq!(state.status.as_deref(), Some("pending"));
+    }
+
+    fn backlog_project() -> TempDir {
+        let project = TempDir::new().expect("temp dir");
+        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
+        fs::create_dir_all(project.path().join("backlog/items")).expect("items");
+        fs::create_dir_all(project.path().join("backlog/epics")).expect("epics");
+        fs::write(
+            project.path().join("backlog/epics/general.md"),
+            "---\nid: general\ntitle: General\nstatus: active\npriority: P1\narea: general\n---\n\n# General\n",
+        )
+        .expect("epic");
+        fs::write(
+            project.path().join("backlog/items/PROJ-001.md"),
+            "---\nid: PROJ-001\ntitle: Planned work\npriority: P1\ntype: feature\narea: app\nepic: general\ndepends_on: []\nsuggested_worker: coder\nowned_surfaces:\n- src/app.rs\n---\n\n# PROJ-001 Planned work\n\n## Goal\n\nGoal.\n\n## Implementation Contract\n\nContract.\n\n## Acceptance\n\n- Done.\n",
+        )
+        .expect("item");
+        project
     }
 }
