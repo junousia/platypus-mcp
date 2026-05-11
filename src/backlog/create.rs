@@ -1,12 +1,15 @@
 use super::{
     filesystem::{ensure_child_dir, resolve_root},
-    types::{BacklogItemFrontmatterOut, ParsedBacklogItem, VALID_PRIORITIES, VALID_TYPES},
+    types::{
+        BacklogItemFrontmatterOut, BacklogValidation, ParsedBacklogItem, VALID_PRIORITIES,
+        VALID_TYPES,
+    },
     validate::{valid_item_id, validate_backlog_at_root},
 };
 use crate::models::{
-    ActionResult, ActionStatus, CreateBacklogItemParams, CreateBacklogItemsEntry,
-    CreateBacklogItemsParams, CreatedBacklogBatchItem, CreatedBacklogItemData,
-    CreatedBacklogItemsData,
+    ActionResult, ActionStatus, BacklogValidationData, CreateBacklogItemParams,
+    CreateBacklogItemsEntry, CreateBacklogItemsParams, CreatedBacklogBatchItem,
+    CreatedBacklogItemData, CreatedBacklogItemsData,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -60,14 +63,24 @@ pub fn create_backlog_item(
             "Run init_project for this root, or create backlog/items inside the project root before creating items.",
         );
     }
-    let validation = validate_backlog_at_root(&root, true);
     let configured_prefix = configured_id_prefix(&root);
+    let validation = validate_backlog_at_root(&root, true);
     let item_id = match params.id.as_deref() {
         Some(id) => normalize_item_id(id),
-        None => allocate_item_id(
-            &validation.items,
-            params.id_prefix.as_deref().unwrap_or(&configured_prefix),
-        ),
+        None => {
+            if !validation.ok {
+                return failed_with_next(
+                    action,
+                    "Could not create backlog item.",
+                    format_existing_validation_error(&validation),
+                    "Run validate_backlog, fix existing backlog errors, then retry create_backlog_item.",
+                );
+            }
+            allocate_item_id(
+                &validation.items,
+                params.id_prefix.as_deref().unwrap_or(&configured_prefix),
+            )
+        }
     };
     if !valid_item_id(&item_id) {
         return failed_with_next(
@@ -95,6 +108,14 @@ pub fn create_backlog_item(
                 "Omit id to allocate the next `{configured_prefix}-NNN` value, choose a different id, or inspect `{}` before editing it.",
                 item_path.display()
             ),
+        );
+    }
+    if !validation.ok {
+        return failed_with_next(
+            action,
+            "Could not create backlog item.",
+            format_existing_validation_error(&validation),
+            "Run validate_backlog, fix existing backlog errors, then retry create_backlog_item.",
         );
     }
     let epic = clean_optional(params.epic.clone()).unwrap_or_else(|| "general".to_string());
@@ -175,6 +196,21 @@ pub fn create_backlog_item(
             error.to_string(),
         );
     }
+    let validation = validate_backlog_at_root(&root, true);
+    if !validation.ok {
+        let _ = fs::remove_file(&item_path);
+        return failed_with_next(
+            action,
+            format!("Could not create backlog item {}.", item_id),
+            format!(
+                "backlog validation failed after write; rolled back {}. {}",
+                item_path.display(),
+                format_existing_validation_error(&validation)
+            ),
+            "Fix the input or existing backlog state, then retry create_backlog_item.",
+        );
+    }
+    let validation = backlog_validation_data(&root, &validation, true);
     ActionResult::completed(
         action,
         format!("Created backlog item {}.", item_id),
@@ -182,6 +218,7 @@ pub fn create_backlog_item(
             item_id,
             path: item_path.display().to_string(),
             created: true,
+            validation,
         },
     )
 }
@@ -216,6 +253,14 @@ pub fn create_backlog_items(
     }
 
     let validation = validate_backlog_at_root(&root, true);
+    if !validation.ok {
+        return failed_batch(
+            action,
+            "Could not create backlog items.",
+            format_existing_validation_error(&validation),
+            "Run validate_backlog, fix existing backlog errors, then retry create_backlog_items.",
+        );
+    }
     let configured_prefix = configured_id_prefix(&root);
     let batch_prefix = params.id_prefix.clone();
     let mut used_ids = existing_item_ids(&validation.items);
@@ -430,6 +475,21 @@ pub fn create_backlog_items(
         written_paths.push(write.path.clone());
     }
 
+    let validation = validate_backlog_at_root(&root, true);
+    if !validation.ok {
+        rollback_written_files(&written_paths);
+        return failed_batch(
+            action,
+            "Could not create backlog items.",
+            format!(
+                "backlog validation failed after batch write; rolled back {} file(s). {}",
+                written_paths.len(),
+                format_existing_validation_error(&validation)
+            ),
+            "Fix the input or existing backlog state, then retry create_backlog_items.",
+        );
+    }
+    let validation = backlog_validation_data(&root, &validation, true);
     let items = writes
         .into_iter()
         .map(|write| CreatedBacklogBatchItem {
@@ -447,6 +507,7 @@ pub fn create_backlog_items(
             root: root.display().to_string(),
             created: items.len(),
             items,
+            validation,
         },
     )
 }
@@ -465,6 +526,36 @@ fn failed_with_next<T: serde::Serialize + schemars::JsonSchema>(
         data: None,
         error: Some(error.into()),
     }
+}
+
+fn backlog_validation_data(
+    root: &Path,
+    validation: &BacklogValidation,
+    include_errors: bool,
+) -> BacklogValidationData {
+    BacklogValidationData {
+        root: root.display().to_string(),
+        ok: validation.ok,
+        item_count: validation.items.len(),
+        epic_count: validation.epic_ids.len(),
+        errors: if include_errors {
+            validation.errors.clone()
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+fn format_existing_validation_error(validation: &BacklogValidation) -> String {
+    let mut message = format!(
+        "existing backlog has {} validation issue(s)",
+        validation.errors.len()
+    );
+    if !validation.errors.is_empty() {
+        message.push_str(": ");
+        message.push_str(&validation.errors.join("\n"));
+    }
+    message
 }
 
 fn failed_batch(

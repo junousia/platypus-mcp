@@ -406,6 +406,20 @@ pub fn write_task_plan(
         return ActionResult::failed(action, "Could not write task plan.", error);
     }
     let existed = path.exists();
+    let previous_content = if existed {
+        match fs::read(&path) {
+            Ok(content) => Some(content),
+            Err(error) => {
+                return ActionResult::failed(
+                    action,
+                    "Could not write task plan.",
+                    error.to_string(),
+                )
+            }
+        }
+    } else {
+        None
+    };
     let text = match serde_yaml::to_string(&plan) {
         Ok(text) => text,
         Err(error) => {
@@ -415,10 +429,39 @@ pub fn write_task_plan(
     if let Err(error) = fs::write(&path, text) {
         return ActionResult::failed(action, "Could not write task plan.", error.to_string());
     }
+    let post_write_errors = validate_plans_at_root(&root, Some(&item_id));
+    if !post_write_errors.is_empty() {
+        let rollback_error = restore_written_plan(&path, previous_content.as_deref());
+        let mut error = format!(
+            "task plan validation failed after write; rolled back {}. {}",
+            path.display(),
+            post_write_errors.join("\n")
+        );
+        if let Err(rollback_error) = rollback_error {
+            error.push_str(&format!("\nrollback failed: {rollback_error}"));
+        }
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Failed,
+            summary: format!("Could not write task plan for {item_id}."),
+            next_action: Some(
+                "Fix the task plan input or backlog state, then retry write_task_plan.".to_string(),
+            ),
+            data: None,
+            error: Some(error),
+        };
+    }
+    let validation = TaskPlanValidationData {
+        root: root.display().to_string(),
+        ok: true,
+        plan_count: 1,
+        task_count: plan.tasks.len(),
+        errors: Vec::new(),
+    };
     ActionResult {
         action: action.to_string(),
         status: ActionStatus::Completed,
-        summary: format!("Wrote task plan for {item_id}."),
+        summary: format!("Wrote and validated task plan for {item_id}."),
         next_action: Some(
             "Task plan was validated before write. Commit backlog/plans/<ITEM>.yaml, then dispatch ready work."
                 .to_string(),
@@ -429,8 +472,21 @@ pub fn write_task_plan(
             path: path.display().to_string(),
             created: !existed,
             overwritten: existed,
+            validation,
         }),
         error: None,
+    }
+}
+
+fn restore_written_plan(path: &Path, previous_content: Option<&[u8]>) -> std::io::Result<()> {
+    if let Some(content) = previous_content {
+        fs::write(path, content)
+    } else {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 }
 

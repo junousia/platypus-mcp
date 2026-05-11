@@ -433,6 +433,8 @@ mod tests {
         assert!(matches!(result.status, ActionStatus::Completed));
         let data = result.data.unwrap();
         assert_eq!(data.item_id, "PROJ-002");
+        assert!(data.validation.ok);
+        assert_eq!(data.validation.item_count, 2);
         assert!(temp.path().join("backlog/items/PROJ-002.md").is_file());
 
         let root = root_arg(temp.path());
@@ -445,6 +447,47 @@ mod tests {
             .find(|item| item.frontmatter.id == "PROJ-002")
             .expect("created item");
         assert_eq!(created.frontmatter.external_refs[0].id, "owner/repo#1");
+    }
+
+    #[test]
+    fn create_backlog_item_blocks_invalid_existing_backlog_without_new_file() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Existing", "P1", &[]);
+        let existing_path = temp.path().join("backlog/items/PROJ-001.md");
+        let mut existing = fs::read_to_string(&existing_path).expect("existing item");
+        existing = existing.replacen("owned_surfaces: []", "owned_surfaces: []\nstatus: done", 1);
+        fs::write(&existing_path, existing).expect("corrupt item");
+
+        let result = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-002".to_string()),
+                id_prefix: None,
+                title: "New item".to_string(),
+                priority: None,
+                item_type: None,
+                area: None,
+                epic: None,
+                depends_on: Vec::new(),
+                suggested_worker: None,
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                goal: "Create a new item.".to_string(),
+                implementation_contract: None,
+                contract: None,
+                acceptance: Vec::new(),
+                notes: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("existing backlog has"));
+        assert!(!temp.path().join("backlog/items/PROJ-002.md").exists());
     }
 
     #[test]
@@ -892,6 +935,8 @@ mod tests {
         assert!(matches!(result.status, ActionStatus::Completed));
         let data = result.data.expect("batch data");
         assert_eq!(data.created, 2);
+        assert!(data.validation.ok);
+        assert_eq!(data.validation.item_count, 2);
         assert_eq!(data.items[0].client_key.as_deref(), Some("foundation"));
         assert_eq!(data.items[0].item_id, "WEB-001");
         assert_eq!(data.items[1].item_id, "WEB-002");
@@ -901,6 +946,33 @@ mod tests {
 
         let validation = validate_backlog(temp.path(), Some(root_arg(temp.path()).as_str()), true);
         assert!(matches!(validation.status, ActionStatus::Completed));
+    }
+
+    #[test]
+    fn create_backlog_items_blocks_invalid_existing_backlog_without_writes() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Existing", "P1", &[]);
+        let existing_path = temp.path().join("backlog/items/PROJ-001.md");
+        let mut existing = fs::read_to_string(&existing_path).expect("existing item");
+        existing = existing.replacen("owned_surfaces: []", "owned_surfaces: []\nstatus: done", 1);
+        fs::write(&existing_path, existing).expect("corrupt item");
+
+        let result = create_backlog_items(
+            temp.path(),
+            CreateBacklogItemsParams {
+                root: Some(root_arg(temp.path())),
+                id_prefix: None,
+                items: vec![batch_entry("new", Some("PROJ-002"), "New item", vec![])],
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("existing backlog has"));
+        assert!(!temp.path().join("backlog/items/PROJ-002.md").exists());
     }
 
     #[test]
@@ -1207,6 +1279,7 @@ mod tests {
         );
 
         assert!(matches!(written.status, ActionStatus::Completed));
+        assert!(written.data.as_ref().expect("write data").validation.ok);
         let inspected = inspect_task_plan(
             temp.path(),
             TaskPlanItemParams {
@@ -1215,6 +1288,58 @@ mod tests {
             },
         );
         assert_eq!(inspected.data.expect("plan").plan.mode, "direct");
+    }
+
+    #[test]
+    fn write_task_plan_rejects_invalid_new_plan_without_file() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);
+        let mut plan = valid_task_plan("PROJ-001");
+        plan.tasks.clear();
+
+        let result = write_task_plan(
+            temp.path(),
+            WriteTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                plan,
+                overwrite: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result.error.as_deref().unwrap_or("").contains("tasks"));
+        assert!(!temp.path().join("backlog/plans/PROJ-001.yaml").exists());
+    }
+
+    #[test]
+    fn write_task_plan_failed_overwrite_preserves_existing_file() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);
+        fs::create_dir_all(temp.path().join("backlog/plans")).expect("plans dir");
+        let path = temp.path().join("backlog/plans/PROJ-001.yaml");
+        let original = serde_yaml::to_string(&valid_task_plan("PROJ-001")).expect("plan yaml");
+        fs::write(&path, &original).expect("existing plan");
+        let mut replacement = valid_task_plan("PROJ-001");
+        replacement.design.summary.clear();
+
+        let result = write_task_plan(
+            temp.path(),
+            WriteTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                plan: replacement,
+                overwrite: Some(true),
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("design.summary"));
+        assert_eq!(fs::read_to_string(&path).expect("existing plan"), original);
     }
 
     #[test]
@@ -1603,6 +1728,35 @@ tasks:
             contract: None,
             acceptance: vec![format!("{title} is complete.")],
             notes: None,
+        }
+    }
+
+    fn valid_task_plan(item_id: &str) -> TaskPlanFile {
+        TaskPlanFile {
+            item_id: item_id.to_string(),
+            version: 1,
+            mode: "standard".to_string(),
+            requirements: vec![TaskPlanRequirement {
+                id: "R1".to_string(),
+                text: "Deliver the backlog item.".to_string(),
+            }],
+            design: TaskPlanDesign {
+                summary: "Implement a focused task.".to_string(),
+                owned_surfaces: vec!["README.md".to_string()],
+                notes: None,
+            },
+            tasks: vec![PlannedTask {
+                id: format!("{item_id}-T01"),
+                title: "Implement task".to_string(),
+                goal: "Deliver concrete behavior.".to_string(),
+                requirement_refs: vec!["R1".to_string()],
+                depends_on: Vec::new(),
+                owned_surfaces: vec!["README.md".to_string()],
+                suggested_worker: Some("coder".to_string()),
+                verification: vec!["make check".to_string()],
+                acceptance: vec!["Task is complete.".to_string()],
+                notes: None,
+            }],
         }
     }
 

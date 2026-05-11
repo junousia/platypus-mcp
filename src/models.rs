@@ -2052,6 +2052,8 @@ pub struct CreatedBacklogItemData {
     pub path: String,
     /// Whether this tool call created the file, record, or workspace.
     pub created: bool,
+    /// Validation result after the planning write completed.
+    pub validation: BacklogValidationData,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2062,6 +2064,8 @@ pub struct CreatedBacklogItemsData {
     pub items: Vec<CreatedBacklogBatchItem>,
     /// Number of records created.
     pub created: usize,
+    /// Validation result after the planning write completed.
+    pub validation: BacklogValidationData,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2128,6 +2132,8 @@ pub struct TaskPlanWriteData {
     pub created: bool,
     /// Whether an existing file was overwritten.
     pub overwritten: bool,
+    /// Validation result after the planning write completed.
+    pub validation: TaskPlanValidationData,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
