@@ -14,15 +14,16 @@ use crate::{
         ExternalBacklogDraftData, ExternalReportApprovalData, ExternalReportDispatchData,
         ExternalReportDraftData, FindingDispositionData, FindingListData, FindingRecordData,
         FindingValidationData, GenerateTaskBundleParams, GitHubIssueImportData,
-        ImportGitHubIssuesParams, InitProjectParams, InspectTaskEventsParams, InspectTaskParams,
-        InspectWorkQueueParams, InspectWorkerAssignmentParams, IntegrateWorkerResultParams,
-        LeaseListData, LeaseRecordData, LimitParams, ListEpicsData, ListEvidenceParams,
-        ListFindingsParams, ListLeasesParams, NextSafeActionData, NextSafeActionParams, PingData,
-        PingParams, PlanGoalWorkData, PlanGoalWorkParams, PlanningClassificationData,
-        PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData, ReconcileParams,
-        ReconciliationData, RecordEvidenceParams, RecordExternalReportDispatchParams,
-        RecordFindingParams, RecordVerificationEvidenceParams, RecordWorkerEventParams,
-        ReleaseLeaseParams, RenewLeaseParams, RequestExternalReportApprovalParams, RootParams,
+        ImportGitHubIssuesParams, InitProjectParams, InspectDependencyGraphParams,
+        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
+        InspectWorkerAssignmentParams, IntegrateWorkerResultParams, LeaseListData, LeaseRecordData,
+        LimitParams, ListEpicsData, ListEvidenceParams, ListFindingsParams, ListLeasesParams,
+        NextSafeActionData, NextSafeActionParams, PingData, PingParams, PlanGoalWorkData,
+        PlanGoalWorkParams, PlanningClassificationData, PrepareWorkerAssignmentParams,
+        ProjectScaffoldData, ProjectStatusData, ReconcileParams, ReconciliationData,
+        RecordEvidenceParams, RecordExternalReportDispatchParams, RecordFindingParams,
+        RecordVerificationEvidenceParams, RecordWorkerEventParams, ReleaseLeaseParams,
+        RenewLeaseParams, RequestExternalReportApprovalParams, RootParams,
         RunTaskVerificationParams, RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams,
         StartGoalWorkData, StartGoalWorkParams, StartWorkerExecutionParams,
         StorageCapabilityProbeData, StorageCapabilityProbeParams, TaskBundleData,
@@ -454,6 +455,28 @@ impl PlatypusMcp {
             &self.default_root,
             params.root.as_deref(),
             params.limit,
+        ))
+    }
+
+    #[tool(
+        title = "Inspect Dependency Graph",
+        description = "Inspect backlog dependency graph nodes, edges, runnable state, closure state, missing references, and cycles.",
+        annotations(
+            title = "Inspect Dependency Graph",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn inspect_dependency_graph(
+        &self,
+        Parameters(params): Parameters<InspectDependencyGraphParams>,
+    ) -> Json<ActionResult<crate::models::BacklogDependencyGraphData>> {
+        Json(backlog::inspect_dependency_graph(
+            &self.default_root,
+            params,
         ))
     }
 
@@ -1788,6 +1811,7 @@ mod tests {
             "start_goal_work",
             "list_backlog",
             "inspect_backlog_inventory",
+            "inspect_dependency_graph",
             "validate_backlog",
             "doctor_snapshot",
             "init_project",

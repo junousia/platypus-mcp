@@ -3,6 +3,7 @@ mod create;
 mod draft;
 mod epic;
 mod filesystem;
+mod graph;
 mod parse;
 mod plan;
 mod status;
@@ -14,6 +15,7 @@ pub use draft::{
     draft_backlog_items, draft_backlog_items_from_sample, draft_backlog_items_sampling_prompt,
 };
 pub use epic::{create_epic, list_epics};
+pub use graph::inspect_dependency_graph;
 pub use plan::{
     draft_task_plan, draft_task_plan_from_sample, draft_task_plan_sampling_prompt,
     inspect_task_plan, list_task_plans, validate_task_plan, write_task_plan,

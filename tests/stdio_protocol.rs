@@ -40,6 +40,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"plan_goal_work"));
     assert!(tool_names.contains(&"start_goal_work"));
     assert!(tool_names.contains(&"record_finding"));
+    assert!(tool_names.contains(&"inspect_dependency_graph"));
     assert!(tool_names.contains(&"draft_external_backlog_items"));
     assert!(tool_names.contains(&"import_github_issues"));
     assert!(tool_names.contains(&"draft_external_report"));
@@ -802,6 +803,78 @@ area: general
         .find(|item| item["item_id"] == "PROJ-003")
         .expect("blocked item");
     assert_eq!(blocked["open_dependencies"][0], "PROJ-002");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_inspects_dependency_graph() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    git(project.path(), &["init"]);
+    git(project.path(), &["config", "user.name", "Platypus Test"]);
+    git(
+        project.path(),
+        &["config", "user.email", "platypus@example.invalid"],
+    );
+    fs::write(project.path().join("platy.yaml"), "project: test\n")?;
+    fs::create_dir_all(project.path().join("backlog/items"))?;
+    fs::create_dir_all(project.path().join("backlog/epics"))?;
+    fs::write(
+        project.path().join("backlog/epics/general.md"),
+        r#"---
+id: general
+title: General
+status: active
+priority: P1
+area: general
+---
+
+# General
+"#,
+    )?;
+    write_backlog_item(project.path(), "PROJ-001", "First item", &[])?;
+    write_backlog_item(project.path(), "PROJ-002", "Second item", &["PROJ-001"])?;
+    write_backlog_item(project.path(), "PROJ-003", "Third item", &["PROJ-002"])?;
+    git(project.path(), &["add", "--all"]);
+    git(
+        project.path(),
+        &[
+            "commit",
+            "-m",
+            "Complete first item",
+            "-m",
+            "Platypus-Closes: PROJ-001",
+            "-m",
+            "Platypus-Verification: make check",
+        ],
+    );
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let response = call_tool_json(
+        &client,
+        "inspect_dependency_graph",
+        json!({
+            "focus_item_id": "PROJ-002",
+            "include_closed": true,
+            "limit": 10
+        }),
+    )
+    .await?;
+
+    assert_stage_status("inspect_dependency_graph", &response, "completed");
+    assert_eq!(response["data"]["focus_item_id"], "PROJ-002");
+    assert_eq!(response["data"]["total"], 3);
+    assert_eq!(
+        response["data"]["edges"].as_array().expect("edges").len(),
+        2
+    );
+    assert_eq!(response["data"]["closed_nodes"][0], "PROJ-001");
+    assert_eq!(response["data"]["runnable_nodes"][0], "PROJ-002");
+    assert_eq!(
+        response["data"]["topological_order"],
+        json!(["PROJ-001", "PROJ-002", "PROJ-003"])
+    );
 
     client.cancel().await?;
     Ok(())

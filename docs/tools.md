@@ -134,6 +134,11 @@ make smoke-storage
   no work is runnable but the host needs to explain whether items are closed,
   dependency-blocked, or ready. Without `limit`, the tool returns the full
   inventory; limited calls include `returned` and `truncated` fields.
+- `inspect_dependency_graph`: inspect backlog dependency nodes, edges, roots,
+  leaves, topological order, runnable nodes, closed nodes, blocked nodes,
+  missing dependency references, and cycles. Use `focus_item_id` to return only
+  a dependency neighborhood. The default limit is 200 nodes and the maximum is
+  500; limited calls report `total`, `returned`, and `truncated`.
 
 Backlog schema quick reference:
 
