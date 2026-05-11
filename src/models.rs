@@ -19,6 +19,10 @@ fn example_id_prefix() -> String {
     "PROJ".to_string()
 }
 
+fn example_epic_id() -> String {
+    "webapp".to_string()
+}
+
 fn example_task_id() -> String {
     "PROJ-001-T001".to_string()
 }
@@ -80,6 +84,13 @@ pub enum BacklogItemTypeSchema {
     Ux,
     Test,
     Docs,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EpicStatusSchema {
+    Active,
+    Archived,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -697,6 +708,64 @@ pub struct CreateBacklogItemParams {
     pub acceptance: Vec<String>,
     /// Optional notes for this item.
     pub notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateEpicParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Epic identifier used as the backlog/epics/<id>.md filename. Use only
+    /// letters, digits, `_`, or `-`; do not include path separators.
+    #[schemars(example = example_epic_id(), pattern(r"^[A-Za-z0-9_-]+$"))]
+    pub id: String,
+    /// Human-readable title or short label.
+    pub title: String,
+    /// Epic lifecycle status. Supported values: active, archived.
+    #[schemars(with = "Option<EpicStatusSchema>")]
+    pub status: Option<String>,
+    /// Backlog priority. Supported values: P0, P1, P2.
+    #[schemars(with = "Option<BacklogPrioritySchema>")]
+    pub priority: Option<String>,
+    /// Primary area or surface for this epic. Defaults to the epic id.
+    pub area: Option<String>,
+    /// Optional markdown body text written below the epic heading.
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CreatedEpicData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Epic returned by this request.
+    pub epic: EpicRecord,
+    /// Whether this tool call created the file, record, or workspace.
+    pub created: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ListEpicsData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Epics returned by this request.
+    pub epics: Vec<EpicRecord>,
+    /// Number of records returned.
+    pub returned: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct EpicRecord {
+    /// Epic or grouping identifier.
+    pub id: String,
+    /// Human-readable title or short label.
+    pub title: String,
+    /// Lifecycle or result status for this record.
+    pub status: String,
+    /// Backlog priority for this item.
+    pub priority: String,
+    /// Primary area or surface for this item.
+    pub area: String,
+    /// Filesystem path for the local file or workspace.
+    pub path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema, PartialEq, Eq)]
