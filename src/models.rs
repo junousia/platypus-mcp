@@ -108,6 +108,14 @@ pub enum GoalWorkflowModeSchema {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum GoalPlanningIntentSchema {
+    Auto,
+    PlanningOnly,
+    ReadyToExecute,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskPlanModeSchema {
     Direct,
     Standard,
@@ -306,6 +314,12 @@ pub struct PlanGoalWorkParams {
     /// Supported values are auto, direct_scaffold, hybrid, and platypus_workflow.
     #[schemars(with = "Option<GoalWorkflowModeSchema>")]
     pub mode: Option<String>,
+    /// Planning intent. Omit or pass auto to infer from the goal text.
+    /// Use planning_only when the user wants backlog or design shaping without
+    /// immediate execution. Use ready_to_execute when the user wants tracking
+    /// and dispatch guidance now.
+    #[schemars(with = "Option<GoalPlanningIntentSchema>")]
+    pub intent: Option<String>,
     #[serde(default)]
     /// Relative paths or top-level areas the work is expected to touch. Use broad
     /// directories for early scaffolding, for example `backend/` and `frontend/`.
@@ -1666,6 +1680,8 @@ pub struct PlanGoalWorkData {
     pub root: String,
     /// Recommended workflow mode for the current goal.
     pub recommended_mode: String,
+    /// Selected planning intent after applying explicit input or auto inference.
+    pub selected_intent: String,
     /// Human-readable summary of the record or result.
     pub summary: String,
     /// Human-readable reasons behind this decision.

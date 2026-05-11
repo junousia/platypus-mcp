@@ -25,8 +25,9 @@ model turns, and external worker execution.
 1. Inspect setup with `doctor_snapshot`, `inspect_status`, and
    `inspect_workflow_config`.
 2. For broad user goals, call `plan_goal_work` when you need read-only
-   guidance, then call `start_goal_work` only when you are ready to create or
-   reuse tracking and optionally dispatch tasks.
+   guidance. Use `intent=planning_only` for planning, design, or backlog
+   shaping conversations. Use `intent=ready_to_execute` only when the user has
+   approved creating tracking and optionally dispatching tasks.
 3. Shape advanced/manual work by using the host model to call
    `create_backlog_item` directly, then `validate_backlog`, `list_backlog`,
    and `inspect_backlog_inventory`. Use `draft_backlog_items` only when the MCP
@@ -62,7 +63,9 @@ straight to broad edits. Convert the goal into a controlled loop:
    `next_safe_action`.
 2. Use `plan_goal_work` for broad user goals when you need read-only guidance.
    It wraps `classify_workflow_fit` and returns concrete next-tool arguments
-   without changing project state.
+   without changing project state. Pass `intent=planning_only` when the user is
+   still shaping backlog or design, and `intent=ready_to_execute` only when
+   execution should be prepared.
 3. If it recommends `direct_scaffold`, prefer the recommended
    `start_goal_work` arguments with `dispatch=true` so tracking and the first
    task worktree are prepared in one mutating call. Use `dispatch=false` only
@@ -109,7 +112,8 @@ Use status tools before making assumptions about the repository or task queue.
   standard, or full planning.
 - `classify_workflow_fit` decides whether a broad goal should use direct
   scaffolding first, full Platypus workflow, or a hybrid flow.
-- `plan_goal_work` converts a broad goal into read-only next-tool guidance.
+- `plan_goal_work` converts a broad goal into read-only next-tool guidance and
+  respects planning intent so planning-only chats do not recommend dispatch.
 - `next_safe_action` converts the current lifecycle state into the next safe
   tool call.
 

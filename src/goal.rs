@@ -55,7 +55,61 @@ pub fn plan_goal_work(
             }
         };
 
+    let selected_intent = match requested_or_inferred_intent(params.intent.as_deref(), &goal) {
+        Ok(intent) => intent,
+        Err(error) => {
+            return ActionResult::failed(PLAN_ACTION, "Could not plan goal work.", error);
+        }
+    };
+
     let tracking_recommended = true;
+    if selected_intent == "planning_only" {
+        let mut recommended_arguments = BTreeMap::new();
+        recommended_arguments.insert("goal".to_string(), serde_json::Value::String(goal.clone()));
+        recommended_arguments.insert(
+            "suggested_worker".to_string(),
+            serde_json::Value::String("coder".to_string()),
+        );
+        recommended_arguments.insert(
+            "owned_surfaces".to_string(),
+            serde_json::Value::Array(
+                params
+                    .owned_surfaces
+                    .iter()
+                    .map(|surface| serde_json::Value::String(surface.clone()))
+                    .collect(),
+            ),
+        );
+        recommended_arguments.insert(
+            "verification_command".to_string(),
+            serde_json::Value::Array(Vec::new()),
+        );
+        let recommended_call = serde_json::to_string(&recommended_arguments).unwrap_or_else(|_| {
+            "the structured recommended_arguments returned in this response".to_string()
+        });
+        let next_action = format!(
+            "For planning-only intake, call draft_backlog_items with {recommended_call} when sampling is available. If sampling is unavailable or too generic, use the host model to create concrete items with create_backlog_items, then validate_backlog. Do not dispatch until the user approves execution."
+        );
+
+        return ActionResult::completed(
+            PLAN_ACTION,
+            format!("{recommended_mode} is recommended; planning-only guidance was returned."),
+            PlanGoalWorkData {
+                root: fit.root,
+                recommended_mode,
+                selected_intent,
+                summary: fit.summary,
+                reasons: fit.reasons,
+                tracking_recommended,
+                recommended_tool: "draft_backlog_items".to_string(),
+                recommended_arguments,
+                next_action,
+                backlog_items: fit.backlog_items,
+                runnable_backlog_items: fit.runnable_backlog_items,
+            },
+        );
+    }
+
     let dispatch = true;
     let mut recommended_arguments = BTreeMap::new();
     recommended_arguments.insert(
@@ -109,6 +163,7 @@ pub fn plan_goal_work(
         PlanGoalWorkData {
             root: fit.root,
             recommended_mode,
+            selected_intent,
             summary: fit.summary,
             reasons: fit.reasons,
             tracking_recommended,
@@ -423,6 +478,89 @@ fn requested_or_inferred_mode(
 
 fn validate_requested_mode(requested_mode: Option<&str>) -> Result<(), String> {
     requested_or_inferred_mode(requested_mode, "direct_scaffold").map(|_| ())
+}
+
+fn requested_or_inferred_intent(
+    requested_intent: Option<&str>,
+    goal: &str,
+) -> Result<String, String> {
+    let requested_intent = requested_intent
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("auto")
+        .to_ascii_lowercase();
+    match requested_intent.as_str() {
+        "auto" => Ok(infer_goal_intent(goal)),
+        "planning_only" | "ready_to_execute" => Ok(requested_intent),
+        _ => Err("intent must be auto, planning_only, or ready_to_execute".to_string()),
+    }
+}
+
+fn infer_goal_intent(goal: &str) -> String {
+    let normalized = goal
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    let planning_prefixes = [
+        "plan",
+        "please plan",
+        "help plan",
+        "help me plan",
+        "let's plan",
+        "lets plan",
+        "planning",
+        "design",
+        "please design",
+        "shape",
+        "please shape",
+        "draft",
+        "please draft",
+        "break down",
+        "breakdown",
+        "write a plan",
+        "write an implementation plan",
+        "create a plan",
+        "create an implementation plan",
+    ];
+    if planning_prefixes
+        .iter()
+        .any(|prefix| matches_phrase_prefix(&normalized, prefix))
+    {
+        return "planning_only".to_string();
+    }
+
+    let planning_phrases = [
+        "shape backlog",
+        "create backlog",
+        "add backlog",
+        "write backlog",
+        "generate backlog",
+        "backlog item",
+        "backlog items",
+        "draft backlog",
+        "write requirements",
+        "define requirements",
+        "gather requirements",
+        "write spec",
+        "define spec",
+        "create spec",
+    ];
+    if planning_phrases
+        .iter()
+        .any(|marker| normalized.contains(marker))
+    {
+        return "planning_only".to_string();
+    }
+
+    "ready_to_execute".to_string()
+}
+
+fn matches_phrase_prefix(value: &str, phrase: &str) -> bool {
+    value == phrase
+        || value
+            .strip_prefix(phrase)
+            .is_some_and(|rest| rest.starts_with(' '))
 }
 
 fn dispatch_agent_profile_warning(
@@ -946,23 +1084,27 @@ mod tests {
             project.path(),
             PlanGoalWorkParams {
                 root: None,
-                goal: "create a simple web app".to_string(),
+                goal: "plan backlog items for a simple web app".to_string(),
                 mode: None,
+                intent: Some("planning_only".to_string()),
                 owned_surfaces: vec!["backend/".to_string(), "frontend/".to_string()],
             },
         );
         assert_eq!(result.status, ActionStatus::Completed);
         let data = result.data.expect("goal data");
-        assert_eq!(data.recommended_tool, "start_goal_work");
+        assert_eq!(data.selected_intent, "planning_only");
+        assert_eq!(data.recommended_tool, "draft_backlog_items");
         assert!(data.tracking_recommended);
         assert_eq!(
             data.recommended_arguments
-                .get("dispatch")
-                .and_then(serde_json::Value::as_bool),
-            Some(true)
+                .get("goal")
+                .and_then(serde_json::Value::as_str),
+            Some("plan backlog items for a simple web app")
         );
-        assert!(data.next_action.contains("start_goal_work"));
-        assert!(data.next_action.contains("\"dispatch\":true"));
+        assert!(!data.recommended_arguments.contains_key("dispatch"));
+        assert!(data.next_action.contains("draft_backlog_items"));
+        assert!(data.next_action.contains("create_backlog_items"));
+        assert!(!data.next_action.contains("\"dispatch\":true"));
         assert!(!project.path().join("platy.yaml").exists());
     }
 
@@ -975,12 +1117,15 @@ mod tests {
                 root: None,
                 goal: "add production authentication workflow with audit trail".to_string(),
                 mode: Some("platypus_workflow".to_string()),
+                intent: Some("ready_to_execute".to_string()),
                 owned_surfaces: vec!["src/auth.rs".to_string()],
             },
         );
         assert_eq!(result.status, ActionStatus::Completed);
         let data = result.data.expect("goal data");
         assert_eq!(data.recommended_mode, "platypus_workflow");
+        assert_eq!(data.selected_intent, "ready_to_execute");
+        assert_eq!(data.recommended_tool, "start_goal_work");
         assert_eq!(
             data.recommended_arguments
                 .get("dispatch")
@@ -990,6 +1135,81 @@ mod tests {
         assert!(data.next_action.contains("start_goal_work"));
         assert!(data.next_action.contains("\"dispatch\":true"));
         assert!(!project.path().join("platy.yaml").exists());
+    }
+
+    #[test]
+    fn plan_goal_work_auto_infers_planning_only_from_backlog_language() {
+        let project = TempDir::new().expect("temp dir");
+        let result = plan_goal_work(
+            project.path(),
+            PlanGoalWorkParams {
+                root: None,
+                goal: "create backlog items for the authentication redesign".to_string(),
+                mode: None,
+                intent: Some("auto".to_string()),
+                owned_surfaces: Vec::new(),
+            },
+        );
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        let data = result.data.expect("goal data");
+        assert_eq!(data.selected_intent, "planning_only");
+        assert_eq!(data.recommended_tool, "draft_backlog_items");
+        assert!(!data.recommended_arguments.contains_key("dispatch"));
+        assert!(data.next_action.contains("Do not dispatch"));
+    }
+
+    #[test]
+    fn plan_goal_work_auto_preserves_execute_ready_guidance_for_implementation() {
+        let project = TempDir::new().expect("temp dir");
+        let result = plan_goal_work(
+            project.path(),
+            PlanGoalWorkParams {
+                root: None,
+                goal: "implement the authentication workflow".to_string(),
+                mode: None,
+                intent: None,
+                owned_surfaces: vec!["src/auth.rs".to_string()],
+            },
+        );
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        let data = result.data.expect("goal data");
+        assert_eq!(data.selected_intent, "ready_to_execute");
+        assert_eq!(data.recommended_tool, "start_goal_work");
+        assert_eq!(
+            data.recommended_arguments
+                .get("dispatch")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert!(data.next_action.contains("start_goal_work"));
+    }
+
+    #[test]
+    fn plan_goal_work_auto_does_not_treat_existing_plan_reference_as_planning_only() {
+        let project = TempDir::new().expect("temp dir");
+        let result = plan_goal_work(
+            project.path(),
+            PlanGoalWorkParams {
+                root: None,
+                goal: "implement the approved plan for authentication".to_string(),
+                mode: None,
+                intent: None,
+                owned_surfaces: vec!["src/auth.rs".to_string()],
+            },
+        );
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        let data = result.data.expect("goal data");
+        assert_eq!(data.selected_intent, "ready_to_execute");
+        assert_eq!(data.recommended_tool, "start_goal_work");
+        assert_eq!(
+            data.recommended_arguments
+                .get("dispatch")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]

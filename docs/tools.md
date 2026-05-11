@@ -229,8 +229,12 @@ trailers.
 ### Task And Workspace Lifecycle
 
 - `plan_goal_work`: read-only intake guidance for a broad user goal. It
-  classifies mode and returns the concrete next `start_goal_work` arguments
-  without creating files, backlog items, tasks, or state.
+  classifies mode and returns concrete next-tool arguments without creating
+  files, backlog items, tasks, or state. Use `intent=planning_only` for
+  backlog or design shaping; the recommendation will stay on non-mutating
+  planning/backlog authoring tools. Use `intent=ready_to_execute` when the
+  user has approved tracking and dispatch guidance. `intent=auto` infers from
+  goal text.
 - `start_goal_work`: mutating intake for new goals. It can classify mode,
   create or reuse a lightweight tracking backlog item, and optionally dispatch
   prepared work.
