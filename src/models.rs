@@ -116,6 +116,14 @@ pub enum GoalPlanningIntentSchema {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum ExecutionModeSchema {
+    Auto,
+    ProfiledWorker,
+    ManualHandoff,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskPlanModeSchema {
     Direct,
     Standard,
@@ -241,6 +249,12 @@ pub struct DispatchReadyWorkParams {
     pub worker: Option<String>,
     /// Name recorded as the task claimant.
     pub claimant: Option<String>,
+    /// Execution mode for this dispatch. Use profiled_worker to require a ready
+    /// configured worker profile, manual_handoff to prepare lifecycle-safe
+    /// worktree handoffs for an external MCP host or human-managed worker, or
+    /// auto to require a profile unless manual_handoff is explicitly requested.
+    #[schemars(with = "Option<ExecutionModeSchema>")]
+    pub execution_mode: Option<String>,
     /// Whether to claim tasks, create worktrees, and persist worker handoff bundles during dispatch.
     pub prepare_handoffs: Option<bool>,
     /// Whether to immediately mark prepared assignments as running in the local
@@ -354,6 +368,12 @@ pub struct StartGoalWorkParams {
     /// in local lifecycle state when dispatch=true.
     #[schemars(example = example_true())]
     pub auto_start: Option<bool>,
+    /// Execution mode to pass to dispatch when dispatch=true.
+    ///
+    /// Use manual_handoff when the MCP host will run the returned assignment
+    /// worktree itself instead of requiring a configured worker profile.
+    #[schemars(with = "Option<ExecutionModeSchema>")]
+    pub execution_mode: Option<String>,
     /// Whether dispatch should auto-commit tracked planning artifacts when
     /// local Git dirt is limited to backlog items/plans and dispatch=true.
     #[schemars(example = example_true())]
@@ -1076,6 +1096,12 @@ pub struct PrepareWorkerAssignmentParams {
     pub worker: Option<String>,
     /// Name recorded as the task claimant.
     pub claimant: Option<String>,
+    /// Execution mode to record on the prepared assignment bundle.
+    ///
+    /// Supported values are profiled_worker and manual_handoff. Omit this for
+    /// normal profiled-worker handoffs.
+    #[schemars(with = "Option<ExecutionModeSchema>")]
+    pub execution_mode: Option<String>,
     /// Git base reference.
     pub base_ref: Option<String>,
     #[serde(default)]
@@ -2388,6 +2414,9 @@ pub struct DispatchReadyWorkData {
     pub failed: usize,
     /// Reason the batch stopped.
     pub stopped_reason: String,
+    /// Execution mode applied or requested for this dispatch.
+    #[schemars(with = "ExecutionModeSchema")]
+    pub execution_mode: String,
     /// Warnings that should be resolved before dispatching work.
     pub preflight_warnings: Vec<String>,
     /// Whether at least one ready worker profile is configured.
@@ -2575,6 +2604,14 @@ pub struct TaskBundle {
     pub owned_surfaces: Vec<String>,
     /// Verification command to run or record for this item.
     pub verification_command: Vec<String>,
+    /// Execution mode recorded for this assignment bundle.
+    ///
+    /// `manual_handoff` means an MCP host or human-managed worker is expected
+    /// to run the assignment through start_worker_task, complete_worker_task,
+    /// evidence recording, and integration.
+    #[serde(default = "crate::execution_mode::default_assignment_execution_mode")]
+    #[schemars(with = "ExecutionModeSchema")]
+    pub execution_mode: String,
     /// Human-readable worker brief generated from the task and backlog item.
     pub brief: String,
 }
@@ -2603,6 +2640,9 @@ pub struct WorkerAssignment {
     pub worktree_path: String,
     /// Generated task bundle for this assignment or task.
     pub bundle: TaskBundle,
+    /// Execution mode recorded for this assignment.
+    #[schemars(with = "ExecutionModeSchema")]
+    pub execution_mode: String,
     /// Worker session identifier.
     pub worker_session: Option<String>,
     /// Timestamp when the task or assignment started.

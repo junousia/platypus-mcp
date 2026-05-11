@@ -1,0 +1,107 @@
+item_id: MCP-071
+version: 1
+mode: full
+requirements:
+- id: R1
+  text: Dispatch exposes an explicit execution_mode so hosts choose between profiled workers, manual handoff, and automatic selection instead of relying on profile side effects.
+- id: R2
+  text: Manual handoff dispatch prepares the normal task, assignment, worktree, and bundle while recording externally managed execution metadata.
+- id: R3
+  text: Default dispatch without ready profiles fails or skips with concrete recovery guidance, and evidence stays tied to valid lifecycle tasks.
+- id: R4
+  text: Reconciliation reports evidence attached to tasks that never reached a valid lifecycle state.
+design:
+  summary: Extend dispatch_ready_work with a small execution-mode enum and keep worker launch concerns outside the MCP server. Profiled mode requires a ready worker profile before creating work. Manual handoff mode intentionally bypasses profile readiness but records the assignment as externally managed so hosts know to start, complete, verify, and integrate through the normal lifecycle.
+  owned_surfaces:
+  - src/dispatch.rs
+  - src/assignments
+  - src/evidence.rs
+  - src/reconcile.rs
+  - src/models.rs
+  - docs/workflow.md
+  - tests
+  notes: The MCP server still does not launch Codex or Claude workers. This mode is an explicit lifecycle-safe handoff to an MCP host or other external executor.
+tasks:
+- id: MCP-071-T01
+  title: Add dispatch execution mode
+  goal: Add a typed dispatch execution_mode parameter and route auto, profiled_worker, and manual_handoff consistently.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/dispatch.rs
+  - src/models.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test dispatch::tests
+  acceptance:
+  - Default auto mode does not silently create lifecycle work when no ready worker profile exists.
+  - manual_handoff can dispatch and prepare without a worker profile.
+  - profiled_worker requires a ready worker profile.
+  notes:
+  - Keep legacy prepare_handoffs and auto_start semantics compatible where possible.
+- id: MCP-071-T02
+  title: Record externally managed assignment metadata
+  goal: Make manual handoff visible in assignment payloads and task events.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-071-T01
+  owned_surfaces:
+  - src/assignments
+  - src/state
+  - src/models.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test assignments::tests
+  - cargo test dispatch::tests
+  acceptance:
+  - Prepared manual handoff assignments include execution_mode metadata.
+  - Task events indicate externally managed execution.
+  - Claimant is preserved in assignment and task state.
+  notes:
+  - Prefer existing JSON bundle or event payloads over schema migrations unless a durable top-level assignment field is clearly necessary.
+- id: MCP-071-T03
+  title: Reconcile orphaned lifecycle evidence
+  goal: Report evidence linked to non-existent or non-terminal tasks so manual execution failures are visible.
+  requirement_refs:
+  - R3
+  - R4
+  depends_on:
+  - MCP-071-T02
+  owned_surfaces:
+  - src/reconcile.rs
+  - src/state
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test reconcile::tests
+  acceptance:
+  - Evidence for unknown task ids creates a reconciliation gap.
+  - Verification or integration evidence for queued, claimed, or running tasks creates a reconciliation gap.
+  - Completed task evidence remains accepted.
+  notes:
+  - This should catch manually recorded evidence that bypassed the worker lifecycle.
+- id: MCP-071-T04
+  title: Document manual handoff flow
+  goal: Update workflow docs and stdio smoke coverage so hosts know the exact manual handoff sequence.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-071-T03
+  owned_surfaces:
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Documentation shows execution_mode=manual_handoff and the follow-up lifecycle tools.
+  - Stdio tests cover manual handoff through the public MCP surface.
+  notes:
+  - Keep docs concise and avoid implying the server starts a worker process.

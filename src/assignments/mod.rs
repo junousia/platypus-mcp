@@ -52,6 +52,7 @@ pub fn prepare_worker_assignment(
         task_id: clean_optional(params.task_id),
         worker: clean_optional(params.worker),
         claimant,
+        execution_mode: clean_optional(params.execution_mode),
         base_ref: params.base_ref,
         verification_command: params.verification_command,
     }) {
@@ -1042,6 +1043,7 @@ fn worker_assignment(snapshot: AssignmentSnapshot) -> WorkerAssignment {
         status: assignment_status(&snapshot.state).to_string(),
         assigned_by: snapshot.assigned_by,
         worktree_path: snapshot.worktree_path,
+        execution_mode: snapshot.bundle.execution_mode.clone(),
         bundle: snapshot.bundle,
         worker_session: snapshot.worker_session,
         started_at: snapshot.started_at,

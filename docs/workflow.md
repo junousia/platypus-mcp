@@ -179,11 +179,17 @@ and `list_task_plans` to review committed plans.
 1. Call `inspect_work_queue`.
 2. If it requires a task plan, use the recommended task-plan tool first.
 3. Call `next_safe_action`.
-4. Ensure at least one ready worker profile is configured with
-   `configure_agent_profile`, or decide that this dispatch is a manual handoff
-   to an MCP host or external agent.
+4. Choose execution mode:
+   - `profiled_worker` requires at least one ready worker profile configured
+     with `configure_agent_profile`.
+   - `manual_handoff` prepares the same task, assignment, worktree, and bundle
+     without requiring a worker profile because the MCP host or a human-managed
+     worker will execute it externally.
+   - `auto` is the default and behaves like `profiled_worker` unless
+     `manual_handoff` is explicitly requested.
 5. For normal execution, call `dispatch_ready_work`; it dispatches one or more
-   runnable items and prepares assignments, worktrees, and bundles.
+   runnable items and prepares assignments, worktrees, and bundles. Pass
+   `execution_mode=manual_handoff` when no configured profile should be used.
 6. For low-level debugging only, call `dispatch_next_work` and then immediately
    `prepare_worker_handoff`; do not run a worker from a bare task id.
 7. Give the assignment bundle and worktree path to the worker harness.
@@ -191,7 +197,10 @@ and `list_task_plans` to review committed plans.
    running transition.
 
 The worker should operate in the assigned worktree, not in the manager
-workspace.
+workspace. Manual handoff is still lifecycle-tracked: after the host or
+external worker edits the worktree, call `start_worker_task` if a running
+transition is needed, then `complete_worker_task`, record verification evidence,
+and integrate with `integrate_worker_result`.
 
 ## Worker Progress And Result
 
@@ -223,7 +232,8 @@ so reconciliation can report the remaining gap.
 - Use `integrate_worker_result` to bring a completed verified worktree back
   into the manager workspace according to `workflow.integration`.
 - Use `reconcile_project` to find missing verification evidence, unresolved
-  findings, and closure gaps.
+  findings, closure gaps, and evidence attached to missing or incomplete task
+  lifecycles.
 
 ## Managed Integration
 

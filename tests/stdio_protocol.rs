@@ -1459,6 +1459,42 @@ async fn stdio_server_dispatches_ready_work_with_handoffs() -> anyhow::Result<()
 }
 
 #[tokio::test]
+async fn stdio_server_dispatches_manual_handoff_without_worker_profile() -> anyhow::Result<()> {
+    let project = dispatch_project_fixture();
+    fs::write(project.path().join("platy.yaml"), "project: test\n")?;
+    git(project.path(), &["add", "platy.yaml"]);
+    git(project.path(), &["commit", "-m", "Remove worker profile"]);
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let result = call_tool_json(
+        &client,
+        "dispatch_ready_work",
+        json!({
+            "max_tasks": 1,
+            "worker": "coder",
+            "claimant": "stdio-manual",
+            "execution_mode": "manual_handoff",
+            "verification_command": ["make", "check"]
+        }),
+    )
+    .await?;
+
+    assert_stage_status("dispatch_ready_work", &result, "completed");
+    assert_eq!(result["data"]["execution_mode"], "manual_handoff");
+    assert_eq!(result["data"]["worker_ready"], false);
+    let item = &result["data"]["items"][0];
+    assert_eq!(item["status"], "prepared");
+    assert_eq!(item["assignment"]["execution_mode"], "manual_handoff");
+    assert_eq!(
+        item["assignment"]["bundle"]["execution_mode"],
+        "manual_handoff"
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_blocks_dispatch_with_active_project_lease() -> anyhow::Result<()> {
     let project = dispatch_project_fixture();
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;

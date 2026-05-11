@@ -50,6 +50,7 @@ fn exercise_lifecycle_contract(state: &impl ProjectState) {
             task_id: Some(dispatched.task.id.clone()),
             worker: Some("coder".to_string()),
             claimant: "contract".to_string(),
+            execution_mode: None,
             base_ref: None,
             verification_command: vec!["make check".to_string()],
         })
@@ -115,6 +116,7 @@ fn exercise_evidence_findings_and_reconcile_contract(state: &impl ProjectState) 
             task_id: Some(dispatched.task.id.clone()),
             worker: Some("verifier".to_string()),
             claimant: "contract".to_string(),
+            execution_mode: None,
             base_ref: None,
             verification_command: Vec::new(),
         })

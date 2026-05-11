@@ -46,9 +46,10 @@ deterministic and references the current public tool names.
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
    Use `draft_task_plan` only when host sampling is available.
 4. Inspect the executable queue: `inspect_work_queue`.
-5. Dispatch work: prefer `dispatch_ready_work` for one or more ready items;
-   use `dispatch_next_work` and `prepare_worker_handoff` only for precise
-   single-step control.
+5. Dispatch work: prefer `dispatch_ready_work` for one or more ready items.
+   Pass `execution_mode=manual_handoff` when the host will run the returned
+   worktree itself. Use `dispatch_next_work` and `prepare_worker_handoff` only
+   for precise single-step control.
 6. Run worker externally: pass the generated bundle/worktree to Codex, Claude,
    or another harness.
 7. Record worker activity: `start_worker_task`, `record_worker_progress`,
@@ -251,6 +252,11 @@ trailers.
   checks Git readiness, dispatches up to `max_tasks` runnable independent
   items, skips already-active items, and prepares worker assignments,
   worktrees, and bundles in one call.
+  Use `execution_mode=profiled_worker` when a configured worker profile must be
+  ready before dispatch. Use `execution_mode=manual_handoff` when the MCP host
+  or a human-managed worker will execute the returned assignment worktree
+  externally. The default `auto` mode requires a ready profile unless
+  `manual_handoff` is explicit.
   Auto-commit of backlog artifacts is opt-in via
   `auto_commit_artifacts=true`.
   For direct-scaffold goals, call `plan_goal_work` first when unsure. Its

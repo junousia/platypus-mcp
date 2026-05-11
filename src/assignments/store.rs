@@ -357,6 +357,7 @@ fn row_to_assignment(row: &Row<'_>) -> rusqlite::Result<WorkerAssignment> {
         status: row.get("status")?,
         assigned_by: row.get("assigned_by")?,
         worktree_path: row.get("worktree_path")?,
+        execution_mode: bundle.execution_mode.clone(),
         bundle,
         worker_session: row.get("worker_session")?,
         started_at: row.get("started_at")?,

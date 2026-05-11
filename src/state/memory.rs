@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::assignments::validation::{clean_changed_files, validate_changed_files};
+use crate::execution_mode;
 use crate::models::{ExternalRef, TaskBundle};
 use serde_json::Value;
 use std::{
@@ -296,6 +297,8 @@ impl ProjectState for MemoryProjectState {
             dependencies: Vec::new(),
             owned_surfaces: vec![".".to_string()],
             verification_command: command.verification_command,
+            execution_mode: execution_mode::normalize_assignment(command.execution_mode.as_deref())
+                .map_err(ProjectStateError::invalid_command)?,
             brief: "Memory backend test assignment.".to_string(),
         };
         let assignment = AssignmentSnapshot {
@@ -323,7 +326,10 @@ impl ProjectState for MemoryProjectState {
             Some(task_id),
             "assignment_prepared",
             format!("Prepared memory assignment `{}`.", assignment.id),
-            None,
+            Some(BTreeMap::from([(
+                "execution_mode".to_string(),
+                Value::String(assignment.bundle.execution_mode.clone()),
+            )])),
         );
         Ok(assignment)
     }
@@ -826,6 +832,44 @@ impl ProjectState for MemoryProjectState {
             .filter(|task| matches!(task.state, TaskLifecycleState::Completed))
             .cloned()
             .collect::<Vec<_>>();
+        for evidence in inner.evidence.values().filter(|evidence| {
+            evidence.source_task_id.is_some()
+                && matches!(evidence.kind.as_str(), "verification" | "commit")
+        }) {
+            let Some(source_task_id) = evidence.source_task_id.as_deref() else {
+                continue;
+            };
+            match inner.tasks.get(source_task_id) {
+                Some(task) if matches!(task.state, TaskLifecycleState::Completed) => {}
+                Some(task) => gaps.push(ReconcileGap {
+                    kind: "evidence_for_incomplete_task".to_string(),
+                    source_item_id: evidence
+                        .source_item_id
+                        .clone()
+                        .or_else(|| Some(task.source_item_id.clone())),
+                    source_task_id: evidence.source_task_id.clone(),
+                    summary: format!(
+                        "Evidence `{}` of kind `{}` is attached to task `{source_task_id}` while it is `{}`.",
+                        evidence.id, evidence.kind, task.status
+                    ),
+                    next_action:
+                        "Complete the worker lifecycle before relying on verification or integration evidence."
+                            .to_string(),
+                }),
+                None => gaps.push(ReconcileGap {
+                    kind: "orphaned_task_evidence".to_string(),
+                    source_item_id: evidence.source_item_id.clone(),
+                    source_task_id: evidence.source_task_id.clone(),
+                    summary: format!(
+                        "Evidence `{}` of kind `{}` references missing task `{source_task_id}`.",
+                        evidence.id, evidence.kind
+                    ),
+                    next_action:
+                        "Record evidence against a valid lifecycle task or replace the orphaned evidence."
+                            .to_string(),
+                }),
+            }
+        }
         for task in &completed_tasks {
             if !inner.evidence.values().any(|evidence| {
                 evidence.source_task_id.as_deref() == Some(task.id.as_str())

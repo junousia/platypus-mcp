@@ -126,6 +126,7 @@ pub fn generate_task_bundle(
         dependencies: item.frontmatter.depends_on,
         owned_surfaces,
         verification_command,
+        execution_mode: crate::execution_mode::default_assignment_execution_mode(),
         brief,
     };
 

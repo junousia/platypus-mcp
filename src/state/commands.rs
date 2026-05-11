@@ -17,6 +17,7 @@ pub struct PrepareAssignmentCommand {
     pub task_id: Option<String>,
     pub worker: Option<String>,
     pub claimant: String,
+    pub execution_mode: Option<String>,
     pub base_ref: Option<String>,
     pub verification_command: Vec<String>,
 }
