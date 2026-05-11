@@ -371,6 +371,7 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(resource_uris.contains(&"platypus://guidance/workflow"));
     assert!(resource_uris.contains(&"platypus://guidance/spec-driven-development"));
     assert!(resource_uris.contains(&"platypus://guidance/project-status"));
+    assert!(resource_uris.contains(&"platypus://guidance/tool-preload"));
     assert!(resource_uris.contains(&"platypus://guidance/backlog-authoring"));
     assert!(resource_uris.contains(&"platypus://guidance/worker-handoff"));
     assert!(resource_uris.contains(&"platypus://guidance/integration-review"));
@@ -401,6 +402,19 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("draft_backlog_items"));
     assert!(text.contains("write_task_plan"));
 
+    let preload = client
+        .read_resource(ReadResourceRequestParams {
+            meta: None,
+            uri: "platypus://guidance/tool-preload".to_string(),
+        })
+        .await?;
+    let text = resource_text(&preload.contents[0]);
+    assert!(text.contains("Planning Startup Group"));
+    assert!(text.contains("Execution Startup Group"));
+    assert!(text.contains("host-specific"));
+    assert!(text.contains("create_backlog_items"));
+    assert!(text.contains("dispatch_ready_work"));
+
     client.cancel().await?;
     Ok(())
 }
@@ -415,6 +429,7 @@ async fn stdio_server_lists_and_returns_host_guidance_prompts() -> anyhow::Resul
     assert!(prompt_names.contains(&"platypus-workflow"));
     assert!(prompt_names.contains(&"platypus-spec-driven-development"));
     assert!(prompt_names.contains(&"platypus-project-status"));
+    assert!(prompt_names.contains(&"platypus-tool-preload"));
     assert!(prompt_names.contains(&"platypus-backlog-authoring"));
     assert!(prompt_names.contains(&"platypus-worker-handoff"));
     assert!(prompt_names.contains(&"platypus-integration-review"));

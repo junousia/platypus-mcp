@@ -320,6 +320,32 @@ file edits or informal task tracking.
 7. Implement inside the assigned worktree, record progress and evidence, then
    integrate through Platypus.
 
+## Tool Preload
+
+If your MCP host supports tool discovery or schema preloading, load the common
+planning group at session start:
+
+`doctor_snapshot`, `inspect_status`, `inspect_workflow_config`,
+`next_safe_action`, `plan_goal_work`, `classify_workflow_fit`,
+`create_backlog_item`, `create_backlog_items`, `create_epic`,
+`validate_backlog`, `list_backlog`, `inspect_backlog_inventory`,
+`inspect_work_queue`, `classify_planning_needs`, `write_task_plan`,
+`validate_task_plan`, `inspect_task_plan`, `request_planning_approval`,
+`approval_respond`.
+
+Before dispatch, handoff, verification, or integration work, load the execution
+group:
+
+`inspect_work_queue`, `dispatch_ready_work`, `generate_task_bundle`,
+`inspect_task_events`, `events_replay`, `worktree_status`,
+`inspect_worktree_changes`, `send_worker_guidance`, `start_worker_task`,
+`record_worker_progress`, `complete_worker_task`, `run_task_verification`,
+`record_verification_evidence`, `record_finding`, `validate_findings`,
+`integrate_worker_result`, `worktree_cleanup`, `reconcile_project`.
+
+Preloading is optional and host-specific. If the host cannot preload tool
+schemas, continue normally and call tools as needed.
+
 ## Rules
 
 - Keep backlog items declarative; do not add runtime status, task attempts, PR
@@ -394,10 +420,20 @@ mod tests {
         assert!(agents.contains("spec-driven development"));
         assert!(agents.contains("next_safe_action"));
         assert!(agents.contains("draft_task_plan"));
+        assert!(agents.contains("Tool Preload"));
+        assert!(agents.contains("planning group"));
+        assert!(agents.contains("execution"));
+        assert!(agents.contains("request_planning_approval"));
+        assert!(agents.contains("dispatch_ready_work"));
         let claude = fs::read_to_string(temp.path().join("CLAUDE.md")).expect("claude");
         assert!(claude.contains("spec-driven development"));
         assert!(claude.contains("next_safe_action"));
         assert!(claude.contains("draft_task_plan"));
+        assert!(claude.contains("Tool Preload"));
+        assert!(claude.contains("planning group"));
+        assert!(claude.contains("execution"));
+        assert!(claude.contains("request_planning_approval"));
+        assert!(claude.contains("dispatch_ready_work"));
         assert_eq!(
             agents.replace("Agent Instructions", "Shared Instructions"),
             claude.replace("Claude Instructions", "Shared Instructions")

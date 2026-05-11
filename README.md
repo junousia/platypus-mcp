@@ -201,6 +201,13 @@ Add `--init-project` for fresh repositories so `AGENTS.md`, `CLAUDE.md`,
 `WORKFLOW.md`, `platy.yaml`, and `backlog/` are created alongside host MCP
 configuration.
 
+If your host defers tool schemas, read resource
+`platypus://guidance/tool-preload` or prompt `platypus-tool-preload` at session
+start. It lists a planning startup group for backlog and design work and an
+execution startup group for dispatch, handoff, verification, and integration.
+This is advisory only; hosts without preload support can call the same tools
+when they are needed.
+
 Codex-style configuration:
 
 ```toml

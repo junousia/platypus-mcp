@@ -1,0 +1,84 @@
+item_id: MCP-073
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Host guidance exposes concise common startup tool groups for planning sessions.
+- id: R2
+  text: Host guidance exposes concise common startup tool groups for execution sessions.
+- id: R3
+  text: Generated repository guidance files explain when and how to preload tool groups.
+- id: R4
+  text: Documentation explains that tool preloading is optional and host-specific.
+design:
+  summary: Add a dedicated host guidance resource and prompt for Platypus tool preload groups, then reference the same groups from repo-local AGENTS.md/CLAUDE.md and public docs. Keep the guidance deterministic and advisory so hosts that do not support schema preloading can still use the tools normally.
+  owned_surfaces:
+  - src/host_guidance.rs
+  - src/project/init.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - README.md
+  - tests
+  notes: Do not depend on sampling or any host-specific hidden context behavior.
+tasks:
+- id: MCP-073-T001
+  title: Add tool preload guidance resource
+  goal: Add a resource/prompt that names planning and execution startup tool groups.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/host_guidance.rs
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - cargo test --test stdio_protocol stdio_server_lists_and_reads_host_guidance_resources
+  - cargo test --test stdio_protocol stdio_server_lists_and_returns_host_guidance_prompts
+  acceptance:
+  - Resource and prompt lists include the new preload guidance.
+  - Guidance text includes planning and execution groups.
+  - Guidance states preloading is optional and host-specific.
+  notes:
+  - Keep the groups concise enough for session startup.
+- id: MCP-073-T002
+  title: Update generated host files
+  goal: Make init_project generated AGENTS.md and CLAUDE.md explain preload timing and tool groups.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-073-T001
+  owned_surfaces:
+  - src/project/init.rs
+  - tests
+  suggested_worker: coder
+  verification:
+  - cargo test project::init::tests::init_project_creates_missing_scaffold
+  acceptance:
+  - AGENTS.md mentions loading the planning tool group at session start.
+  - AGENTS.md mentions loading the execution tool group before dispatch or handoff.
+  - CLAUDE.md contains the same host-neutral instructions.
+  notes:
+  - Generated files should remain concise and host-neutral.
+- id: MCP-073-T003
+  title: Document optional preload behavior
+  goal: Document how hosts should use the preload guidance without relying on non-standard features.
+  requirement_refs:
+  - R4
+  depends_on:
+  - MCP-073-T002
+  owned_surfaces:
+  - docs/tools.md
+  - docs/workflow.md
+  - README.md
+  suggested_worker: coder
+  verification:
+  - make check
+  acceptance:
+  - Tool docs list the new preload resource and prompt.
+  - Workflow docs explain that preload support is optional.
+  - README points users to the preload guidance for deferred tool schemas.
+  notes:
+  - Avoid implying sampling is required.
