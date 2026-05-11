@@ -1552,6 +1552,16 @@ pub struct ProjectStatusData {
     pub backlog_items: usize,
     /// Number of backlog items currently runnable.
     pub runnable_backlog_items: usize,
+    /// Number of configured agent profiles.
+    pub agent_profiles: usize,
+    /// Whether a ready manager profile is configured.
+    pub manager_ready: bool,
+    /// Whether at least one ready worker profile is configured.
+    pub worker_ready: bool,
+    /// Number of ready worker profiles.
+    pub ready_worker_profiles: usize,
+    /// Warnings that should be resolved before dispatching work.
+    pub agent_profile_warnings: Vec<String>,
     /// Whether durable task state is supported by the configured backend.
     pub tasks_supported: bool,
     /// Whether durable finding state is supported by the configured backend.
@@ -1588,6 +1598,10 @@ pub struct WorkQueueData {
     pub active_item_ids: Vec<String>,
     /// Warnings that should be resolved before dispatching work.
     pub preflight_warnings: Vec<String>,
+    /// Whether at least one ready worker profile is configured.
+    pub worker_ready: bool,
+    /// Number of ready worker profiles.
+    pub ready_worker_profiles: usize,
     /// Recommended Platypus MCP tool to call next.
     pub recommended_tool: String,
     /// Human-readable summary of the record or result.
@@ -2374,6 +2388,12 @@ pub struct DispatchReadyWorkData {
     pub failed: usize,
     /// Reason the batch stopped.
     pub stopped_reason: String,
+    /// Warnings that should be resolved before dispatching work.
+    pub preflight_warnings: Vec<String>,
+    /// Whether at least one ready worker profile is configured.
+    pub worker_ready: bool,
+    /// Number of ready worker profiles.
+    pub ready_worker_profiles: usize,
     /// Items or records in this response.
     pub items: Vec<DispatchReadyWorkItem>,
 }

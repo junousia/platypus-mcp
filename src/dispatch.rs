@@ -2,9 +2,9 @@ use crate::{
     assignments, backlog, config,
     git_readiness::inspect_git_readiness,
     models::{
-        ActionResult, ActionStatus, AgentProfilesParams, BacklogCandidate, DispatchNextWorkData,
-        DispatchReadyWorkData, DispatchReadyWorkItem, DispatchReadyWorkParams,
-        PrepareWorkerAssignmentParams, RootParams, TaskRecord,
+        ActionResult, ActionStatus, BacklogCandidate, DispatchNextWorkData, DispatchReadyWorkData,
+        DispatchReadyWorkItem, DispatchReadyWorkParams, PrepareWorkerAssignmentParams, RootParams,
+        TaskRecord,
     },
     state::{
         sqlite::SqliteProjectState, BacklogCandidateSnapshot, DispatchWorkCommand, ProjectState,
@@ -80,6 +80,15 @@ pub fn dispatch_ready_work(
     let root = state.root().display().to_string();
     let requested = params.max_tasks.unwrap_or(10).clamp(1, 10);
     let active_source_items = active_source_item_ids(state.root());
+    let profile_readiness = config::inspect_agent_profile_readiness(state.root()).ok();
+    let worker_ready = profile_readiness
+        .as_ref()
+        .is_some_and(|readiness| readiness.worker_ready());
+    let ready_worker_profiles = profile_readiness
+        .as_ref()
+        .map(|readiness| readiness.ready_worker_count)
+        .unwrap_or(0);
+    let preflight_warnings = dispatch_profile_warnings(profile_readiness.as_ref());
     if params.dry_run.unwrap_or(false) {
         let listed = backlog::list_backlog(default_root, Some(root.as_str()), Some(100));
         let candidates = match listed {
@@ -133,10 +142,17 @@ pub fn dispatch_ready_work(
                 started: 0,
                 failed: 0,
                 stopped_reason: if selected.is_empty() {
-                    "no_runnable_items".to_string()
+                    if available_before_dispatch > 0 && !worker_ready {
+                        "worker_profile_missing".to_string()
+                    } else {
+                        "no_runnable_items".to_string()
+                    }
                 } else {
                     "dry_run".to_string()
                 },
+                preflight_warnings,
+                worker_ready,
+                ready_worker_profiles,
                 items,
             }),
             error: None,
@@ -179,6 +195,38 @@ pub fn dispatch_ready_work(
         .take(requested)
         .map(|candidate| candidate.item_id.clone())
         .collect::<BTreeSet<_>>();
+    if params.auto_start.unwrap_or(false) && !selected_item_ids.is_empty() && !worker_ready {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Failed,
+            summary:
+                "Runnable backlog work exists, but no ready worker profile can execute it."
+                    .to_string(),
+            next_action: Some(format!(
+                "{} For manual handoff, call dispatch_ready_work with auto_start=false and prepare_handoffs=true, then run the returned assignment externally.",
+                config::worker_profile_setup_guidance()
+            )),
+            data: Some(DispatchReadyWorkData {
+                root,
+                requested,
+                available_before_dispatch,
+                selected: 0,
+                dispatched: 0,
+                prepared: 0,
+                started: 0,
+                failed: 0,
+                stopped_reason: "worker_profile_missing".to_string(),
+                preflight_warnings,
+                worker_ready,
+                ready_worker_profiles,
+                items: Vec::new(),
+            }),
+            error: Some(
+                "No ready worker profile is configured for managed auto_start dispatch."
+                    .to_string(),
+            ),
+        };
+    }
     if let Some(blocked) = dispatch_readiness_result(
         action,
         state.root(),
@@ -204,6 +252,9 @@ pub fn dispatch_ready_work(
         started: 0,
         failed: 0,
         stopped_reason: "max_tasks_reached".to_string(),
+        preflight_warnings,
+        worker_ready,
+        ready_worker_profiles,
         items: Vec::new(),
     };
 
@@ -371,11 +422,6 @@ pub fn dispatch_ready_work(
     } else {
         "No runnable backlog items were dispatched.".to_string()
     };
-    let profile_warning = if auto_start {
-        dispatch_agent_profile_warning(default_root, &root)
-    } else {
-        None
-    };
     let mut next_action = if report.started > 0 {
         "Assignments were marked running in local lifecycle state. Launch or continue external workers in the prepared worktrees, record progress events, then complete_worker_task."
             .to_string()
@@ -394,14 +440,19 @@ pub fn dispatch_ready_work(
         "Inspect the returned per-item reasons and create or unblock backlog items if needed."
             .to_string()
     };
-    if let Some(warning) = profile_warning.as_deref() {
-        next_action = format!("{next_action} {warning}");
+    if !report.worker_ready && report.dispatched > 0 {
+        next_action = format!(
+            "{next_action} No ready worker profile is configured; this dispatch is prepared for manual handoff. {}",
+            config::worker_profile_setup_guidance()
+        );
     }
     next_action.push_str(
         " Planning rationale for each queued item is available via inspect_work_queue and classify_planning_needs.",
     );
-    let summary = if let Some(warning) = profile_warning {
-        format!("{summary} {warning}")
+    let summary = if !report.worker_ready && report.dispatched > 0 {
+        format!(
+            "{summary} No ready worker profile is configured; use manual handoff or configure a worker profile."
+        )
     } else {
         summary
     };
@@ -415,31 +466,22 @@ pub fn dispatch_ready_work(
     }
 }
 
-fn dispatch_agent_profile_warning(default_root: &Path, root: &str) -> Option<String> {
-    let profiles = config::list_agent_profiles(
-        default_root,
-        AgentProfilesParams {
-            root: Some(root.to_string()),
-        },
-    )
-    .data?;
-    if profiles.profiles.is_empty() {
-        return Some(
-            "No agent profiles are configured; prepared worktrees may remain idle until external workers are started."
+fn dispatch_profile_warnings(readiness: Option<&config::AgentProfileReadiness>) -> Vec<String> {
+    let Some(readiness) = readiness else {
+        return vec![
+            "Could not inspect worker profiles. Run doctor_snapshot or configure_agent_profile before managed dispatch."
                 .to_string(),
-        );
+        ];
+    };
+    if readiness.worker_ready() {
+        return Vec::new();
     }
-    let has_ready_worker = profiles
-        .profiles
+    readiness
+        .warnings
         .iter()
-        .any(|profile| profile.role == "worker" && profile.ready);
-    if !has_ready_worker {
-        return Some(
-            "No ready worker profile is configured; dispatch prepared tasks but nothing can execute them yet."
-                .to_string(),
-        );
-    }
-    None
+        .filter(|warning| warning.to_ascii_lowercase().contains("worker"))
+        .cloned()
+        .collect()
 }
 
 fn dispatch_readiness_result<T: schemars::JsonSchema + serde::Serialize>(
@@ -943,6 +985,38 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_ready_work_dry_run_reports_missing_worker_profile() {
+        let project = backlog_project(true);
+        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
+
+        let result = dispatch_ready_work(
+            project.path(),
+            DispatchReadyWorkParams {
+                root: None,
+                item_id: None,
+                max_tasks: Some(1),
+                worker: Some("coder".to_string()),
+                claimant: Some("tester".to_string()),
+                prepare_handoffs: Some(false),
+                auto_start: None,
+                auto_commit_artifacts: None,
+                dry_run: Some(true),
+                verification_command: Vec::new(),
+            },
+        );
+        let data = result.data.expect("dry-run data");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert!(!data.worker_ready);
+        assert_eq!(data.ready_worker_profiles, 0);
+        assert!(data
+            .preflight_warnings
+            .iter()
+            .any(|warning| warning.contains("No worker profile")));
+        assert_eq!(data.selected, 1);
+    }
+
+    #[test]
     fn dispatch_ready_work_dry_run_filters_by_worker_like_real_dispatch() {
         let project = backlog_project(true);
 
@@ -1073,6 +1147,38 @@ mod tests {
         assert_eq!(data.started, 1);
         assert_eq!(data.items[0].status, "started");
         assert!(data.items[0].reason.contains("Started worker assignment"));
+    }
+
+    #[test]
+    fn dispatch_ready_work_auto_start_fails_without_ready_worker_profile() {
+        let project = backlog_project(true);
+        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
+
+        let result = dispatch_ready_work(
+            project.path(),
+            DispatchReadyWorkParams {
+                root: None,
+                item_id: None,
+                max_tasks: Some(1),
+                worker: Some("coder".to_string()),
+                claimant: Some("tester".to_string()),
+                prepare_handoffs: Some(true),
+                auto_start: Some(true),
+                auto_commit_artifacts: None,
+                dry_run: None,
+                verification_command: Vec::new(),
+            },
+        );
+        let data = result.data.expect("batch data");
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert_eq!(data.stopped_reason, "worker_profile_missing");
+        assert_eq!(data.dispatched, 0);
+        assert!(result
+            .next_action
+            .as_deref()
+            .unwrap_or("")
+            .contains("manual handoff"));
     }
 
     #[test]
@@ -1227,6 +1333,7 @@ mod tests {
 
     fn backlog_project(with_git: bool) -> TempDir {
         let project = TempDir::new().expect("temp dir");
+        write_ready_profiles(project.path());
         fs::create_dir_all(project.path().join("backlog/items")).expect("items");
         fs::create_dir_all(project.path().join("backlog/epics")).expect("epics");
         fs::write(
@@ -1257,6 +1364,24 @@ area: general
             git(project.path(), &["commit", "-m", "Initial commit"]);
         }
         project
+    }
+
+    fn write_ready_profiles(root: &Path) {
+        fs::write(
+            root.join("platy.yaml"),
+            r#"agents:
+  profiles:
+    manager:
+      role: manager
+      harness: codex
+      executable: git
+    coder:
+      role: worker
+      harness: codex
+      executable: git
+"#,
+        )
+        .expect("config");
     }
 
     fn write_item(root: &Path, id: &str, title: &str, surface: &str) {

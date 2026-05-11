@@ -2142,6 +2142,23 @@ async fn stdio_server_runs_full_lifecycle_smoke_with_fake_worker() -> anyhow::Re
     assert_stage_status("init_project", &initialized, "completed");
     assert!(project.path().join("backlog/items").is_dir());
 
+    let configured_worker = call_tool_json(
+        &client,
+        "configure_agent_profile",
+        json!({
+            "name": "coder",
+            "role": "worker",
+            "harness": "fake",
+            "executable": "git"
+        }),
+    )
+    .await?;
+    assert_stage_status(
+        "configure_agent_profile worker",
+        &configured_worker,
+        "completed",
+    );
+
     git(project.path(), &["init"]);
     git(project.path(), &["config", "user.name", "Platypus Test"]);
     git(
@@ -2518,7 +2535,7 @@ fn prompt_text(message: &rmcp::model::PromptMessage) -> &str {
 
 fn project_fixture() -> TempDir {
     let temp = TempDir::new().expect("temp dir");
-    fs::write(temp.path().join("platy.yaml"), "project: test\n").expect("config");
+    fs::write(temp.path().join("platy.yaml"), ready_profiles_yaml()).expect("config");
     git(temp.path(), &["init"]);
     git(temp.path(), &["config", "user.name", "Platypus Test"]);
     git(
@@ -2588,7 +2605,7 @@ Contract.
 
 fn dispatch_project_fixture() -> TempDir {
     let temp = TempDir::new().expect("temp dir");
-    fs::write(temp.path().join("platy.yaml"), "project: test\n").expect("config");
+    fs::write(temp.path().join("platy.yaml"), ready_profiles_yaml()).expect("config");
     fs::create_dir_all(temp.path().join("backlog/items")).expect("items dir");
     fs::create_dir_all(temp.path().join("backlog/epics")).expect("epics dir");
     fs::write(
@@ -2658,7 +2675,7 @@ fn assignment_project_fixture() -> TempDir {
     fs::write(temp.path().join("README.md"), "# Test\n").expect("readme");
     git(temp.path(), &["add", "README.md"]);
     git(temp.path(), &["commit", "-m", "Initial commit"]);
-    fs::write(temp.path().join("platy.yaml"), "project: test\n").expect("config");
+    fs::write(temp.path().join("platy.yaml"), ready_profiles_yaml()).expect("config");
     fs::create_dir_all(temp.path().join("backlog/items")).expect("items dir");
     fs::create_dir_all(temp.path().join("backlog/epics")).expect("epics dir");
     fs::write(
@@ -2709,6 +2726,21 @@ Keep changes in README.md.
     git(temp.path(), &["add", "platy.yaml", "backlog"]);
     git(temp.path(), &["commit", "-m", "Add Platypus scaffold"]);
     temp
+}
+
+fn ready_profiles_yaml() -> &'static str {
+    r#"project: test
+agents:
+  profiles:
+    manager:
+      role: manager
+      harness: codex
+      executable: git
+    coder:
+      role: worker
+      harness: codex
+      executable: git
+"#
 }
 
 fn git(root: &std::path::Path, args: &[&str]) {

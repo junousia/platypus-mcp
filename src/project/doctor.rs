@@ -1,5 +1,6 @@
 use super::paths::resolve_root;
 use crate::{
+    config,
     git_readiness::{inspect_git_readiness, GitReadinessStatus},
     models::{ActionResult, DoctorCheck, DoctorCheckStatus, DoctorSnapshotData},
 };
@@ -35,6 +36,7 @@ pub fn doctor_snapshot(
     ));
     checks.push(git_check(&root));
     checks.push(backlog_count_check(&root));
+    checks.extend(agent_profile_checks(&root));
 
     let has_failures = checks
         .iter()
@@ -67,6 +69,66 @@ pub fn doctor_snapshot(
             data: Some(data),
             error: None,
         }
+    }
+}
+
+fn agent_profile_checks(root: &Path) -> Vec<DoctorCheck> {
+    match config::inspect_agent_profile_readiness(root) {
+        Ok(readiness) => vec![
+            DoctorCheck {
+                name: "agent_manager_profile".to_string(),
+                status: if readiness.manager_ready() {
+                    DoctorCheckStatus::Pass
+                } else {
+                    DoctorCheckStatus::Warn
+                },
+                summary: if readiness.manager_ready() {
+                    format!(
+                        "{} ready manager profile(s) configured.",
+                        readiness.ready_manager_count
+                    )
+                } else if readiness.manager_count > 0 {
+                    "Manager profile exists but is not ready.".to_string()
+                } else {
+                    "No manager profile is configured.".to_string()
+                },
+                next_action: (!readiness.manager_ready())
+                    .then(config::manager_profile_setup_guidance),
+            },
+            DoctorCheck {
+                name: "agent_worker_profile".to_string(),
+                status: if readiness.worker_ready() {
+                    DoctorCheckStatus::Pass
+                } else {
+                    DoctorCheckStatus::Warn
+                },
+                summary: if readiness.worker_ready() {
+                    format!(
+                        "{} ready worker profile(s) configured.",
+                        readiness.ready_worker_count
+                    )
+                } else if readiness.worker_count > 0 {
+                    "Worker profile exists but is not ready.".to_string()
+                } else {
+                    "No worker profile is configured.".to_string()
+                },
+                next_action: (!readiness.worker_ready()).then(|| {
+                    format!(
+                        "{} Manual handoff is possible through dispatch_ready_work prepare_handoffs=true.",
+                        config::worker_profile_setup_guidance()
+                    )
+                }),
+            },
+        ],
+        Err(error) => vec![DoctorCheck {
+            name: "agent_profiles".to_string(),
+            status: DoctorCheckStatus::Warn,
+            summary: format!("Could not inspect agent profiles: {error}"),
+            next_action: Some(
+                "Create platy.yaml or run init_project, then configure manager and worker profiles."
+                    .to_string(),
+            ),
+        }],
     }
 }
 
@@ -240,10 +302,51 @@ mod tests {
             .contains("plan_goal_work"));
     }
 
+    #[test]
+    fn doctor_snapshot_warns_when_agent_profiles_are_missing() {
+        let temp = project_fixture(true);
+        init_git(temp.path());
+        fs::write(temp.path().join("platy.yaml"), "project: test\n").expect("config");
+        fs::write(temp.path().join("backlog/items/PROJ-001.md"), "# item\n").expect("backlog item");
+
+        let root = temp.path().to_string_lossy().into_owned();
+        let result = doctor_snapshot(temp.path(), Some(root.as_str()));
+        let data = result.data.expect("data");
+
+        assert!(data.ok);
+        let worker = data
+            .checks
+            .iter()
+            .find(|check| check.name == "agent_worker_profile")
+            .expect("worker check");
+        assert!(matches!(worker.status, DoctorCheckStatus::Warn));
+        assert!(worker.summary.contains("No worker profile"));
+        assert!(worker
+            .next_action
+            .as_deref()
+            .unwrap_or("")
+            .contains("configure_agent_profile"));
+    }
+
     fn project_fixture(with_backlog_dirs: bool) -> TempDir {
         let temp = TempDir::new().expect("temp dir");
         if with_backlog_dirs {
-            fs::write(temp.path().join("platy.yaml"), "project: test\n").expect("config");
+            fs::write(
+                temp.path().join("platy.yaml"),
+                r#"project: test
+agents:
+  profiles:
+    manager:
+      role: manager
+      harness: codex
+      executable: git
+    coder:
+      role: worker
+      harness: codex
+      executable: git
+"#,
+            )
+            .expect("config");
             fs::create_dir_all(temp.path().join("backlog/items")).expect("items dir");
             fs::create_dir_all(temp.path().join("backlog/epics")).expect("epics dir");
         }
