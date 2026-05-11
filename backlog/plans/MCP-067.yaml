@@ -1,0 +1,63 @@
+item_id: MCP-067
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Expose a read-only dependency graph tool for backlog items without requiring hosts to read individual markdown files.
+- id: R2
+  text: Derive closed state from Platypus-Closes Git trailers and mark runnable, blocked, and closed nodes consistently with existing backlog listing behavior.
+- id: R3
+  text: Report missing dependency references and cycles as structured graph validation failures.
+- id: R4
+  text: Support focused and bounded output so large backlogs remain usable in MCP clients.
+design:
+  summary: Add an inspect_dependency_graph tool backed by existing backlog parsing and Git-trailer closure detection. The tool returns typed graph nodes, edges, roots, leaves, topological order, runnable nodes, closed nodes, blocked nodes, missing dependency references, cycle paths, and truncation metadata.
+  owned_surfaces:
+  - src/backlog
+  - src/models.rs
+  - src/server.rs
+  - docs/tools.md
+  - tests
+  notes: Keep the tool read-only and deterministic. It should parse enough backlog state to explain invalid dependency structure rather than delegating all failures to validate_backlog.
+tasks:
+- id: MCP-067-T01
+  title: Build backlog dependency graph data
+  goal: Add a backlog graph builder that computes nodes, edges, closure state, missing dependencies, cycles, and topological order.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/backlog
+  - src/models.rs
+  suggested_worker: coder
+  verification:
+  - cargo test backlog::graph::tests
+  acceptance:
+  - Linear chains return dependency-first topological order.
+  - Independent roots, leaves, runnable, blocked, and closed node sets are returned.
+  - Missing dependencies and cycles are returned in structured fields.
+  notes:
+  - Use existing project-root resolution and Git trailer closure helpers.
+- id: MCP-067-T02
+  title: Expose graph inspection through MCP
+  goal: Register inspect_dependency_graph as a read-only MCP tool and document its intended use.
+  requirement_refs:
+  - R1
+  - R4
+  depends_on:
+  - MCP-067-T01
+  owned_surfaces:
+  - src/server.rs
+  - docs/tools.md
+  - tests/stdio_protocol.rs
+  suggested_worker: coder
+  verification:
+  - cargo test --test stdio_protocol
+  acceptance:
+  - Tool list includes inspect_dependency_graph.
+  - Stdio smoke test can call the tool and inspect graph fields.
+  - Documentation states the default and maximum graph limits.
+  notes:
+  - Keep output bounded and report truncation explicitly.

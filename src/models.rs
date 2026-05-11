@@ -494,6 +494,26 @@ pub struct ValidateBacklogParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct InspectDependencyGraphParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Backlog item ID to focus on. When set, the graph includes that item,
+    /// its dependency ancestors, and its dependent descendants.
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
+    pub focus_item_id: Option<String>,
+    /// Whether closed backlog items should be included as graph nodes.
+    ///
+    /// Closed state is derived from reachable Platypus-Closes Git trailers.
+    #[schemars(example = example_true())]
+    pub include_closed: Option<bool>,
+    /// Maximum number of graph nodes to return after focus filtering.
+    ///
+    /// Defaults to 200 and is capped at 500.
+    #[schemars(range(min = 1, max = 500))]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct DraftBacklogItemsParams {
     /// Goal text that drives this request or record.
     #[schemars(example = example_goal())]
@@ -1916,6 +1936,94 @@ pub struct BacklogInventoryItem {
     pub runnable: bool,
     /// Human-readable reason for the decision or result.
     pub reason: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct BacklogDependencyGraphData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Focus item used to scope the graph, when requested.
+    pub focus_item_id: Option<String>,
+    /// Whether closed backlog items are included as graph nodes.
+    pub include_closed: bool,
+    /// Maximum number of graph nodes requested after focus filtering.
+    pub limit: usize,
+    /// Total number of graph nodes in scope before applying the limit.
+    pub total: usize,
+    /// Number of graph nodes returned.
+    pub returned: usize,
+    /// Whether the graph output was truncated by the limit.
+    pub truncated: bool,
+    /// Backlog item graph nodes returned in deterministic item ID order.
+    pub nodes: Vec<BacklogDependencyNode>,
+    /// Directed graph edges from dependency item to dependent item.
+    pub edges: Vec<BacklogDependencyEdge>,
+    /// Node IDs with no dependency edges inside the returned graph.
+    pub roots: Vec<String>,
+    /// Node IDs with no dependent edges inside the returned graph.
+    pub leaves: Vec<String>,
+    /// Dependency-first order for acyclic nodes in the returned graph.
+    ///
+    /// If cycles are present this order is partial and cycle details are
+    /// reported in `cycles`.
+    pub topological_order: Vec<String>,
+    /// Open node IDs whose dependencies are all closed or absent.
+    pub runnable_nodes: Vec<String>,
+    /// Node IDs closed by reachable Platypus-Closes Git trailers.
+    pub closed_nodes: Vec<String>,
+    /// Open node IDs blocked by open or missing dependencies.
+    pub blocked_nodes: Vec<String>,
+    /// Dependency references that point to no backlog item.
+    pub missing_dependencies: Vec<BacklogMissingDependency>,
+    /// Detected dependency cycles. Each cycle repeats the first node at the end.
+    pub cycles: Vec<Vec<String>>,
+    /// Validation issues found while building the graph.
+    pub validation_errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct BacklogDependencyNode {
+    /// Backlog item identifier.
+    pub item_id: String,
+    /// Human-readable title or short label.
+    pub title: String,
+    /// Backlog priority for this item.
+    pub priority: String,
+    #[serde(rename = "type")]
+    /// Backlog item type.
+    pub item_type: String,
+    /// Primary area or surface for this item.
+    pub area: String,
+    /// Suggested worker name for this item.
+    pub suggested_worker: Option<String>,
+    /// Dependencies declared by this backlog item.
+    pub depends_on: Vec<String>,
+    /// Backlog item IDs that depend on this item.
+    pub dependents: Vec<String>,
+    /// Dependencies that currently prevent this item from being runnable.
+    pub blocked_by: Vec<String>,
+    /// Declared dependencies that do not resolve to backlog items.
+    pub missing_dependencies: Vec<String>,
+    /// Whether this backlog item is closed.
+    pub closed: bool,
+    /// Whether this backlog item is runnable now.
+    pub runnable: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct BacklogDependencyEdge {
+    /// Backlog item ID that must be completed first.
+    pub dependency: String,
+    /// Backlog item ID that is blocked by the dependency.
+    pub dependent: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct BacklogMissingDependency {
+    /// Backlog item that declares the missing dependency.
+    pub item_id: String,
+    /// Dependency item ID that was referenced but not found.
+    pub missing_dependency: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
