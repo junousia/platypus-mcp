@@ -234,20 +234,23 @@ worktrees before integration.
 
 1. Inspect setup with `doctor_snapshot`, `inspect_status`, and
    `next_safe_action`.
-2. Turn goals into declarative backlog items with the host model and
+2. For broad goals, call `plan_goal_work` with `intent=planning_only` while
+   shaping backlog or design, or `intent=ready_to_execute` after execution is
+   approved.
+3. Turn goals into declarative backlog items with the host model and
    `create_backlog_item` or `create_backlog_items`, then `validate_backlog`.
    Use `draft_backlog_items` only when the MCP client supports sampling.
-3. Inspect the queue with `inspect_work_queue` and
+4. Inspect the queue with `inspect_work_queue` and
    `classify_planning_needs`.
-4. For standard or full work, create a strict task plan with `write_task_plan`
+5. For standard or full work, create a strict task plan with `write_task_plan`
    and `validate_task_plan`; use `draft_task_plan` only when MCP sampling is
    available.
-5. Dispatch and prepare work with `dispatch_next_work` and
+6. Dispatch and prepare work with `dispatch_next_work` and
    `prepare_worker_handoff`.
-6. Run implementation in the assigned worktree, not in the manager workspace.
-7. Record progress, verification evidence, findings, and final result before
+7. Run implementation in the assigned worktree, not in the manager workspace.
+8. Record progress, verification evidence, findings, and final result before
    integrating.
-8. Use `integrate_worker_result` and `reconcile_project` to close the loop.
+9. Use `integrate_worker_result` and `reconcile_project` to close the loop.
 
 ## State Rules
 

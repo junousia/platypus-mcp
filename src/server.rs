@@ -2051,6 +2051,11 @@ mod tests {
             &["auto", "direct_scaffold", "hybrid", "platypus_workflow"],
         );
         assert_property_enum_values(
+            &input_schema(&tools, "plan_goal_work"),
+            "intent",
+            &["auto", "planning_only", "ready_to_execute"],
+        );
+        assert_property_enum_values(
             &input_schema(&tools, "approval_respond"),
             "decision",
             &["approve", "deny"],

@@ -73,6 +73,11 @@ mechanism is verified.
    It classifies whether the next step should be direct scaffolding, a hybrid
    flow, or tracked Platypus workflow, and returns concrete next tool
    arguments without changing project state.
+   - Pass `intent=planning_only` when the user is asking to plan, design, shape
+     backlog items, or review options without starting execution.
+   - Pass `intent=ready_to_execute` when the user has approved creating
+     tracking and preparing dispatch.
+   - Omit `intent` or pass `auto` when Platypus should infer from goal text.
 2. If the host wants Platypus intake in one call, use `start_goal_work`.
    - `start_goal_work` + `dispatch=true` runs tracked dispatch/worktree flow.
    - `start_goal_work` + `dispatch=false` creates or reuses a tracking anchor
