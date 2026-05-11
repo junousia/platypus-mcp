@@ -144,6 +144,10 @@ Backlog schema quick reference:
   suggested worker `coder`.
 - `suggested_worker` is a Platypus worker profile name. It is not guaranteed
   to match a host-specific subagent type such as `explore` or `general`.
+- Failed backlog authoring calls return actionable `next_action` guidance for
+  common recovery cases such as unknown epics, missing dependencies, duplicate
+  IDs, invalid enum values, missing scaffold directories, and malformed
+  external refs.
 
 Backlog item frontmatter may include provider-neutral `external_refs`. Use them
 to preserve where work came from or where results should be reported without

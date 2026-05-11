@@ -3,8 +3,8 @@ use super::{
     types::{BacklogItemFrontmatterOut, ParsedBacklogItem, VALID_PRIORITIES, VALID_TYPES},
     validate::{valid_item_id, validate_backlog_at_root},
 };
-use crate::models::{ActionResult, CreateBacklogItemParams, CreatedBacklogItemData};
-use std::{fs, path::Path};
+use crate::models::{ActionResult, ActionStatus, CreateBacklogItemParams, CreatedBacklogItemData};
+use std::{collections::BTreeSet, fs, path::Path};
 
 #[derive(Debug)]
 struct NormalizedBacklogInput {
@@ -25,7 +25,12 @@ pub fn create_backlog_item(
     };
     let items_dir = root.join("backlog").join("items");
     if let Err(error) = ensure_child_dir(&root, &items_dir) {
-        return ActionResult::failed(action, "Could not create backlog item.", error);
+        return failed_with_next(
+            action,
+            "Could not create backlog item.",
+            error,
+            "Run init_project for this root, or create backlog/items inside the project root before creating items.",
+        );
     }
     let validation = validate_backlog_at_root(&root, true);
     let configured_prefix = configured_id_prefix(&root);
@@ -37,35 +42,46 @@ pub fn create_backlog_item(
         ),
     };
     if !valid_item_id(&item_id) {
-        return ActionResult::failed(
+        return failed_with_next(
             action,
             "Could not create backlog item.",
             format!(
                 "invalid backlog id `{}`; expected format `{}-NNN` with three digits",
                 item_id, configured_prefix
             ),
+            format!(
+                "Use an ID such as `{configured_prefix}-001`, or omit id and let Platypus allocate the next `{configured_prefix}-NNN` value."
+            ),
         );
     }
     let item_path = items_dir.join(format!("{}.md", item_id));
     if item_path.exists() {
-        return ActionResult::failed(
+        return failed_with_next(
             action,
             format!("Could not create backlog item {}.", item_id),
-            "backlog item already exists",
+            format!(
+                "backlog item already exists at {}",
+                item_path.display()
+            ),
+            format!(
+                "Omit id to allocate the next `{configured_prefix}-NNN` value, choose a different id, or inspect `{}` before editing it.",
+                item_path.display()
+            ),
         );
     }
     let epic = clean_optional(params.epic.clone()).unwrap_or_else(|| "general".to_string());
     if !validation.epic_ids.is_empty() && !validation.epic_ids.contains(&epic) {
-        return ActionResult::failed(
+        return failed_with_next(
             action,
             format!("Could not create backlog item {}.", item_id),
-            format!("unknown epic `{}`", epic),
+            unknown_epic_error(&epic, &validation.epic_ids),
+            unknown_epic_next_action(&epic, &validation.epic_ids),
         );
     }
     let priority = clean_optional(params.priority.clone()).unwrap_or_else(|| "P1".to_string());
     let item_type = normalize_item_type(params.item_type.as_deref());
     if !VALID_PRIORITIES.contains(&priority.as_str()) {
-        return ActionResult::failed(
+        return failed_with_next(
             action,
             "Could not create backlog item.",
             format!(
@@ -73,10 +89,11 @@ pub fn create_backlog_item(
                 priority,
                 VALID_PRIORITIES.join(", ")
             ),
+            format!("Set priority to one of: {}.", VALID_PRIORITIES.join(", ")),
         );
     }
     if !VALID_TYPES.contains(&item_type.as_str()) {
-        return ActionResult::failed(
+        return failed_with_next(
             action,
             "Could not create backlog item.",
             format!(
@@ -84,21 +101,36 @@ pub fn create_backlog_item(
                 item_type,
                 VALID_TYPES.join(", ")
             ),
+            format!("Set type to one of: {}.", VALID_TYPES.join(", ")),
         );
     }
     if let Err(error) = validate_external_refs(&params.external_refs) {
-        return ActionResult::failed(action, "Could not create backlog item.", error);
+        return failed_with_next(
+            action,
+            "Could not create backlog item.",
+            error,
+            "For each external_ref, provide provider, kind, id, and either url or locator.",
+        );
+    }
+    if let Err(error) = validate_dependencies(&item_id, &params.depends_on, &validation.items) {
+        return failed_with_next(
+            action,
+            "Could not create backlog item.",
+            error,
+            "Create the missing dependency item first, remove it from depends_on, or reference an existing backlog item ID.",
+        );
     }
     let normalized = match normalize_backlog_input(&params) {
         Ok(normalized) => normalized,
         Err(missing_fields) => {
-            return ActionResult::failed(
+            return failed_with_next(
                 action,
                 "Could not create backlog item.",
                 format!(
                     "missing required field(s): {}. Provide at least title or goal; explicit fields can still override derived defaults. Required persisted fields: title, goal, implementation_contract or contract, and at least one acceptance criterion.",
                     missing_fields.join(", ")
                 ),
+                "Provide title or goal. Platypus can derive implementation_contract and acceptance from that minimal input when explicit values are omitted.",
             );
         }
     };
@@ -123,6 +155,22 @@ pub fn create_backlog_item(
             created: true,
         },
     )
+}
+
+fn failed_with_next<T: serde::Serialize + schemars::JsonSchema>(
+    action: &str,
+    summary: impl Into<String>,
+    error: impl Into<String>,
+    next_action: impl Into<String>,
+) -> ActionResult<T> {
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Failed,
+        summary: summary.into(),
+        next_action: Some(next_action.into()),
+        data: None,
+        error: Some(error.into()),
+    }
 }
 
 fn normalize_item_id(value: &str) -> String {
@@ -199,6 +247,88 @@ fn clean_vec(values: Vec<String>) -> Vec<String> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect()
+}
+
+fn validate_dependencies(
+    item_id: &str,
+    depends_on: &[String],
+    items: &[ParsedBacklogItem],
+) -> Result<(), String> {
+    let existing_ids = items
+        .iter()
+        .map(|item| item.frontmatter.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let requested = clean_vec(depends_on.to_vec());
+    for dependency in requested {
+        if dependency == item_id {
+            return Err(format!(
+                "invalid dependency `{dependency}`; backlog item `{item_id}` cannot depend on itself"
+            ));
+        }
+        if !existing_ids.contains(dependency.as_str()) {
+            return Err(format!(
+                "unknown dependency `{dependency}`; existing backlog items: {}",
+                existing_item_hint(&existing_ids)
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn existing_item_hint(existing_ids: &BTreeSet<&str>) -> String {
+    if existing_ids.is_empty() {
+        return "none".to_string();
+    }
+    let shown = existing_ids.iter().take(8).copied().collect::<Vec<_>>();
+    let suffix = if existing_ids.len() > shown.len() {
+        format!(" and {} more", existing_ids.len() - shown.len())
+    } else {
+        String::new()
+    };
+    format!("{}{}", shown.join(", "), suffix)
+}
+
+fn unknown_epic_error(epic: &str, epic_ids: &BTreeSet<String>) -> String {
+    format!(
+        "unknown epic `{epic}`; existing epics: {}",
+        existing_epic_hint(epic_ids)
+    )
+}
+
+fn unknown_epic_next_action(epic: &str, epic_ids: &BTreeSet<String>) -> String {
+    if safe_epic_id(epic) {
+        format!(
+            "Create `backlog/epics/{epic}.md`, or set epic to one of the existing epics: {}.",
+            existing_epic_hint(epic_ids)
+        )
+    } else {
+        format!(
+            "Set epic to one of the existing epics: {}, or choose a simple epic id containing only letters, digits, `_`, or `-` before creating a new epic file.",
+            existing_epic_hint(epic_ids)
+        )
+    }
+}
+
+fn existing_epic_hint(epic_ids: &BTreeSet<String>) -> String {
+    if epic_ids.is_empty() {
+        return "none".to_string();
+    }
+    let shown = epic_ids.iter().take(8).cloned().collect::<Vec<_>>();
+    let suffix = if epic_ids.len() > shown.len() {
+        format!(" and {} more", epic_ids.len() - shown.len())
+    } else {
+        String::new()
+    };
+    format!("{}{}", shown.join(", "), suffix)
+}
+
+fn safe_epic_id(epic: &str) -> bool {
+    let epic = epic.trim();
+    !epic.is_empty()
+        && !matches!(epic, "." | "..")
+        && epic
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
 }
 
 fn normalize_backlog_input(
