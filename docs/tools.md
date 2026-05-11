@@ -25,6 +25,8 @@ deterministic and references the current public tool names.
   `platypus-spec-driven-development`
 - Resource `platypus://guidance/project-status` / prompt
   `platypus-project-status`
+- Resource `platypus://guidance/tool-preload` / prompt
+  `platypus-tool-preload`
 - Resource `platypus://guidance/backlog-authoring` / prompt
   `platypus-backlog-authoring`
 - Resource `platypus://guidance/worker-handoff` / prompt
@@ -32,6 +34,15 @@ deterministic and references the current public tool names.
 - Resource `platypus://guidance/integration-review` / prompt
   `platypus-integration-review`
 - Resource `platypus://guidance/recovery` / prompt `platypus-recovery`
+
+`platypus://guidance/tool-preload` names two optional startup groups:
+planning-session tools such as `doctor_snapshot`, `plan_goal_work`,
+`create_backlog_items`, `inspect_work_queue`, and `write_task_plan`; and
+execution-session tools such as `dispatch_ready_work`,
+`inspect_worktree_changes`, `complete_worker_task`,
+`record_verification_evidence`, `integrate_worker_result`, and
+`reconcile_project`. Tool preloading is host-specific. If a host cannot preload
+schemas, call the same tools normally when they are needed.
 
 ## Recommended Host Flow
 

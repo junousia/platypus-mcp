@@ -12,6 +12,7 @@ pub struct GuidanceEntry {
 pub const WORKFLOW_URI: &str = "platypus://guidance/workflow";
 pub const SPEC_DRIVEN_URI: &str = "platypus://guidance/spec-driven-development";
 pub const PROJECT_STATUS_URI: &str = "platypus://guidance/project-status";
+pub const TOOL_PRELOAD_URI: &str = "platypus://guidance/tool-preload";
 pub const BACKLOG_AUTHORING_URI: &str = "platypus://guidance/backlog-authoring";
 pub const WORKER_HANDOFF_URI: &str = "platypus://guidance/worker-handoff";
 pub const INTEGRATION_REVIEW_URI: &str = "platypus://guidance/integration-review";
@@ -24,6 +25,9 @@ model turns, and external worker execution.
 
 1. Inspect setup with `doctor_snapshot`, `inspect_status`, and
    `inspect_workflow_config`.
+   If the host supports deferred schema preloading, first read
+   `platypus://guidance/tool-preload` or the `platypus-tool-preload` prompt
+   and load the planning startup group.
 2. For broad user goals, call `plan_goal_work` when you need read-only
    guidance. Use `intent=planning_only` for planning, design, or backlog
    shaping conversations. Use `intent=ready_to_execute` only when the user has
@@ -122,6 +126,70 @@ Use status tools before making assumptions about the repository or task queue.
 
 Report setup blockers directly from structured tool output. Do not invent
 missing state from chat context.
+"#;
+
+const TOOL_PRELOAD_TEXT: &str = r#"# Tool Preload Guidance
+
+Some MCP hosts defer tool schemas until a tool is discovered, searched, or
+selected. Platypus does not require any specific preload mechanism, but hosts
+that support one should load the common groups below to reduce planning and
+execution round trips.
+
+Preloading is optional and host-specific. If the host cannot preload schemas,
+continue normally and call the tools as needed. Do not depend on sampling or
+hidden client context for core state transitions.
+
+## Planning Startup Group
+
+Load this group at the start of planning, backlog shaping, or project-status
+sessions:
+
+- `doctor_snapshot`
+- `inspect_status`
+- `inspect_workflow_config`
+- `next_safe_action`
+- `plan_goal_work`
+- `classify_workflow_fit`
+- `create_backlog_item`
+- `create_backlog_items`
+- `create_epic`
+- `validate_backlog`
+- `list_backlog`
+- `inspect_backlog_inventory`
+- `inspect_work_queue`
+- `classify_planning_needs`
+- `write_task_plan`
+- `validate_task_plan`
+- `inspect_task_plan`
+- `request_planning_approval`
+- `approval_respond`
+
+## Execution Startup Group
+
+Load this group before dispatch, worker handoff, verification, integration, or
+recovery sessions:
+
+- `inspect_work_queue`
+- `dispatch_ready_work`
+- `generate_task_bundle`
+- `inspect_task_events`
+- `events_replay`
+- `worktree_status`
+- `inspect_worktree_changes`
+- `send_worker_guidance`
+- `start_worker_task`
+- `record_worker_progress`
+- `complete_worker_task`
+- `run_task_verification`
+- `record_verification_evidence`
+- `record_finding`
+- `validate_findings`
+- `integrate_worker_result`
+- `worktree_cleanup`
+- `reconcile_project`
+
+Hosts may load additional tools when a user asks for lower-level control, but
+these two groups cover the normal long-term product development loop.
 "#;
 
 const BACKLOG_AUTHORING_TEXT: &str = r#"# Backlog Authoring Guidance
@@ -257,6 +325,13 @@ pub const GUIDANCE: &[GuidanceEntry] = &[
         title: "Project Status",
         description: "How hosts should inspect project state and setup blockers.",
         text: PROJECT_STATUS_TEXT,
+    },
+    GuidanceEntry {
+        name: "platypus-tool-preload",
+        uri: TOOL_PRELOAD_URI,
+        title: "Tool Preload",
+        description: "Common planning and execution tool groups for hosts with deferred schemas.",
+        text: TOOL_PRELOAD_TEXT,
     },
     GuidanceEntry {
         name: "platypus-backlog-authoring",
