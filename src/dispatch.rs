@@ -675,14 +675,17 @@ fn auto_commit_dispatch_artifacts(
 }
 
 fn auto_commit_entry_allowed(entry: &DirtyEntry, selected_item_ids: &BTreeSet<String>) -> bool {
-    fixed_dispatch_artifact_path(&entry.path)
+    fixed_dispatch_artifact_entry(entry)
         || bootstrap_backlog_artifact_entry(entry)
         || selected_backlog_artifact_entry(entry, selected_item_ids)
 }
 
-fn fixed_dispatch_artifact_path(path: &str) -> bool {
+fn fixed_dispatch_artifact_entry(entry: &DirtyEntry) -> bool {
+    if entry.status != "??" {
+        return false;
+    }
     matches!(
-        path,
+        entry.path.as_str(),
         ".gitignore" | "AGENTS.md" | "CLAUDE.md" | "WORKFLOW.md" | "platy.yaml"
     )
 }
@@ -1189,6 +1192,36 @@ mod tests {
         assert!(
             String::from_utf8_lossy(&staged.stdout).trim().is_empty(),
             "auto-commit should not stage a partial backlog set"
+        );
+    }
+
+    #[test]
+    fn auto_commit_dispatch_artifacts_rejects_modified_scaffold_files() {
+        let project = backlog_project(true);
+        fs::write(project.path().join("AGENTS.md"), "existing guidance\n").expect("agents");
+        git(project.path(), &["add", "AGENTS.md"]);
+        git(project.path(), &["commit", "-m", "Add guidance"]);
+        fs::write(project.path().join("AGENTS.md"), "user edit\n").expect("agents edit");
+        fs::write(
+            project.path().join("backlog/items/PROJ-001.md"),
+            "selected edit\n",
+        )
+        .expect("selected edit");
+        let selected = BTreeSet::from(["PROJ-001".to_string()]);
+
+        let error = auto_commit_dispatch_artifacts(project.path(), &selected)
+            .expect_err("modified scaffold files should fail closed");
+
+        assert!(error.contains("AGENTS.md"));
+        let staged = Command::new("git")
+            .args(["diff", "--cached", "--name-only"])
+            .current_dir(project.path())
+            .output()
+            .expect("git diff");
+        assert!(staged.status.success());
+        assert!(
+            String::from_utf8_lossy(&staged.stdout).trim().is_empty(),
+            "auto-commit should not stage unrelated scaffold edits"
         );
     }
 
