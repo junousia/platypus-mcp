@@ -1,0 +1,73 @@
+item_id: MCP-088
+version: 1
+mode: minimal
+requirements:
+- id: R1
+  text: Reconciliation identifies nonterminal task lifecycles whose source backlog item is already closed.
+- id: R2
+  text: Closed-item stale task lifecycles do not produce misleading planning approval or incomplete-evidence gaps.
+- id: R3
+  text: Recovery guidance remains read-only and gives an actionable next step without reopening backlog items.
+design:
+  summary: Use the already computed closed_item_ids set during reconciliation to separate stale task state for closed items from live task lifecycle gaps. Report a dedicated stale_closed_item_lifecycle gap and suppress planning/evidence gaps for those task IDs.
+  owned_surfaces:
+  - src/state/sqlite/mod.rs
+  - src/state/memory.rs
+  - src/reconcile.rs
+  - src/models.rs
+  - src/guidance.rs
+  - tests/stdio_protocol.rs
+  - docs/workflow.md
+  notes: Do not delete runtime state in reconcile_project; this item only makes diagnosis accurate.
+tasks:
+- id: MCP-088-T001
+  title: Classify stale closed-item lifecycles
+  goal: Update reconciliation backends to identify nonterminal tasks attached to closed backlog items and emit stale_closed_item_lifecycle gaps.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/state/sqlite/mod.rs
+  - src/state/memory.rs
+  verification:
+  - cargo test reconcile::tests
+  acceptance:
+  - Closed item tasks are reported as stale_closed_item_lifecycle.
+  - Planning approval checks skip stale closed-item task IDs.
+  notes: null
+- id: MCP-088-T002
+  title: Suppress misleading evidence gaps
+  goal: Ensure verification or commit evidence attached to stale closed-item task IDs does not produce evidence_for_incomplete_task gaps.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-088-T001
+  owned_surfaces:
+  - src/state/sqlite/mod.rs
+  - src/state/memory.rs
+  - src/reconcile.rs
+  verification:
+  - cargo test reconcile::tests
+  acceptance:
+  - Evidence attached to stale closed-item tasks does not create evidence_for_incomplete_task gaps.
+  notes: null
+- id: MCP-088-T003
+  title: Document and test recovery wording
+  goal: Add tests and documentation for the stale closed-item lifecycle recovery path, including queue status filtering.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-088-T002
+  owned_surfaces:
+  - src/models.rs
+  - src/guidance.rs
+  - tests/stdio_protocol.rs
+  - docs/workflow.md
+  verification:
+  - make check
+  acceptance:
+  - Recovery wording says reconciliation is read-only and does not reopen closed backlog items.
+  - Queue status does not count stale tasks for closed items as active work.
+  - Public tests cover the dedicated gap and absence of misleading gap kinds.
+  notes: null

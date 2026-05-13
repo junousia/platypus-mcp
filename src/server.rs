@@ -1594,7 +1594,7 @@ impl PlatypusMcp {
 
     #[tool(
         title = "Reconcile Project",
-        description = "Read-only recovery audit for completed work. Detects orphaned evidence, evidence on incomplete tasks, missing verification evidence, missing integration evidence, missing Platypus-Closes or Platypus-Verification trailers, stale unapproved lifecycles, and unresolved required findings.",
+        description = "Read-only recovery audit for completed work. Detects stale lifecycles for closed items, orphaned evidence, evidence on incomplete tasks, missing verification evidence, missing integration evidence, missing Platypus-Closes or Platypus-Verification trailers, stale unapproved lifecycles, and unresolved required findings.",
         annotations(
             title = "Reconcile Project",
             read_only_hint = true,
@@ -1942,6 +1942,7 @@ mod tests {
         let reconcile = tool_description(&tools, "reconcile_project");
         for expected in [
             "Read-only recovery audit",
+            "stale lifecycles",
             "orphaned evidence",
             "incomplete tasks",
             "missing verification evidence",

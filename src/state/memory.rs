@@ -804,15 +804,47 @@ impl ProjectState for MemoryProjectState {
         Ok(finding.clone())
     }
 
-    fn reconcile_project(&self, _query: ReconcileProjectQuery) -> StateResult<ReconcileSnapshot> {
+    fn reconcile_project(&self, query: ReconcileProjectQuery) -> StateResult<ReconcileSnapshot> {
         let inner = self.lock()?;
         let mut gaps = Vec::new();
+        let closed_item_ids = if query.include_closed_items {
+            crate::backlog::closed_item_ids(&self.root)
+        } else {
+            BTreeSet::new()
+        };
         let completed_tasks = inner
             .tasks
             .values()
             .filter(|task| matches!(task.state, TaskLifecycleState::Completed))
             .cloned()
             .collect::<Vec<_>>();
+        let stale_closed_task_ids = inner
+            .tasks
+            .values()
+            .filter(|task| {
+                !matches!(
+                    task.state,
+                    TaskLifecycleState::Completed
+                        | TaskLifecycleState::Failed
+                        | TaskLifecycleState::Cancelled
+                ) && closed_item_ids.contains(&task.source_item_id)
+            })
+            .map(|task| {
+                gaps.push(ReconcileGap {
+                    kind: "stale_closed_item_lifecycle".to_string(),
+                    source_item_id: Some(task.source_item_id.clone()),
+                    source_task_id: Some(task.id.clone()),
+                    summary: format!(
+                        "Task `{}` for closed backlog item `{}` is still `{}` in runtime state.",
+                        task.id, task.source_item_id, task.status
+                    ),
+                    next_action:
+                        "Do not reopen the backlog item. Reconciliation is read-only; inspect_task and inspect_task_events for audit, then treat the Git/direct completion closure as authoritative or use a dedicated lifecycle cleanup flow when available."
+                            .to_string(),
+                });
+                task.id.clone()
+            })
+            .collect::<BTreeSet<_>>();
         for evidence in inner.evidence.values().filter(|evidence| {
             evidence.source_task_id.is_some()
                 && matches!(evidence.kind.as_str(), "verification" | "commit")
@@ -820,6 +852,9 @@ impl ProjectState for MemoryProjectState {
             let Some(source_task_id) = evidence.source_task_id.as_deref() else {
                 continue;
             };
+            if stale_closed_task_ids.contains(source_task_id) {
+                continue;
+            }
             match inner.tasks.get(source_task_id) {
                 Some(task) if matches!(task.state, TaskLifecycleState::Completed) => {}
                 Some(task) => gaps.push(ReconcileGap {
@@ -884,7 +919,7 @@ impl ProjectState for MemoryProjectState {
             .count();
         Ok(ReconcileSnapshot {
             ok: gaps.is_empty() && unresolved_required == 0,
-            closed_item_ids: BTreeSet::new(),
+            closed_item_ids,
             completed_tasks: completed_tasks.len(),
             unresolved_required_findings: unresolved_required,
             gaps,
@@ -941,6 +976,8 @@ fn safe_id_prefix(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, process::Command};
+    use tempfile::TempDir;
 
     #[test]
     fn memory_backend_reports_test_scoped_capabilities() {
@@ -952,5 +989,82 @@ mod tests {
         assert!(info.capabilities.transactional_lifecycle);
         assert!(info.capabilities.stable_event_replay);
         assert!(info.capabilities.offline);
+    }
+
+    #[test]
+    fn reconcile_reports_stale_closed_item_lifecycle_without_evidence_noise() {
+        let project = git_project_with_closure("PROJ-001");
+        let state = MemoryProjectState::new(project.path());
+        let dispatched = state
+            .dispatch_work(DispatchWorkCommand {
+                summary: Some("stale".to_string()),
+                preferred_worker: Some("coder".to_string()),
+                source_item_id: Some("PROJ-001".to_string()),
+            })
+            .expect("dispatch");
+        state
+            .record_evidence(RecordEvidenceCommand {
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: Some(dispatched.task.id.clone()),
+                kind: "verification".to_string(),
+                summary: "Verification existed before closure.".to_string(),
+                refs: vec!["local".to_string()],
+                metadata: BTreeMap::new(),
+            })
+            .expect("evidence");
+
+        let reconciled = state
+            .reconcile_project(ReconcileProjectQuery {
+                include_closed_items: true,
+            })
+            .expect("reconcile");
+
+        assert!(reconciled.gaps.iter().any(|gap| {
+            gap.kind == "stale_closed_item_lifecycle"
+                && gap.source_task_id.as_deref() == Some(dispatched.task.id.as_str())
+        }));
+        assert!(!reconciled.gaps.iter().any(|gap| {
+            gap.kind == "evidence_for_incomplete_task"
+                && gap.source_task_id.as_deref() == Some(dispatched.task.id.as_str())
+        }));
+    }
+
+    fn git_project_with_closure(item_id: &str) -> TempDir {
+        let project = TempDir::new().expect("temp dir");
+        git(&project, &["init"]);
+        git(&project, &["config", "user.name", "Platypus Test"]);
+        git(
+            &project,
+            &["config", "user.email", "platypus@example.invalid"],
+        );
+        fs::write(project.path().join("README.md"), "# Test\n").expect("readme");
+        git(&project, &["add", "README.md"]);
+        git(
+            &project,
+            &[
+                "commit",
+                "-m",
+                "Initial commit",
+                "-m",
+                &format!("Platypus-Closes: {item_id}\nPlatypus-Verification: make check passed"),
+            ],
+        );
+        project
+    }
+
+    fn git(project: &TempDir, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(project.path())
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "git {:?}: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

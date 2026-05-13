@@ -981,11 +981,35 @@ impl ProjectState for SqliteProjectState {
         let invalid_task_evidence = query_invalid_task_evidence(&self.connection.connection)
             .map_err(|error| ProjectStateError::backend(error.to_string()))?;
         let mut gaps = Vec::new();
+        let stale_closed_tasks =
+            query_stale_closed_item_tasks(&self.connection.connection, &closed_item_ids)
+                .map_err(|error| ProjectStateError::backend(error.to_string()))?;
+        let stale_closed_task_ids = stale_closed_tasks
+            .iter()
+            .map(|task| task.id.clone())
+            .collect::<BTreeSet<_>>();
+        for task in &stale_closed_tasks {
+            gaps.push(ReconcileGap {
+                kind: "stale_closed_item_lifecycle".to_string(),
+                source_item_id: Some(task.source_item_id.clone()),
+                source_task_id: Some(task.id.clone()),
+                summary: format!(
+                    "Task `{}` for closed backlog item `{}` is still `{}` in runtime state.",
+                    task.id, task.source_item_id, task.status
+                ),
+                next_action:
+                    "Do not reopen the backlog item. Reconciliation is read-only; inspect_task and inspect_task_events for audit, then treat the Git/direct completion closure as authoritative or use a dedicated lifecycle cleanup flow when available."
+                        .to_string(),
+            });
+        }
 
         let missing_planning_approvals =
             query_tasks_missing_planning_approval(&self.connection.connection, &self.root)
                 .map_err(|error| ProjectStateError::backend(error.to_string()))?;
         for task in missing_planning_approvals {
+            if stale_closed_task_ids.contains(&task.id) {
+                continue;
+            }
             gaps.push(ReconcileGap {
                 kind: "planning_approval_missing".to_string(),
                 source_item_id: Some(task.source_item_id.clone()),
@@ -1004,6 +1028,9 @@ impl ProjectState for SqliteProjectState {
             let Some(source_task_id) = evidence.source_task_id.as_deref() else {
                 continue;
             };
+            if stale_closed_task_ids.contains(source_task_id) {
+                continue;
+            }
             if let Some(task_status) = evidence.task_status.as_deref() {
                 gaps.push(ReconcileGap {
                     kind: "evidence_for_incomplete_task".to_string(),
@@ -1558,12 +1585,49 @@ struct PlannedTaskWithoutApproval {
 }
 
 #[derive(Debug)]
+struct StaleClosedItemTask {
+    id: String,
+    source_item_id: String,
+    status: String,
+}
+
+#[derive(Debug)]
 struct InvalidTaskEvidence {
     id: String,
     source_item_id: Option<String>,
     source_task_id: Option<String>,
     kind: String,
     task_status: Option<String>,
+}
+
+fn query_stale_closed_item_tasks(
+    connection: &rusqlite::Connection,
+    closed_item_ids: &BTreeSet<String>,
+) -> rusqlite::Result<Vec<StaleClosedItemTask>> {
+    if closed_item_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection.prepare(
+        r#"
+        SELECT id, source_item_id, status
+        FROM tasks
+        WHERE status NOT IN ('completed', 'failed', 'cancelled')
+        ORDER BY updated_at ASC, id ASC
+        "#,
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(StaleClosedItemTask {
+            id: row.get("id")?,
+            source_item_id: row.get("source_item_id")?,
+            status: row.get("status")?,
+        })
+    })?;
+    rows.filter_map(|row| match row {
+        Ok(task) if closed_item_ids.contains(&task.source_item_id) => Some(Ok(task)),
+        Ok(_) => None,
+        Err(error) => Some(Err(error)),
+    })
+    .collect()
 }
 
 fn query_completed_tasks(

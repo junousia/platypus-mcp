@@ -64,7 +64,7 @@ pub fn reconcile_project(
 }
 
 fn reconciliation_recovery_action() -> String {
-    "Inspect data.gaps, apply each gap.next_action, then rerun reconcile_project. Common fixes: record_verification_evidence or run_task_verification for missing verification; inspect_integration_gates then integrate_worker_result for missing integration; update_finding_disposition for unresolved required findings; create a corrected integration commit for missing Platypus-Closes or Platypus-Verification trailers.".to_string()
+    "Inspect data.gaps, apply each gap.next_action, then rerun reconcile_project. Common fixes: record_verification_evidence or run_task_verification for missing verification; inspect_integration_gates then integrate_worker_result for missing integration; update_finding_disposition for unresolved required findings; treat stale closed-item lifecycles as read-only audit records unless a cleanup flow is available; create a corrected integration commit for missing Platypus-Closes or Platypus-Verification trailers.".to_string()
 }
 
 #[cfg(test)]
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn reports_evidence_for_incomplete_task() {
-        let project = git_project_with_closure("PROJ-001");
+        let project = git_project_without_trailers();
         let task = create_task_record(
             project.path(),
             None,
@@ -324,6 +324,60 @@ mod tests {
 
         assert!(data.gaps.iter().any(|gap| {
             gap.kind == "planning_approval_missing" && gap.summary.contains(task.id.as_str())
+        }));
+    }
+
+    #[test]
+    fn reports_stale_lifecycle_for_closed_item_without_live_blocker_noise() {
+        let project = git_project_with_closure("PROJ-001");
+        write_backlog_item(project.path(), "PROJ-001");
+        fs::create_dir_all(project.path().join("backlog/plans")).expect("plans");
+        fs::write(
+            project.path().join("backlog/plans/PROJ-001.yaml"),
+            "item_id: PROJ-001\nversion: 1\nmode: standard\nrequirements: []\ndesign:\n  summary: Test\n  owned_surfaces: []\ntasks: []\n",
+        )
+        .expect("plan");
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Stale task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        record_evidence(
+            project.path(),
+            RecordEvidenceParams {
+                root: None,
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: Some(task.id.clone()),
+                kind: "verification".to_string(),
+                summary: "Verification existed before closure.".to_string(),
+                refs: vec!["local".to_string()],
+                metadata: BTreeMap::new(),
+            },
+        );
+
+        let reconciled = reconcile_project(project.path(), ReconcileParams { root: None });
+        let data = reconciled.data.expect("reconcile data");
+
+        assert!(matches!(
+            reconciled.status,
+            crate::models::ActionStatus::Failed
+        ));
+        assert!(data.gaps.iter().any(|gap| {
+            gap.kind == "stale_closed_item_lifecycle"
+                && gap.summary.contains(task.id.as_str())
+                && gap.next_action.contains("Do not reopen")
+        }));
+        assert!(!data.gaps.iter().any(|gap| {
+            gap.kind == "planning_approval_missing" && gap.summary.contains(task.id.as_str())
+        }));
+        assert!(!data.gaps.iter().any(|gap| {
+            gap.kind == "evidence_for_incomplete_task" && gap.summary.contains(task.id.as_str())
         }));
     }
 

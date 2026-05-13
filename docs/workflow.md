@@ -399,6 +399,7 @@ Recovery tools separate inspection from repair:
 | Completed task has no verification evidence | `reconcile_project` | `record_verification_evidence` or `run_task_verification`, then rerun `reconcile_project` |
 | Required finding is still open | `reconcile_project` or `validate_findings` | `update_finding_disposition` with accepted, deferred, resolved, rejected, or duplicate |
 | Evidence references a missing task | `reconcile_project`, then `list_evidence` | record replacement evidence against a valid task or ignore the orphaned evidence in the next completion |
+| Closed item still has a nonterminal task lifecycle | `reconcile_project` | do not reopen the backlog item; inspect the task for audit and treat the Git/direct completion closure as authoritative until a lifecycle cleanup flow is available |
 | Integration commit lacks closure or verification trailers | `reconcile_project` | create a corrected integration commit with `Platypus-Closes` and `Platypus-Verification`, then rerun `reconcile_project` |
 
 ## Managed Integration
