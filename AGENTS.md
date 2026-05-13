@@ -59,6 +59,35 @@ If `cargo fmt` is unavailable, report that `rustfmt` is missing and still run
   tools that hide model decisions behind deterministic-looking names.
 - Prefer stable tool names and versioned schemas over hidden behavior changes.
 
+## Harness Startup
+
+For Codex, Claude, opencode, and other MCP hosts, begin a fresh project session
+by listing MCP resources and prompts. Read `platypus://guidance/workflow`,
+`platypus://guidance/project-status`, and
+`platypus://guidance/tool-preload`, or the equivalent prompts
+`platypus-workflow`, `platypus-project-status`, and
+`platypus-tool-preload`.
+
+Tool schemas are client-driven and may be deferred until discovery or
+selection. If the host supports schema preloading, load the Startup Inspection
+group first, then load Backlog Planning, Direct Execution, Worker Handoff,
+Evidence And Findings, or Recovery only when that phase starts. If preloading
+is awkward or unavailable, call the same tools on demand.
+
+Claude Code uses ToolSearch selectors such as
+`select:mcp__platypus__inspect_session`; the `mcp__platypus__` prefix comes
+from the configured server name. Codex and opencode may expose the same schemas
+through their own MCP discovery surfaces.
+
+Direct quick path: load Startup Inspection, call `inspect_session`, load Direct
+Execution, call `prepare_work`, edit the manager workspace, then call
+`complete_backlog_item`.
+
+After guidance is loaded, call `inspect_session`. If that broad snapshot is
+unavailable, fall back to `doctor_snapshot`, `inspect_status`,
+`inspect_workflow_config`, `inspect_queue_status`, then `inspect_work_queue` as
+needed.
+
 ## Initial Tool Surface
 
 The first production tool set should cover:

@@ -260,8 +260,9 @@ Queue states: `direct_ready`, `ready`, `planning_blocked`,
 
 Prepare states: `direct_guidance` means response-local direct-edit guidance
 with no persisted task, assignment, event, or worktree; `worktree_prepared`
-means durable worker handoff state exists; `not_prepared` means follow the
-tool `next_action`.
+means durable worker handoff state exists; `mixed_prepared` means direct and
+worker actions were returned together and each `host_actions[]` entry must be
+routed individually; `not_prepared` means follow the tool `next_action`.
 
 Host action kinds: `direct_edit`, `run_in_worktree`,
 `verify_or_record_risk`, `resolve_findings`, `integrate_result`,
@@ -378,8 +379,9 @@ Queue states: `direct_ready`, `ready`, `planning_blocked`,
 
 Prepare states: `direct_guidance` means response-local direct-edit guidance
 with no persisted task, assignment, event, or worktree; `worktree_prepared`
-means durable worker handoff state exists; `not_prepared` means follow the
-tool `next_action`.
+means durable worker handoff state exists; `mixed_prepared` means direct and
+worker actions were returned together and each `host_actions[]` entry must be
+routed individually; `not_prepared` means follow the tool `next_action`.
 
 Host action kinds: `direct_edit`, `run_in_worktree`,
 `verify_or_record_risk`, `resolve_findings`, `integrate_result`,
@@ -438,6 +440,22 @@ load only the group needed for the current phase:
 
 Preloading is optional and host-specific. If the host cannot preload tool
 schemas, continue normally and call the same tools on demand.
+
+For Claude Code, use ToolSearch with `select:mcp__platypus__<tool>` when a
+schema is deferred, for example `select:mcp__platypus__inspect_session`. The
+`mcp__platypus__` prefix comes from the configured MCP server name and is not
+part of the Platypus tool name.
+
+Direct quick path: load Startup Inspection, call `inspect_session`, load Direct
+Execution, call `prepare_work`, edit the manager workspace, then call
+`complete_backlog_item`.
+
+Alias and deprecation expectations: use `create_backlog_items` for atomic
+batches, `quick_create_backlog_item` only for simple single-item shorthand,
+`contract` only as an alias for `implementation_contract`, and `prepare_work`
+for normal direct or worker handoff preparation. Do not search for removed
+planning helpers such as `draft_task_plan`, and do not put worker-profile
+fields in backlog items.
 
 ## Rules
 
@@ -526,9 +544,13 @@ mod tests {
         assert!(agents.contains("verify_or_record_risk"));
         assert!(agents.contains("resolve_findings"));
         assert!(agents.contains("may replace separate startup calls"));
+        assert!(agents.contains("select:mcp__platypus__inspect_session"));
+        assert!(agents.contains("Direct quick path"));
+        assert!(agents.contains("contract` only as an alias"));
+        assert!(agents.contains("worker-profile"));
         assert!(agents.contains("Minimum viable direct-edit loop"));
         assert!(agents.contains("write_task_plan"));
-        assert!(!agents.contains("draft_task_plan"));
+        assert!(agents.contains("draft_task_plan"));
         assert!(agents.contains("Tool Preload"));
         assert!(agents.contains("Startup Inspection Group"));
         assert!(agents.contains("Backlog Planning Group"));
@@ -558,9 +580,13 @@ mod tests {
         assert!(claude.contains("verify_or_record_risk"));
         assert!(claude.contains("resolve_findings"));
         assert!(claude.contains("may replace separate startup calls"));
+        assert!(claude.contains("select:mcp__platypus__inspect_session"));
+        assert!(claude.contains("Direct quick path"));
+        assert!(claude.contains("contract` only as an alias"));
+        assert!(claude.contains("worker-profile"));
         assert!(claude.contains("Minimum viable direct-edit loop"));
         assert!(claude.contains("write_task_plan"));
-        assert!(!claude.contains("draft_task_plan"));
+        assert!(claude.contains("draft_task_plan"));
         assert!(claude.contains("Tool Preload"));
         assert!(claude.contains("Startup Inspection Group"));
         assert!(claude.contains("Backlog Planning Group"));

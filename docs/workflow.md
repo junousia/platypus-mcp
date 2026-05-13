@@ -125,12 +125,17 @@ Queue tools emit exactly these queue states:
 | `active` | a task lifecycle already exists | `inspect_task`, `inspect_task_events`, or the recommended active-task tool |
 | `completed_pending_integration` | worker output is complete and awaiting integration | `inspect_integration_gates`, then `integrate_worker_result` |
 
-`prepare_work.prepared_state` is `direct_guidance`, `worktree_prepared`, or
-`not_prepared`. `direct_guidance` is response-local: it creates no task,
-assignment, event, or worktree, so `complete_backlog_item` is the next durable
-transition. `worktree_prepared` means a worker assignment and worktree were
-persisted. `not_prepared` means no selected item could be prepared and the host
-should follow `next_action`.
+`prepare_work.prepared_state` is `direct_guidance`, `worktree_prepared`,
+`mixed_prepared`, or `not_prepared`. `direct_guidance` is response-local: it
+creates no task, assignment, event, or worktree, so `complete_backlog_item` is
+the next durable transition. It also returns `state_persisted=false` and
+`durable_next_tool=complete_backlog_item` so clients do not need to parse prose.
+`worktree_prepared` means a worker assignment and worktree were persisted; it
+returns `state_persisted=true` and `durable_next_tool=finish_work`. A mixed
+direct/worker response returns `mixed_prepared` and `durable_next_tool=null`;
+route each returned `host_actions[]` by its `kind` and `next_tools`.
+`not_prepared` means no selected item could be prepared and the host should
+follow `next_action`.
 
 Host action kinds are `direct_edit`, `run_in_worktree`,
 `verify_or_record_risk`, `resolve_findings`, `integrate_result`,
@@ -323,7 +328,8 @@ created without an approved planning gate.
 6. For normal execution, call `prepare_work`; it either returns `direct_edit`
    guidance or prepares an assignment, worktree, and bundle for host-run worker
    execution. Direct work creates no task, assignment, worktree, or durable
-   prepared marker; `complete_backlog_item` is the next persisted transition.
+   prepared marker; `complete_backlog_item` is exposed as
+   `durable_next_tool` and is the next persisted transition.
 7. For lower-level batch dispatch, call `dispatch_ready_work`; it only accepts
    items whose effective policy is `execution_path=worker_handoff` and whose
    planning gates are satisfied. It dispatches one or more runnable worker

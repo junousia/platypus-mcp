@@ -640,6 +640,7 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("reconcile_project"));
     assert!(text.contains("verification evidence"));
     assert!(text.contains("may replace separate startup calls"));
+    assert!(text.contains("durable_next_tool=complete_backlog_item"));
 
     let recovery = client
         .read_resource(ReadResourceRequestParams {
@@ -681,6 +682,10 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("Recovery Group"));
     assert!(text.contains("Preloading is optional and host-specific"));
     assert!(text.contains("if a host cannot preload schemas"));
+    assert!(text.contains("select:mcp__platypus__inspect_session"));
+    assert!(text.contains("Direct Execution"));
+    assert!(text.contains("quick_create_backlog_item"));
+    assert!(text.contains("draft_task_plan"));
     assert!(text.contains("host-specific"));
     assert!(text.contains("create_backlog_items"));
     assert!(text.contains("dispatch_ready_work"));
@@ -2951,6 +2956,10 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
     assert_eq!(prepared["data"]["prepared_state"], "direct_guidance");
     assert_eq!(prepared["data"]["state_persisted"], false);
     assert_eq!(prepared["data"]["persistence"], "response_only");
+    assert_eq!(
+        prepared["data"]["durable_next_tool"],
+        "complete_backlog_item"
+    );
     assert!(prepared["data"]["persistence_summary"]
         .as_str()
         .expect("persistence summary")
