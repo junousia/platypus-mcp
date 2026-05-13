@@ -2722,6 +2722,13 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
     )
     .await?;
     assert_stage_status("prepare_work", &prepared, "completed");
+    assert_eq!(prepared["data"]["prepared_state"], "direct_guidance");
+    assert_eq!(prepared["data"]["state_persisted"], false);
+    assert_eq!(prepared["data"]["persistence"], "response_only");
+    assert!(prepared["data"]["persistence_summary"]
+        .as_str()
+        .expect("persistence summary")
+        .contains("No task"));
     assert_eq!(prepared["data"]["host_actions"][0]["kind"], "direct_edit");
     assert!(prepared["data"]["host_actions"][0]["next_tools"]
         .as_array()

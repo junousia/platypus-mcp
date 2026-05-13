@@ -74,7 +74,9 @@ straight to broad edits. Convert the goal into a controlled loop:
 7. When planning is required by the user or team, create a strict task plan
    with `write_task_plan` and `validate_task_plan`.
 8. Prepare execution with `prepare_work`. Direct items may return a
-   `direct_edit` host action; complete those with `complete_backlog_item`.
+   `direct_edit` host action; that direct action is response-local guidance,
+   not persisted preparation state. Complete those with
+   `complete_backlog_item`.
    Standard/full items return a `run_in_worktree`
    action with a worker assignment bundle; the MCP server does not launch the
    external worker.
