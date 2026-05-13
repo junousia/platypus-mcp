@@ -142,6 +142,11 @@ Host action kinds are `direct_edit`, `run_in_worktree`,
 `inspect_or_recover`, and `done`. Treat them as the exact next-step contract
 returned by `prepare_work`, `finish_work`, or completion tools.
 
+After successful direct completion, inspect the queue for the normal next item.
+`reconcile_project` is optional for direct work and is meant for audit or
+recovery: use it when a tool failed, state is unclear, verification or finding
+evidence may be missing, or stale task lifecycle state needs inspection.
+
 ## Bootstrap
 
 1. For a fresh project, run `platypus-mcp bootstrap <host> --root <project>
@@ -234,6 +239,9 @@ When creating backlog items through tools, use the typed schema:
 - priority values: `P0`, `P1`, `P2`
 - type values: `foundation`, `feature`, `safety`, `ux`, `test`, `docs`
 - default values when omitted: priority `P1`, type `feature`, epic `general`
+- omitting `epic` intentionally files the item under `general`; in projects
+  with multiple epics, call `list_epics` and choose an explicit epic unless the
+  item is truly cross-cutting or uncategorized
 - Worker selection is runtime state. The manager or MCP host chooses the
   executor when preparing execution; Platypus does not create or configure
   agents.
@@ -349,6 +357,9 @@ is recorded. `complete_backlog_item` records direct completion evidence, a
 backlog event, and optionally a closure commit for explicit changed files. For
 worker work, the worker should operate in the assigned worktree, not in the
 manager workspace.
+After successful direct completion, call `inspect_work_queue` to continue.
+Run `reconcile_project` only when recovery guidance is needed, state is
+unclear, or an audit pass is desired.
 Manual handoff is still lifecycle-tracked: after the host or external worker
 edits the worktree, call `start_worker_task` if a running transition is needed,
 then `finish_work`. Follow its `host_action` to verify, record or resolve
@@ -388,6 +399,16 @@ so reconciliation can report the remaining gap.
 ## Evidence, Findings, And Reconciliation
 
 - Use `record_verification_evidence` for verification results.
+- Use `record_evidence` kinds consistently:
+  - `note`: generic rationale, manual review note, or completion context
+  - `file_summary`: changed-file or inspected-surface summary
+  - `verification`: command result, manual verification result, or skipped
+    check rationale
+  - `commit`: Git commit hash or closure/verification trailer evidence
+  - `worker_finding`: risk, limitation, or follow-up reported by a worker
+  - `manager_disposition`: accepted, deferred, resolved, rejected, or
+    duplicate decision about a finding
+  - `external_report`: imported issue, PR review, CI report, or external audit
 - Use `record_finding` for limitations or required follow-up work.
 - Use `complete_backlog_item` to close direct manager-workspace work.
 - Use `validate_findings` before claiming a task is handled.
@@ -403,6 +424,7 @@ Recovery tools separate inspection from repair:
 | --- | --- | --- |
 | Missing scaffold or Git setup | `doctor_snapshot` | `init_project`, `git init`, or create the initial commit named in the failed check |
 | Dirty manager workspace blocks worktree dispatch or integration | `inspect_work_queue` or `inspect_integration_gates` | commit, stash, or revert the listed manager-workspace paths, then retry the blocked tool |
+| Successful direct completion | `complete_backlog_item` result | call `inspect_work_queue`; run `reconcile_project` only for audit or unclear state |
 | Worker task is complete but not integrated | `inspect_integration_gates` | resolve reported gates, then call `integrate_worker_result` |
 | Completed task has no verification evidence | `reconcile_project` | `record_verification_evidence` or `run_task_verification`, then rerun `reconcile_project` |
 | Required finding is still open | `reconcile_project` or `validate_findings` | `update_finding_disposition` with accepted, deferred, resolved, rejected, or duplicate |
