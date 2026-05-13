@@ -227,6 +227,9 @@ Backlog schema quick reference:
 - Priority values: `P0`, `P1`, `P2`.
 - Type values: `foundation`, `feature`, `safety`, `ux`, `test`, `docs`.
 - Defaults when omitted: priority `P1`, type `feature`, epic `general`.
+  Omitting `epic` intentionally files the item under `general`; in projects
+  with multiple epics, call `list_epics` and choose an explicit epic unless
+  the item is truly general.
 - Worker selection is runtime state. The manager or MCP host chooses the
   executor when preparing execution; Platypus does not create or configure
   agents.
@@ -338,6 +341,9 @@ trailers.
   omitted to preserve default traceability, or set `record_auto_evidence=false`
   only when `evidence_refs` already point to explicit evidence records managed
   by the host. Use this for `prepare_work` host actions of kind `direct_edit`.
+  After successful direct completion, inspect the queue for the normal next
+  item; run `reconcile_project` only for audit, unclear state, failed tools, or
+  suspected evidence/finding gaps.
 - `dispatch_ready_work`: lower-level batch dispatch for executable backlog
   work. It only accepts durable `worker_handoff` items whose planning gates are
   satisfied. It checks Git readiness, dispatches up to `max_tasks` runnable
@@ -411,9 +417,15 @@ trailers.
   against an isolated in-memory backend.
 - `inspect_task_events`: replay task-scoped events.
 - `record_evidence` / `record_verification_evidence`: persist audit evidence.
+  Use `note` for generic rationale, `file_summary` for changed-file review,
+  `verification` for command/manual check results, `commit` for Git closure or
+  verification trailers, `worker_finding` for worker-reported risks,
+  `manager_disposition` for accepted/deferred/resolved finding decisions, and
+  `external_report` for imported issues, PR reviews, CI reports, or audits.
 - `list_evidence`: inspect evidence records.
-- `reconcile_project`: read-only recovery audit after direct completion or
-  worker integration. It reports stale lifecycles for closed items, orphaned
+- `reconcile_project`: read-only recovery audit when state is unclear after
+  direct completion, or after worker integration. It reports stale lifecycles
+  for closed items, orphaned
   task evidence, evidence attached to incomplete tasks, missing verification
   evidence, missing integration evidence, missing `Platypus-Closes` or
   `Platypus-Verification` trailers, stale unapproved task lifecycles, and

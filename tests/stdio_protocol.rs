@@ -641,6 +641,7 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("verification evidence"));
     assert!(text.contains("may replace separate startup calls"));
     assert!(text.contains("durable_next_tool=complete_backlog_item"));
+    assert!(text.contains("reconcile_project is optional"));
 
     let recovery = client
         .read_resource(ReadResourceRequestParams {
@@ -653,6 +654,7 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("orphaned task evidence"));
     assert!(text.contains("inspect_integration_gates"));
     assert!(text.contains("update_finding_disposition"));
+    assert!(text.contains("Successful direct completion"));
 
     let spec = client
         .read_resource(ReadResourceRequestParams {
@@ -666,6 +668,7 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("write_task_plan"));
     assert!(text.contains("Minimum viable direct-edit loop"));
     assert!(text.contains("traceability tradeoff"));
+    assert!(text.contains("optional audit/recovery"));
 
     let preload = client
         .read_resource(ReadResourceRequestParams {
@@ -723,6 +726,8 @@ async fn stdio_server_lists_and_returns_host_guidance_prompts() -> anyhow::Resul
 
     assert!(text.contains("inspect_worktree_changes"));
     assert!(text.contains("record_verification_evidence"));
+    assert!(text.contains("file_summary"));
+    assert!(text.contains("manager_disposition"));
     assert!(text.contains("integrate_worker_result"));
     assert!(text.contains("Platypus-Closes"));
 

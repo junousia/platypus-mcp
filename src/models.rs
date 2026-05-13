@@ -759,7 +759,12 @@ pub struct CreateBacklogItemParams {
     pub item_type: Option<String>,
     /// Primary area or surface for this item.
     pub area: Option<String>,
-    /// Epic or grouping identifier for this item.
+    /// Epic or grouping identifier for this item. Defaults to `general` when
+    /// omitted; call list_epics before omitting this in projects with multiple
+    /// epics so the default grouping is intentional.
+    #[schemars(
+        description = "Epic or grouping identifier for this item. Defaults to general when omitted; call list_epics before omitting this in projects with multiple epics so the default grouping is intentional."
+    )]
     pub epic: Option<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Dependencies that must be satisfied first.
@@ -836,7 +841,12 @@ pub struct QuickCreateBacklogItemParams {
     pub item_type: Option<String>,
     /// Primary area or surface for this item.
     pub area: Option<String>,
-    /// Epic or grouping identifier for this item.
+    /// Epic or grouping identifier for this item. Defaults to `general` when
+    /// omitted; call list_epics before omitting this in projects with multiple
+    /// epics so the default grouping is intentional.
+    #[schemars(
+        description = "Epic or grouping identifier for this item. Defaults to general when omitted; call list_epics before omitting this in projects with multiple epics so the default grouping is intentional."
+    )]
     pub epic: Option<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Dependencies that must be satisfied first.
@@ -904,7 +914,12 @@ pub struct CreateBacklogItemsEntry {
     pub item_type: Option<String>,
     /// Primary area or surface for this item.
     pub area: Option<String>,
-    /// Epic or grouping identifier for this item.
+    /// Epic or grouping identifier for this item. Defaults to `general` when
+    /// omitted; call list_epics before omitting this in projects with multiple
+    /// epics so the default grouping is intentional.
+    #[schemars(
+        description = "Epic or grouping identifier for this item. Defaults to general when omitted; call list_epics before omitting this in projects with multiple epics so the default grouping is intentional."
+    )]
     pub epic: Option<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Existing backlog item IDs that must be satisfied before this item.
@@ -964,7 +979,11 @@ pub struct UpdateBacklogItemParams {
     pub item_type: Option<String>,
     /// Primary area or surface for this item.
     pub area: Option<String>,
-    /// Epic or grouping identifier for this item.
+    /// Epic or grouping identifier for this item. Use an existing epic from
+    /// list_epics, or create one with create_epic before updating.
+    #[schemars(
+        description = "Epic or grouping identifier for this item. Use an existing epic from list_epics, or create one with create_epic before updating."
+    )]
     pub epic: Option<String>,
     /// Existing backlog item IDs that must be satisfied before this item.
     #[schemars(inner(pattern(r"^[A-Z]+-[0-9]{3}$")))]
@@ -1560,11 +1579,14 @@ pub struct RecordEvidenceParams {
     /// Source task identifier.
     #[schemars(example = example_task_id())]
     pub source_task_id: Option<String>,
-    /// Kind or category for this record. Supported values: commit,
-    /// verification, file_summary, worker_finding, manager_disposition,
-    /// external_report, note. Use `note` for generic evidence when unsure.
+    /// Kind or category for this record. Use commit for Git commit hashes or
+    /// trailers, verification for command/manual check results, file_summary
+    /// for changed-file review summaries, worker_finding for worker-reported
+    /// risks, manager_disposition for accepted/deferred/resolved finding
+    /// decisions, external_report for imported issue/review records, and note
+    /// for generic rationale when no narrower kind fits.
     #[schemars(
-        description = "Kind or category for this record. Supported values: commit, verification, file_summary, worker_finding, manager_disposition, external_report, note. Use note for generic evidence when unsure."
+        description = "Kind or category for this record. Use commit for Git commit hashes or trailers, verification for command/manual check results, file_summary for changed-file review summaries, worker_finding for worker-reported risks, manager_disposition for accepted/deferred/resolved finding decisions, external_report for imported issue/review records, and note for generic rationale when no narrower kind fits."
     )]
     #[schemars(with = "EvidenceKindSchema")]
     pub kind: String,
@@ -1612,7 +1634,15 @@ pub struct ListEvidenceParams {
     /// Source task identifier.
     #[schemars(example = example_task_id())]
     pub source_task_id: Option<String>,
-    /// Kind or category for this record.
+    /// Optional evidence kind filter. Use commit for Git commit hashes or
+    /// trailers, verification for command/manual check results, file_summary
+    /// for changed-file review summaries, worker_finding for worker-reported
+    /// risks, manager_disposition for accepted/deferred/resolved finding
+    /// decisions, external_report for imported issue/review records, and note
+    /// for generic rationale.
+    #[schemars(
+        description = "Optional evidence kind filter. Use commit for Git commit hashes or trailers, verification for command/manual check results, file_summary for changed-file review summaries, worker_finding for worker-reported risks, manager_disposition for accepted/deferred/resolved finding decisions, external_report for imported issue/review records, and note for generic rationale."
+    )]
     #[schemars(with = "Option<EvidenceKindSchema>")]
     pub kind: Option<String>,
     /// Maximum number of records to return.

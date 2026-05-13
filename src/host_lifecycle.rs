@@ -573,7 +573,7 @@ pub fn complete_backlog_item(
                 .to_string(),
             "Use a Git commit with Platypus-Closes for repository-portable closure when needed."
                 .to_string(),
-            "Run reconcile_project or inspect_work_queue to choose the next safe action."
+            "Call inspect_work_queue to choose the next item. Run reconcile_project only when state is unclear, recovery guidance is needed, or you want an explicit audit pass."
                 .to_string(),
         ],
         task_id: None,
@@ -582,8 +582,8 @@ pub fn complete_backlog_item(
         worktree_path: Some(root.clone()),
         bundle: None,
         next_tools: vec![
-            "reconcile_project".to_string(),
             "inspect_work_queue".to_string(),
+            "reconcile_project".to_string(),
         ],
     };
     let data = CompleteBacklogItemData {
@@ -1796,6 +1796,9 @@ mod tests {
         assert_eq!(data.generated_evidence.len(), 2);
         assert_eq!(data.generated_evidence[0].kind, "note");
         assert_eq!(data.generated_evidence[1].kind, "verification");
+        let direct_done_guidance = data.host_action.instructions.join("\n");
+        assert!(direct_done_guidance.contains("inspect_work_queue"));
+        assert!(direct_done_guidance.contains("Run reconcile_project only when state is unclear"));
 
         let queue = guidance::inspect_work_queue(
             project.path(),

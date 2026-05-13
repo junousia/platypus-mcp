@@ -74,7 +74,13 @@ state name and follow the paired tool instead of inventing a hidden lifecycle.
 | `resolve_findings` | `finish_work.host_action.kind` | findings must be recorded or dispositioned | `record_finding`, `validate_findings`, `update_finding_disposition` |
 | `integrate_result` | `finish_work.host_action.kind` | worker result is ready for integration review | `inspect_integration_gates`, then `integrate_worker_result` |
 | `inspect_or_recover` | lifecycle tools | the tool cannot safely continue without inspection | follow `recovery_action`, then inspect again |
-| `done` | completion tools | direct or worker work is complete | `reconcile_project`, then inspect the queue |
+| `done` | completion tools | direct or worker work is complete | inspect the queue; run `reconcile_project` when state is unclear, recovery guidance is needed, or an audit pass is desired |
+
+For direct work, reconcile_project is optional for audit or recovery. After a
+successful `complete_backlog_item`, inspect the queue for the normal next item;
+call `reconcile_project` when a tool failed, state is unclear, verification or
+finding evidence may be missing, or stale task lifecycle state needs
+inspection.
 
 `inspect_session` may replace separate startup calls to `doctor_snapshot`,
 `inspect_status`, `inspect_workflow_config`, `inspect_queue_status`, and
@@ -132,7 +138,8 @@ straight to broad edits. Convert the goal into a controlled loop:
    or explicitly set `findings_reviewed=true`.
 10. Follow the `finish_work.host_action`: verify, record/resolve findings,
     integrate with `integrate_worker_result`, recover, run
-    `reconcile_project`, or move to the next item.
+    `reconcile_project` when the result needs an audit/recovery pass, or move
+    to the next item.
 
 Minimum viable direct-edit loop for tiny, user-approved work:
 `inspect_session`, `inspect_queue_status` or `inspect_work_queue`,
@@ -141,6 +148,11 @@ Minimum viable direct-edit loop for tiny, user-approved work:
 overhead for small tasks but still records the durable completion. Use task
 plans, worker handoff, findings, and integration gates for long-lived or
 parallel product development.
+
+After successful direct completion, use `inspect_work_queue` for the normal
+next item. `reconcile_project` is optional audit/recovery for direct work:
+call it when a tool failed, state is unclear, verification or finding evidence
+may be missing, or stale task lifecycle state needs inspection.
 
 The host should present this as natural assistance, not as a manual ceremony:
 explain what is being structured, ask for approval only when choices matter,
@@ -346,7 +358,10 @@ Backlog schema quick reference:
   complex or the defaults would be too broad.
 - Priorities: `P0` critical/next, `P1` normal important work, `P2` refinement.
 - Types: `foundation`, `feature`, `safety`, `ux`, `test`, `docs`.
-- Defaults: priority `P1`, type `feature`, epic `general`.
+- Defaults: priority `P1`, type `feature`, epic `general`. Omitting `epic`
+  intentionally files the item under `general`; in projects with multiple
+  epics, call `list_epics` and choose an explicit epic unless the item is
+  truly general.
 - Worker selection is runtime state. The manager or MCP host chooses the
   executor when preparing execution; Platypus does not create or configure
   agents.
@@ -419,10 +434,22 @@ Use `inspect_task`, `inspect_task_events`, `inspect_worktree_changes`, and
 `list_evidence` for review. Use `record_verification_evidence` when validation
 has been run or explicitly skipped with rationale.
 
+Evidence kind examples:
+
+- `note`: generic rationale, manual review note, or completion context.
+- `file_summary`: summary of changed files or inspected surfaces.
+- `verification`: command result, manual verification result, or skipped check
+  rationale.
+- `commit`: Git commit hash or closure/verification trailer evidence.
+- `worker_finding`: risk, limitation, or follow-up reported by a worker.
+- `manager_disposition`: accepted, deferred, resolved, rejected, or duplicate
+  decision about a finding.
+- `external_report`: imported issue, PR review, CI report, or external audit.
+
 Integrate with `integrate_worker_result`. It follows `workflow.integration` in
 `platy.yaml` and records `Platypus-Closes` and `Platypus-Verification`
-trailers in Git. After integration, call `reconcile_project` and clean safe
-worktrees with `worktree_cleanup`.
+trailers in Git. After integration, call `reconcile_project` to audit closure
+and evidence, then clean safe worktrees with `worktree_cleanup`.
 "#;
 
 const RECOVERY_TEXT: &str = r#"# Recovery Guidance
@@ -460,6 +487,9 @@ Concrete recovery paths:
 - Stale lifecycle for a closed item: do not reopen the backlog item; inspect
   the task for audit and treat the Git/direct completion closure as
   authoritative until a lifecycle cleanup flow is available.
+- Successful direct completion: call `inspect_work_queue` for the next item.
+  Use `reconcile_project` only when state is unclear, a tool failed, evidence
+  may be missing, or an explicit audit pass is desired.
 
 If a tool fails, return its structured `status`, `summary`, `error`, and
 `next_action` to the user instead of guessing or silently retrying.

@@ -2197,6 +2197,8 @@ mod tests {
         assert_property_pattern(&create_backlog_item, "id", r"^[A-Z]+-[0-9]{3}$");
         assert_property_pattern(&create_backlog_item, "id_prefix", r"^[A-Z]+$");
         assert_array_item_pattern(&create_backlog_item, "depends_on", r"^[A-Z]+-[0-9]{3}$");
+        assert_property_description_contains(&create_backlog_item, "epic", "Defaults to general");
+        assert_property_description_contains(&create_backlog_item, "epic", "list_epics");
 
         let create_backlog_items = input_schema(&tools, "create_backlog_items");
         assert_property_pattern(&create_backlog_items, "id_prefix", r"^[A-Z]+$");
@@ -2253,6 +2255,15 @@ mod tests {
         let complete_backlog_item = input_schema(&tools, "complete_backlog_item");
         assert_property_has_example(&complete_backlog_item, "item_id");
         assert_property_has_example(&complete_backlog_item, "summary");
+
+        let record_evidence = input_schema(&tools, "record_evidence");
+        assert_property_description_contains(&record_evidence, "kind", "file_summary");
+        assert_property_description_contains(&record_evidence, "kind", "worker_finding");
+        assert_property_description_contains(&record_evidence, "kind", "manager_disposition");
+
+        let list_evidence = input_schema(&tools, "list_evidence");
+        assert_property_description_contains(&list_evidence, "kind", "verification");
+        assert_property_description_contains(&list_evidence, "kind", "external_report");
     }
 
     fn assert_array_items_are_objects(
@@ -2454,6 +2465,18 @@ mod tests {
         assert!(
             !examples.is_empty(),
             "{property_name} missing example in schema: {property:#}"
+        );
+    }
+
+    fn assert_property_description_contains(schema: &Value, property_name: &str, expected: &str) {
+        let property = property_schema(schema, property_name);
+        let description = property
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{property_name} missing description: {property:#}"));
+        assert!(
+            description.contains(expected),
+            "{property_name} description missing {expected}: {description}"
         );
     }
 
