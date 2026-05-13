@@ -199,6 +199,11 @@ Preloading is optional and host-specific. If the host cannot preload schemas,
 continue normally and call the tools as needed. Do not depend on hidden client
 context for core state transitions.
 
+`inspect_session` and `inspect_work_queue` return
+`schemas_likely_needed_next` with 1-4 likely next tool schemas. Use those hints
+when the host supports deferred schema loading. Claude entries include literal
+ToolSearch selectors such as `select:mcp__platypus__complete_backlog_item`.
+
 Claude Code uses deferred schema discovery through ToolSearch. When using
 Claude, select tools with `select:mcp__platypus__<tool>`, for example
 `select:mcp__platypus__inspect_session` or
@@ -365,10 +370,10 @@ completion events created by `complete_backlog_item`.
 Backlog schema quick reference:
 
 - Minimal create input: a meaningful `goal` or `title`. Platypus derives
-  conservative title, goal, an explicit generated implementation contract
-  placeholder, and first acceptance text when those fields are omitted. Treat
-  the generated contract placeholder as a reminder to refine the item before
-  delegation or complex work, not as real execution guidance.
+  conservative title and goal, keeps the required Implementation Contract
+  section empty, and writes first acceptance text when those fields are
+  omitted. Add a real implementation contract before delegated, complex, or
+  long-lived work.
 - Rich create input: provide explicit `title`, `goal`,
   `implementation_contract` or `contract`, and `acceptance` when the work is
   complex or the defaults would be too broad.

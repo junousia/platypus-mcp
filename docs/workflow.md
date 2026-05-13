@@ -165,6 +165,10 @@ startup detector calls to `doctor_snapshot`, `inspect_status`,
 when it succeeds and the snapshot is fresh. Call the narrower tools after
 mutations, when the host needs a detailed payload, or when a previous chat
 turn may be stale.
+`inspect_session` and `inspect_work_queue` include
+`schemas_likely_needed_next` with 1-4 likely next tool schemas. Claude hints
+include literal ToolSearch selectors; Codex and opencode callers should use the
+plain `tool_name` values with their own discovery UI.
 
 `init_project` also installs project-local agent and workflow guidance. That is
 intentional: once an MCP host enters an initialized directory, normal goal
@@ -231,10 +235,9 @@ status, task attempts, PR metadata, or closure state.
 When creating backlog items through tools, use the typed schema:
 
 - minimal input: a meaningful `goal` or `title`; Platypus derives conservative
-  defaults for missing title, goal, an explicit generated implementation
-  contract placeholder, and first acceptance criterion. Do not treat the
-  generated contract placeholder as real execution guidance for delegated or
-  complex work.
+  defaults for missing title and goal, keeps the required Implementation
+  Contract section empty, and writes a first acceptance criterion. Add a real
+  implementation contract before delegated, complex, or long-lived work.
 - rich input: explicit `title`, `goal`, `implementation_contract` or
   `contract`, and `acceptance` criteria when the work is complex or generated
   defaults would be too broad

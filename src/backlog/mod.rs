@@ -18,7 +18,7 @@ pub use status::{inspect_backlog_inventory, inspect_status, list_backlog};
 pub use update::update_backlog_item;
 pub use validate::validate_backlog;
 
-pub(crate) use closure::closed_item_ids;
+pub(crate) use closure::{closed_item_ids, closure_sources};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BacklogItemExecutionPolicy {
@@ -686,9 +686,8 @@ mod tests {
         let goal_text =
             fs::read_to_string(temp.path().join("backlog/items/PROJ-001.md")).expect("goal item");
         assert!(goal_text.contains("title: Scaffold frontend"));
-        assert!(goal_text.contains(
-            "## Implementation Contract\n\nNo implementation contract was provided. Treat this generated section as a reminder to refine the contract before delegation or complex work."
-        ));
+        assert!(goal_text.contains("## Implementation Contract\n\n\n\n## Acceptance"));
+        assert!(!goal_text.contains("No implementation contract was provided"));
         assert!(!goal_text.contains("Implement the requested change: Scaffold frontend."));
         assert!(goal_text
             .contains("- Scaffold frontend is implemented and verification notes are recorded."));
@@ -720,9 +719,8 @@ mod tests {
         let title_text =
             fs::read_to_string(temp.path().join("backlog/items/PROJ-002.md")).expect("title item");
         assert!(title_text.contains("## Goal\n\nDocument recovery flow."));
-        assert!(title_text.contains(
-            "## Implementation Contract\n\nNo implementation contract was provided. Treat this generated section as a reminder to refine the contract before delegation or complex work."
-        ));
+        assert!(title_text.contains("## Implementation Contract\n\n\n\n## Acceptance"));
+        assert!(!title_text.contains("No implementation contract was provided"));
         assert!(!title_text.contains("Implement the requested change: Document recovery flow."));
 
         let validation = validate_backlog(temp.path(), Some(root_arg(temp.path()).as_str()), true);
@@ -1212,7 +1210,7 @@ mod tests {
     }
 
     #[test]
-    fn create_backlog_items_uses_placeholder_contract_when_omitted() {
+    fn create_backlog_items_uses_empty_contract_when_omitted() {
         let temp = project_fixture();
 
         let result = create_backlog_items(
@@ -1248,10 +1246,11 @@ mod tests {
         assert!(matches!(result.status, ActionStatus::Completed));
         let data = result.data.expect("preview data");
         assert_eq!(data.items[0].preview.title, "Scaffold frontend");
-        assert_eq!(
-            data.items[0].preview.implementation_contract,
-            "No implementation contract was provided. Treat this generated section as a reminder to refine the contract before delegation or complex work."
-        );
+        assert_eq!(data.items[0].preview.implementation_contract, "");
+        assert!(data.items[0]
+            .preview
+            .markdown
+            .contains("## Implementation Contract\n\n\n\n## Acceptance"));
         assert!(!data.items[0]
             .preview
             .markdown

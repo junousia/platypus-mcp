@@ -9,8 +9,27 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ClosureSources {
+    pub runtime_completion: bool,
+    pub git_trailer: bool,
+}
+
 pub(crate) fn closed_item_ids(root: &Path) -> BTreeSet<String> {
     let mut ids = runtime_completed_item_ids(root);
+    ids.extend(git_trailer_closed_item_ids(root));
+    ids
+}
+
+pub(crate) fn closure_sources(root: &Path, item_id: &str) -> ClosureSources {
+    let item_id = item_id.trim().to_ascii_uppercase();
+    ClosureSources {
+        runtime_completion: runtime_completed_item_ids(root).contains(&item_id),
+        git_trailer: git_trailer_closed_item_ids(root).contains(&item_id),
+    }
+}
+
+fn git_trailer_closed_item_ids(root: &Path) -> BTreeSet<String> {
     let output = Command::new("git")
         .args(["log", "--format=%B%x00", "--all"])
         .current_dir(root)
@@ -18,12 +37,13 @@ pub(crate) fn closed_item_ids(root: &Path) -> BTreeSet<String> {
         .stderr(Stdio::null())
         .output();
     let Ok(output) = output else {
-        return ids;
+        return BTreeSet::new();
     };
     if output.status.success() {
-        ids.extend(parse_platypus_trailers(&String::from_utf8_lossy(&output.stdout)).closes);
+        parse_platypus_trailers(&String::from_utf8_lossy(&output.stdout)).closes
+    } else {
+        BTreeSet::new()
     }
-    ids
 }
 
 fn runtime_completed_item_ids(root: &Path) -> BTreeSet<String> {

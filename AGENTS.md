@@ -73,6 +73,10 @@ selection. If the host supports schema preloading, load the Startup Inspection
 group first, then load Backlog Planning, Direct Execution, Worker Handoff,
 Evidence And Findings, or Recovery only when that phase starts. If preloading
 is awkward or unavailable, call the same tools on demand.
+`inspect_session` and `inspect_work_queue` return
+`schemas_likely_needed_next` with 1-4 likely next tool schemas; Claude hints
+include literal ToolSearch selectors and other hosts can use the plain
+`tool_name` values.
 
 Claude Code uses ToolSearch selectors such as
 `select:mcp__platypus__inspect_session`; the `mcp__platypus__` prefix comes

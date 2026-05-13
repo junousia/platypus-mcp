@@ -410,6 +410,11 @@ If your MCP host supports tool discovery or schema preloading, read
 `platypus://guidance/tool-preload` or the `platypus-tool-preload` prompt and
 load only the group needed for the current phase:
 
+`inspect_session` and `inspect_work_queue` return
+`schemas_likely_needed_next` with 1-4 likely next tool schemas. Use those hints
+when the host supports deferred schema loading. Claude entries include literal
+ToolSearch selectors such as `select:mcp__platypus__complete_backlog_item`.
+
 - Startup Inspection Group at session start or after stale chat context:
   `inspect_session`, `doctor_snapshot`, `inspect_status`,
   `inspect_workflow_config`, `inspect_queue_status`.
@@ -569,6 +574,7 @@ mod tests {
         assert!(agents.contains("worker-profile"));
         assert!(agents.contains("Minimum viable direct-edit loop"));
         assert!(agents.contains("prepare_work_optional"));
+        assert!(agents.contains("schemas_likely_needed_next"));
         assert!(agents.contains("Tool Naming Map"));
         assert!(agents.contains("write_task_plan"));
         assert!(!agents.contains("draft_task_plan"));
@@ -607,6 +613,7 @@ mod tests {
         assert!(claude.contains("worker-profile"));
         assert!(claude.contains("Minimum viable direct-edit loop"));
         assert!(claude.contains("prepare_work_optional"));
+        assert!(claude.contains("schemas_likely_needed_next"));
         assert!(claude.contains("Tool Naming Map"));
         assert!(claude.contains("write_task_plan"));
         assert!(!claude.contains("draft_task_plan"));

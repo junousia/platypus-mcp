@@ -7,7 +7,7 @@ use crate::{
         FindingRecord, InspectItemData, InspectItemParams, InspectQueueStatusParams,
         InspectSessionData, InspectSessionParams, InspectWorkQueueParams, PlanningApprovalState,
         PlanningClassification, QueueStateDescription, QueueStatusCounts, QueueStatusData,
-        QueueStatusItem, QueueTaskSummary, TaskPlanQueryParams, WorkQueueData,
+        QueueStatusItem, QueueTaskSummary, SchemaDiscoveryHint, TaskPlanQueryParams, WorkQueueData,
         WorkQueueInventorySummary, WorkQueueItem, WorkQueuePlanState, WorkflowConfigParams,
         WorkflowExecutionConfig,
     },
@@ -149,6 +149,10 @@ pub fn inspect_session(
         )
     };
     let recovery_action = (!ok).then(|| reason.clone());
+    let schemas_likely_needed_next = queue
+        .as_ref()
+        .map(|queue| queue.schemas_likely_needed_next.clone())
+        .unwrap_or_else(|| schema_hints_for_tools("session", [recommended_tool.as_str()]));
     ActionResult {
         action: action.to_string(),
         status: ActionStatus::Completed,
@@ -167,6 +171,7 @@ pub fn inspect_session(
             summary,
             reason,
             params: params_map,
+            schemas_likely_needed_next,
         }),
         error: None,
     }
@@ -413,6 +418,8 @@ pub fn inspect_work_queue(
         ActionStatus::Completed
     };
     let queue_state = overall_queue_state(&items, &inventory, active_filtered);
+    let schemas_likely_needed_next =
+        schema_hints_for_queue(&queue_state, &recommended_tool, &items, &inventory);
     ActionResult {
         action: action.to_string(),
         status,
@@ -435,6 +442,7 @@ pub fn inspect_work_queue(
             summary,
             reason,
             params,
+            schemas_likely_needed_next,
             items,
         }),
         error: None,
@@ -592,6 +600,112 @@ fn data_summary(data: &QueueStatusData) -> String {
             data.counts.pending_integration_count,
             data.counts.closed_count
         )
+    }
+}
+
+fn schema_hints_for_queue(
+    queue_state: &str,
+    recommended_tool: &str,
+    items: &[WorkQueueItem],
+    inventory: &WorkQueueInventorySummary,
+) -> Vec<SchemaDiscoveryHint> {
+    let phase = queue_state.to_string();
+    let mut tools = match queue_state {
+        "empty_backlog" => vec!["create_backlog_items", "validate_backlog"],
+        "direct_ready" => vec![
+            "complete_backlog_item",
+            "record_verification_evidence",
+            "prepare_work",
+        ],
+        "ready" => vec!["prepare_work", "finish_work", "inspect_task_events"],
+        "planning_blocked" => vec!["write_task_plan", "validate_task_plan", "inspect_item"],
+        "approval_blocked" => vec!["request_planning_approval", "approval_respond"],
+        "config_blocked" => vec!["doctor_snapshot", "init_project"],
+        "workspace_blocked" => vec!["doctor_snapshot", "inspect_work_queue"],
+        "active" => vec!["inspect_task", "inspect_task_events", "finish_work"],
+        "completed_pending_integration" => vec![
+            "inspect_integration_gates",
+            "integrate_worker_result",
+            "reconcile_project",
+        ],
+        _ if inventory.pending_integration_count > 0 => vec![
+            "inspect_integration_gates",
+            "integrate_worker_result",
+            "reconcile_project",
+        ],
+        _ if inventory.total_count > 0 && items.is_empty() => {
+            vec!["inspect_item", "create_backlog_items", "validate_backlog"]
+        }
+        _ => vec![recommended_tool],
+    };
+    if let Some(index) = tools.iter().position(|tool| *tool == recommended_tool) {
+        let tool = tools.remove(index);
+        tools.insert(0, tool);
+    } else {
+        tools.insert(0, recommended_tool);
+    }
+    schema_hints_for_tools(&phase, tools)
+}
+
+fn schema_hints_for_tools<'a>(
+    phase: impl Into<String>,
+    tools: impl IntoIterator<Item = &'a str>,
+) -> Vec<SchemaDiscoveryHint> {
+    let phase = phase.into();
+    let mut seen = BTreeSet::new();
+    tools
+        .into_iter()
+        .filter(|tool| !tool.trim().is_empty())
+        .filter(|tool| seen.insert((*tool).to_string()))
+        .take(4)
+        .map(|tool| SchemaDiscoveryHint {
+            tool_name: tool.to_string(),
+            phase: phase.clone(),
+            reason: schema_hint_reason(tool, &phase),
+            claude_toolsearch_selector: Some(format!("select:mcp__platypus__{tool}")),
+        })
+        .collect()
+}
+
+fn schema_hint_reason(tool: &str, phase: &str) -> String {
+    match tool {
+        "create_backlog_items" => {
+            "Create one or more concrete backlog items after the host model decides the work."
+                .to_string()
+        }
+        "validate_backlog" => "Validate backlog markdown after item creation or edits.".to_string(),
+        "complete_backlog_item" => {
+            "Close direct manager-workspace work with summary, changed files, and verification evidence."
+                .to_string()
+        }
+        "record_verification_evidence" => {
+            "Record explicit verification details before or during direct completion.".to_string()
+        }
+        "prepare_work" => {
+            "Return response-local direct guidance or prepare a worker handoff when useful."
+                .to_string()
+        }
+        "write_task_plan" => {
+            "Write the required task plan before worker handoff or gated execution.".to_string()
+        }
+        "validate_task_plan" => "Validate a task plan before execution.".to_string(),
+        "inspect_item" => "Inspect one backlog item and its blockers.".to_string(),
+        "request_planning_approval" => {
+            "Create an explicit approval request for gated planning.".to_string()
+        }
+        "approval_respond" => "Approve or deny a pending planning request.".to_string(),
+        "doctor_snapshot" => "Diagnose setup, Git, and workflow blockers.".to_string(),
+        "init_project" => "Create missing Platypus project scaffold files.".to_string(),
+        "inspect_work_queue" => "Refresh queue state after resolving a blocker.".to_string(),
+        "inspect_task" => "Inspect an active worker task lifecycle.".to_string(),
+        "inspect_task_events" => "Replay activity for an active or completed task.".to_string(),
+        "finish_work" => "Finish a host-managed worker assignment and collect result state.".to_string(),
+        "inspect_integration_gates" => {
+            "Inspect completed worker task gates before integration.".to_string()
+        }
+        "integrate_worker_result" => "Integrate a completed worker result into the manager workspace.".to_string(),
+        "reconcile_project" => "Audit project state after integration or unclear workflow state.".to_string(),
+        other => format!("Likely next tool for queue phase `{phase}`: `{other}`."),
     }
 }
 
@@ -1669,6 +1783,10 @@ mod tests {
         assert_eq!(queue_data.queue_state, "empty_backlog");
         assert_eq!(queue_data.inventory.total_count, 0);
         assert_eq!(queue_data.recommended_tool, "create_backlog_items");
+        assert!(queue_data
+            .schemas_likely_needed_next
+            .iter()
+            .any(|hint| hint.tool_name == "create_backlog_items"));
 
         let status = inspect_queue_status(
             project.path(),
@@ -1711,6 +1829,10 @@ mod tests {
         assert_eq!(data.status.as_ref().expect("status").backlog_items, 1);
         assert!(data.workflow.is_some());
         assert_eq!(data.queue.as_ref().expect("queue").items.len(), 1);
+        assert!(data
+            .schemas_likely_needed_next
+            .iter()
+            .any(|hint| hint.tool_name == "complete_backlog_item"));
         assert!(
             !project.path().join(".platy").exists(),
             "read-only session inspection must not create runtime state"
@@ -1897,6 +2019,12 @@ tasks:
         assert_eq!(data.items[0].plan.status, "missing");
         assert!(!data.items[0].ready_to_dispatch);
         assert_eq!(data.params["item_id"], "PROJ-001");
+        assert!(data
+            .schemas_likely_needed_next
+            .iter()
+            .any(|hint| hint.tool_name == "write_task_plan"
+                && hint.claude_toolsearch_selector.as_deref()
+                    == Some("select:mcp__platypus__write_task_plan")));
     }
 
     #[test]
@@ -1940,6 +2068,12 @@ tasks:
         assert!(data.items[0]
             .execution_guidance
             .contains("prepare_work is optional"));
+        assert!(data
+            .schemas_likely_needed_next
+            .iter()
+            .any(|hint| hint.tool_name == "complete_backlog_item"
+                && hint.claude_toolsearch_selector.as_deref()
+                    == Some("select:mcp__platypus__complete_backlog_item")));
         assert_eq!(data.items[0].recommended_tool, "prepare_work");
         assert_eq!(data.items[0].plan.status, "not_required");
         assert!(data.items[0].plan.errors.is_empty());
@@ -2687,6 +2821,10 @@ tasks:
         assert_eq!(data.items[0].queue_state, "completed_pending_integration");
         assert_eq!(data.items[0].recommended_tool, "integrate_worker_result");
         assert!(data.items[0].reason.contains("awaiting integration"));
+        assert!(data
+            .schemas_likely_needed_next
+            .iter()
+            .any(|hint| hint.tool_name == "inspect_integration_gates"));
     }
 
     #[test]

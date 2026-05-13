@@ -99,6 +99,10 @@ project session with the same deterministic opening sequence:
 Tool schemas are delivered by the MCP client and may be deferred until a tool
 is discovered or selected. Schema preloading is a client convenience, not a
 Platypus requirement; when it is awkward, call the same tools on demand.
+`inspect_session` and `inspect_work_queue` also return
+`schemas_likely_needed_next` with 1-4 likely next tool schemas. Claude entries
+include literal ToolSearch selectors; Codex and opencode callers can use the
+plain `tool_name` values with their own discovery UI.
 Claude Code can load deferred schemas with ToolSearch selectors such as
 `select:mcp__platypus__inspect_session`; the prefix comes from the configured
 MCP server name.

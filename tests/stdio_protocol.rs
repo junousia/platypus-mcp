@@ -154,6 +154,12 @@ async fn stdio_server_inspects_session_snapshot() -> anyhow::Result<()> {
         session["data"]["queue"]["items"][0]["execution_path"],
         "blocked"
     );
+    assert!(session["data"]["schemas_likely_needed_next"]
+        .as_array()
+        .expect("session schema hints")
+        .iter()
+        .any(|hint| hint["tool_name"] == "write_task_plan"
+            && hint["claude_toolsearch_selector"] == "select:mcp__platypus__write_task_plan"));
     assert!(session["data"]["workflow"]["integration"]["merge_style"].is_string());
 
     client.cancel().await?;
@@ -2963,6 +2969,13 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
         direct_queue["data"]["items"][0]["prepare_work_optional"],
         true
     );
+    assert!(direct_queue["data"]["schemas_likely_needed_next"]
+        .as_array()
+        .expect("schema hints")
+        .iter()
+        .any(|hint| hint["tool_name"] == "complete_backlog_item"
+            && hint["claude_toolsearch_selector"]
+                == "select:mcp__platypus__complete_backlog_item"));
 
     let prepared = call_tool_json(
         &client,
@@ -3005,6 +3018,25 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
     .await?;
     assert_stage_status("complete_backlog_item", &completed, "completed");
     assert_eq!(completed["data"]["closed"], true);
+    assert_eq!(completed["data"]["closure"]["source"], "runtime_event");
+    assert_eq!(
+        completed["data"]["closure"]["runtime_completion_recorded"],
+        true
+    );
+    assert_eq!(completed["data"]["closure"]["git_trailer_portable"], false);
+    assert_eq!(
+        completed["data"]["commit_outcome"]["status"],
+        "not_requested"
+    );
+    assert_eq!(completed["data"]["commit_outcome"]["requested"], false);
+    assert_eq!(
+        completed["data"]["queue_status"]["counts"]["closed_count"],
+        1
+    );
+    assert_eq!(
+        completed["data"]["queue_status_error"],
+        serde_json::Value::Null
+    );
     assert_eq!(completed["data"]["auto_evidence_enabled"], true);
     assert_eq!(
         completed["data"]["generated_evidence"]

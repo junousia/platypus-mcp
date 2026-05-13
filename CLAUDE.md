@@ -27,6 +27,9 @@ selection. If Claude can preload schemas, load the Startup Inspection group
 first, then load Backlog Planning, Direct Execution, Worker Handoff, Evidence
 And Findings, or Recovery only when that phase starts. If preloading is awkward
 or unavailable, call the same tools on demand.
+`inspect_session` and `inspect_work_queue` return
+`schemas_likely_needed_next` with 1-4 likely next tool schemas. Use the
+included literal ToolSearch selectors when loading deferred schemas.
 
 When Claude Code defers a Platypus tool schema, use ToolSearch with
 `select:mcp__platypus__<tool>`, for example
