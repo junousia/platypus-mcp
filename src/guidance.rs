@@ -1289,7 +1289,7 @@ fn work_queue_item(
     {
         (
             "prepare_work".to_string(),
-            "Direct host work is ready; prepare_work returns direct_edit guidance with state_persisted=false and durable_next_tool=complete_backlog_item.".to_string(),
+            "Direct host work is ready; prepare_work is optional when planning_gate=none. The host may edit the manager workspace, verify, and call complete_backlog_item directly, or call prepare_work first for response-local guidance.".to_string(),
             "direct_ready".to_string(),
         )
     } else if ready_to_dispatch
@@ -1330,6 +1330,9 @@ fn work_queue_item(
     };
     let (execution_path, completion_tool, task_plan_required_for_worktree, execution_guidance) =
         execution_metadata(&queue_state, &effective_policy);
+    let prepare_work_optional = queue_state == "direct_ready"
+        && effective_policy.execution_path == execution_policy::DIRECT_EDIT
+        && effective_policy.planning_gate == execution_policy::GATE_NONE;
     WorkQueueItem {
         position,
         candidate,
@@ -1341,6 +1344,7 @@ fn work_queue_item(
         execution_path,
         completion_tool,
         task_plan_required_for_worktree,
+        prepare_work_optional,
         execution_guidance,
         task_id: None,
         assignment_id: None,
@@ -1360,7 +1364,7 @@ fn execution_metadata(
             "direct_edit".to_string(),
             Some("complete_backlog_item".to_string()),
             true,
-            "Direct edit is ready from durable execution policy. prepare_work returns response-local guidance, state_persisted=false, and durable_next_tool=complete_backlog_item; inspect_work_queue stays direct_ready until completion records closure. To use a worktree handoff, set execution_path=worker_handoff on the backlog item or workflow.execution default.".to_string(),
+            "Direct edit is ready from durable execution policy. For direct_edit with planning_gate=none, prepare_work is optional: the host may edit the manager workspace, verify, and call complete_backlog_item directly. Calling prepare_work first returns response-local guidance with state_persisted=false and durable_next_tool=complete_backlog_item. inspect_work_queue stays direct_ready until completion records closure. To use a worktree handoff, set execution_path=worker_handoff on the backlog item or workflow.execution default.".to_string(),
         ),
         "ready" => (
             "worker_handoff".to_string(),
@@ -1932,9 +1936,10 @@ tasks:
             Some("complete_backlog_item")
         );
         assert!(data.items[0].task_plan_required_for_worktree);
+        assert!(data.items[0].prepare_work_optional);
         assert!(data.items[0]
             .execution_guidance
-            .contains("durable execution policy"));
+            .contains("prepare_work is optional"));
         assert_eq!(data.items[0].recommended_tool, "prepare_work");
         assert_eq!(data.items[0].plan.status, "not_required");
         assert!(data.items[0].plan.errors.is_empty());

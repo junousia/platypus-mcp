@@ -42,7 +42,7 @@ detecting tool and do not infer hidden state from chat history.
 | `approval_blocked` | `inspect_work_queue` | `queue_state == "approval_blocked"` | call `request_planning_approval`, then `approval_respond` | planning approval is recorded |
 | `config_blocked` | `inspect_work_queue` | `queue_state == "config_blocked"` | call `doctor_snapshot` and follow the reported recovery action | setup blocker is resolved |
 | `workspace_blocked` | `inspect_work_queue` | `queue_state == "workspace_blocked"` | commit, stash, or finish current manager-workspace changes | worker dispatch can safely create a worktree |
-| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | call `prepare_work`, edit the manager workspace, then call `complete_backlog_item` | direct completion evidence or closure commit exists |
+| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | optionally call `prepare_work` for guidance, or edit the manager workspace directly, then call `complete_backlog_item` | direct completion evidence or closure commit exists |
 | `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` for one item or `dispatch_ready_work` for a batch | `run_in_worktree` handoff exists |
 | `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree; call `finish_work` | `finish_work.host_action` is returned |
 | `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` | work is integrated or a specific blocker is reported |
@@ -55,7 +55,7 @@ state name and follow the paired tool instead of inventing a hidden lifecycle.
 
 | Output | Emitted by | Meaning | Follow-up |
 | --- | --- | --- | --- |
-| `direct_ready` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | direct manager-workspace work is executable | `prepare_work`, edit, `complete_backlog_item` |
+| `direct_ready` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | direct manager-workspace work is executable | optional `prepare_work`, edit, `complete_backlog_item` |
 | `ready` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | worker handoff can be prepared | `prepare_work` or `dispatch_ready_work` |
 | `planning_blocked` | queue tools | a required task plan is missing or invalid | `write_task_plan`, then `validate_task_plan` |
 | `approval_blocked` | queue tools | planning approval is required before execution | `request_planning_approval`, then `approval_respond` |
@@ -143,11 +143,12 @@ straight to broad edits. Convert the goal into a controlled loop:
 
 Minimum viable direct-edit loop for tiny, user-approved work:
 `inspect_session`, `inspect_queue_status` or `inspect_work_queue`,
-`prepare_work`, edit the manager workspace, run relevant verification, then
-`complete_backlog_item`. This is a traceability tradeoff: it avoids worktree
-overhead for small tasks but still records the durable completion. Use task
-plans, worker handoff, findings, and integration gates for long-lived or
-parallel product development.
+edit the manager workspace, run relevant verification, then
+`complete_backlog_item`. When `inspect_work_queue.items[].prepare_work_optional`
+is true, `prepare_work` is optional and only returns response-local guidance.
+This is a traceability tradeoff: it avoids worktree overhead for small tasks
+but still records the durable completion. Use task plans, worker handoff,
+findings, and integration gates for long-lived or parallel product development.
 
 After successful direct completion, use `inspect_work_queue` for the normal
 next item. `reconcile_project` is optional audit/recovery for direct work:
@@ -205,15 +206,30 @@ Claude, select tools with `select:mcp__platypus__<tool>`, for example
 comes from the MCP server name and is not part of the Platypus tool name.
 
 The direct-work quick path is: load Startup Inspection, call
-`inspect_session`, load Direct Execution, call `prepare_work`, edit the manager
-workspace, then call `complete_backlog_item`.
+`inspect_session`, load Direct Execution, inspect for `direct_ready`, edit the
+manager workspace, then call `complete_backlog_item`. Call `prepare_work`
+first only when response-local guidance is useful.
 
 Alias and deprecation expectations: use `create_backlog_items` for atomic
 batches, `quick_create_backlog_item` only for simple single-item shorthand,
 `contract` only as an alias for `implementation_contract`, and
-`prepare_work` for normal direct or worker handoff preparation. Do not search
-for removed planning helpers such as `draft_task_plan`, and do not include
-worker-profile fields in backlog items.
+`prepare_work` for optional direct guidance or worker handoff preparation. Do
+not include worker-profile fields in backlog items.
+
+## Tool Naming Map
+
+Prefer these host-facing tool names. Compatibility aliases remain callable, but
+guidance should use the preferred name unless it is explicitly documenting an
+alias.
+
+- `inspect_status`; alias `project_status`.
+- `inspect_worktree_changes`; low-level alias `worktree_diff`.
+- `prepare_work`; low-level handoff tools `prepare_worker_handoff` and
+  `prepare_worker_assignment`.
+- `start_worker_task`; alias `start_worker_execution`.
+- `record_worker_progress`; alias `record_worker_event`.
+- `finish_work`; low-level `complete_worker_task` and alias
+  `complete_worker_execution`.
 
 ## Startup Inspection Group
 
@@ -462,9 +478,11 @@ When the host is unsure what happened, prefer inspection before mutation.
 - `approval_list` and `approval_respond` handle durable approvals.
 - `list_findings`, `validate_findings`, and `update_finding_disposition` show
   open follow-up obligations and explicit dispositions.
-- `inspect_integration_gates` is read-only and explains lifecycle, worktree,
-  manager workspace, verification, finding, branch, and merge gates before
-  `integrate_worker_result`.
+- `inspect_integration_gates` is read-only and applies only to completed
+  worker task/worktree integration. It explains lifecycle, worktree, manager
+  workspace, verification, finding, branch, and merge gates before
+  `integrate_worker_result`. Direct manager-workspace work completes with
+  `complete_backlog_item` instead.
 - `reconcile_project` is read-only and reports stale lifecycles for closed
   items, orphaned task evidence, evidence on incomplete tasks, missing
   verification evidence, missing integration evidence, missing

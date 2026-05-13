@@ -36,12 +36,19 @@ comes from the configured MCP server name; the actual Platypus tool names stay
 unprefixed in docs and tool results.
 
 Direct quick path: load Startup Inspection, call `inspect_session`, load Direct
-Execution, call `prepare_work`, edit the manager workspace, then call
-`complete_backlog_item`.
+Execution, inspect for `direct_ready`, edit the manager workspace, then call
+`complete_backlog_item`. Call `prepare_work` first only when response-local
+guidance is useful.
 
 Alias expectations: `contract` is only an alias for
 `implementation_contract`; `quick_create_backlog_item` is simple shorthand for
-one item; removed helpers such as `draft_task_plan` should not be searched for.
+one item.
+
+Tool naming map: prefer `inspect_status` over alias `project_status`,
+`inspect_worktree_changes` over low-level `worktree_diff`, `start_worker_task`
+over alias `start_worker_execution`, `record_worker_progress` over alias
+`record_worker_event`, and `finish_work` over low-level
+`complete_worker_task`/alias `complete_worker_execution`.
 
 ## Working Rules
 

@@ -80,8 +80,15 @@ from the configured server name. Codex and opencode may expose the same schemas
 through their own MCP discovery surfaces.
 
 Direct quick path: load Startup Inspection, call `inspect_session`, load Direct
-Execution, call `prepare_work`, edit the manager workspace, then call
-`complete_backlog_item`.
+Execution, inspect for `direct_ready`, edit the manager workspace, then call
+`complete_backlog_item`. Call `prepare_work` first only when response-local
+guidance is useful.
+
+Tool naming map: prefer `inspect_status` over alias `project_status`,
+`inspect_worktree_changes` over low-level `worktree_diff`, `start_worker_task`
+over alias `start_worker_execution`, `record_worker_progress` over alias
+`record_worker_event`, and `finish_work` over low-level
+`complete_worker_task`/alias `complete_worker_execution`.
 
 After guidance is loaded, call `inspect_session`. If that broad snapshot is
 unavailable, fall back to `doctor_snapshot`, `inspect_status`,

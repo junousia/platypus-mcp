@@ -1229,7 +1229,10 @@ pub struct WorktreeDiffParams {
 pub struct InspectIntegrationGatesParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
-    /// Task identifier whose integration readiness should be inspected.
+    /// Worker task lifecycle identifier whose integration readiness should be inspected.
+    ///
+    /// This is not a backlog item id. Direct manager-workspace items do not
+    /// have integration gates; complete them with complete_backlog_item.
     #[schemars(example = example_task_id())]
     pub task_id: String,
 }
@@ -2123,6 +2126,11 @@ pub struct WorkQueueItem {
     /// Whether a task plan is required before this item can use a worktree
     /// worker handoff path.
     pub task_plan_required_for_worktree: bool,
+    /// Whether the host may skip prepare_work and complete the direct edit
+    /// through complete_backlog_item after editing and verification.
+    ///
+    /// This is true only for direct_edit items with planning_gate=none.
+    pub prepare_work_optional: bool,
     /// Human-readable explanation of why direct or planned work applies.
     pub execution_guidance: String,
     /// Active or pending lifecycle task id for this backlog item, when one
@@ -3328,13 +3336,13 @@ pub struct IntegrationGate {
 pub struct IntegrationGateData {
     /// Project root that bounds all file, Git, and state operations.
     pub root: String,
-    /// Task identifier.
+    /// Worker task lifecycle identifier inspected before integrate_worker_result.
     pub task_id: String,
     /// Source backlog item identifier, if the task exists.
     pub source_item_id: Option<String>,
     /// Whether all blocking integration gates are ready.
     pub ok: bool,
-    /// Integration gates enforced or reported by integrate_worker_result.
+    /// Integration gates enforced or reported before integrate_worker_result.
     pub gates: Vec<IntegrationGate>,
     /// Suggested next action.
     pub next_action: String,

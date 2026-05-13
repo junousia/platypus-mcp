@@ -103,7 +103,7 @@ stateDiagram-v2
 | Approval blocked | `queue_state == "approval_blocked"` | `request_planning_approval`, then `approval_respond` |
 | Config blocked | `queue_state == "config_blocked"` | `doctor_snapshot` and the reported recovery action |
 | Workspace blocked | `queue_state == "workspace_blocked"` | Commit, stash, or finish the manager-workspace change before worker dispatch |
-| Direct ready | `queue_state == "direct_ready"` | `prepare_work`, edit manager workspace, `complete_backlog_item` |
+| Direct ready | `queue_state == "direct_ready"` | optional `prepare_work`, edit manager workspace, `complete_backlog_item` |
 | Worker ready | `queue_state == "ready"` | `prepare_work` for one item or `dispatch_ready_work` for batch handoff |
 | Active work | `queue_state == "active"` or existing task id | `inspect_task`, `inspect_task_events`, `finish_work`, or recovery action |
 | Pending integration | `queue_state == "completed_pending_integration"` | `inspect_integration_gates`, then `integrate_worker_result` |
@@ -115,7 +115,7 @@ Queue tools emit exactly these queue states:
 
 | Queue state | Meaning | Follow-up |
 | --- | --- | --- |
-| `direct_ready` | direct manager-workspace work is executable | `prepare_work`, edit, `complete_backlog_item` |
+| `direct_ready` | direct manager-workspace work is executable | optional `prepare_work`, edit, `complete_backlog_item` |
 | `ready` | worker handoff can be prepared | `prepare_work` or `dispatch_ready_work` |
 | `planning_blocked` | a required task plan is missing or invalid | `write_task_plan`, then `validate_task_plan` |
 | `approval_blocked` | planning approval is required before execution | `request_planning_approval`, then `approval_respond` |
@@ -216,11 +216,13 @@ pending manager-workspace changes.
 
 Minimum viable direct-edit loop for tiny, user-approved work:
 `inspect_session`, `inspect_queue_status` or `inspect_work_queue`,
-`prepare_work`, edit the manager workspace, run relevant verification, then
-`complete_backlog_item`. This is a traceability tradeoff: it avoids worktree
-overhead for small tasks while still recording the durable completion. Use task
-plans, worker handoff, findings, and integration gates for long-lived,
-parallel, or review-sensitive product development.
+edit the manager workspace, run relevant verification, then
+`complete_backlog_item`. When `inspect_work_queue.items[].prepare_work_optional`
+is true, `prepare_work` is optional and only returns response-local guidance.
+This is a traceability tradeoff: it avoids worktree overhead for small tasks
+while still recording the durable completion. Use task plans, worker handoff,
+findings, and integration gates for long-lived, parallel, or review-sensitive
+product development.
 
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime
@@ -333,11 +335,15 @@ created without an approved planning gate.
 5. Execution is host-managed. `manual_handoff` prepares the task, assignment,
    worktree, and bundle for the MCP host or a human-managed worker. `auto`
    resolves to the same host-managed handoff path.
-6. For normal execution, call `prepare_work`; it either returns `direct_edit`
-   guidance or prepares an assignment, worktree, and bundle for host-run worker
-   execution. Direct work creates no task, assignment, worktree, or durable
-   prepared marker; `complete_backlog_item` is exposed as
-   `durable_next_tool` and is the next persisted transition.
+6. For normal execution, call `prepare_work` when response-local direct
+   guidance or worker handoff preparation is useful; it either returns
+   `direct_edit` guidance or prepares an assignment, worktree, and bundle for
+   host-run worker execution. Direct work creates no task, assignment,
+   worktree, or durable prepared marker; `complete_backlog_item` is exposed as
+   `durable_next_tool` and is the next persisted transition. For
+   `direct_ready` items with `prepare_work_optional=true`, the host may edit
+   the manager workspace and finish with `complete_backlog_item` without this
+   call.
 7. For lower-level batch dispatch, call `dispatch_ready_work`; it only accepts
    items whose effective policy is `execution_path=worker_handoff` and whose
    planning gates are satisfied. It dispatches one or more runnable worker
@@ -384,10 +390,12 @@ For direct manager-workspace edits returned by `prepare_work`, do not call
 `finish_work`; no direct task or assignment exists. Call `complete_backlog_item`
 with item id, summary, changed files, verification status, and any evidence or
 finding references.
-Use `inspect_integration_gates` before integration when the host needs a
-read-only explanation of remaining blockers. Required findings block only while
-they are open; `accepted`, `deferred`, `resolved`, `rejected`, and `duplicate`
-are explicit dispositions that clear the integration gate.
+Use `inspect_integration_gates` only for completed worker task/worktree
+integration when the host needs a read-only explanation of remaining blockers.
+Direct manager-workspace backlog items do not use integration gates; complete
+them with `complete_backlog_item`. Required findings block only while they are
+open; `accepted`, `deferred`, `resolved`, `rejected`, and `duplicate` are
+explicit dispositions that clear the integration gate.
 
 When a verification command is configured in the assignment bundle, run
 `run_task_verification` after completion to execute it in the task worktree and
