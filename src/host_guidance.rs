@@ -67,7 +67,10 @@ straight to broad edits. Convert the goal into a controlled loop:
 4. For tracked control, create a small concrete backlog set with
    `create_backlog_item` or `create_backlog_items`. Keep items independently
    reviewable and executable.
-5. Run `validate_backlog` after backlog writes.
+5. Run `validate_backlog` after backlog writes. Its next action follows
+   explicit execution policy: direct work continues through `prepare_work` and
+   `complete_backlog_item`; worker handoff keeps planning-commit guidance when
+   needed for worktree dispatch.
 6. Use `inspect_queue_status` for compact queue counts and top ready/blocked
    work. Use `inspect_work_queue` when full readiness, task-plan state, active
    work, setup blockers, and next-tool parameters are needed.

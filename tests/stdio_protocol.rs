@@ -413,6 +413,108 @@ async fn tool_cli_invokes_mutating_mcp_tool_and_exits_nonzero_on_failed_result(
 }
 
 #[tokio::test]
+async fn stdio_server_returns_contextual_validation_next_actions() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+    call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "Validation Next Actions" }),
+    )
+    .await?;
+
+    call_tool_json(
+        &client,
+        "create_backlog_item",
+        json!({
+            "id": "PROJ-001",
+            "title": "Direct item",
+            "goal": "Exercise direct validation guidance.",
+            "implementation_contract": "Keep direct work in the manager workspace.",
+            "acceptance": ["Direct guidance is clear."]
+        }),
+    )
+    .await?;
+    let direct = call_tool_json(&client, "validate_backlog", json!({})).await?;
+    assert_stage_status("validate_backlog direct", &direct, "completed");
+    let direct_next = direct["next_action"].as_str().expect("direct next");
+    assert!(direct_next.contains("prepare_work"));
+    assert!(direct_next.contains("complete_backlog_item"));
+    assert!(!direct_next.contains("Commit backlog artifacts before dispatching"));
+
+    call_tool_json(
+        &client,
+        "create_backlog_item",
+        json!({
+            "id": "PROJ-002",
+            "title": "Worker item",
+            "goal": "Exercise worker validation guidance.",
+            "implementation_contract": "Keep worker work in a handoff worktree.",
+            "acceptance": ["Worker guidance is clear."],
+            "execution_path": "worker_handoff",
+            "planning_gate": "task_plan"
+        }),
+    )
+    .await?;
+    let blocked_worker = call_tool_json(&client, "validate_backlog", json!({})).await?;
+    assert_stage_status(
+        "validate_backlog blocked worker",
+        &blocked_worker,
+        "completed",
+    );
+    let blocked_worker_next = blocked_worker["next_action"]
+        .as_str()
+        .expect("blocked worker next");
+    assert!(blocked_worker_next.contains("need valid task plans"));
+    assert!(blocked_worker_next.contains("Direct-ready"));
+    assert!(!blocked_worker_next.contains("commit_planning_artifacts"));
+
+    call_tool_json(
+        &client,
+        "write_task_plan",
+        json!({
+            "item_id": "PROJ-002",
+            "plan": {
+                "item_id": "PROJ-002",
+                "version": 1,
+                "mode": "standard",
+                "requirements": [
+                    { "id": "R1", "text": "Deliver the worker backlog item." }
+                ],
+                "design": {
+                    "summary": "Implement a focused worker fixture slice.",
+                    "owned_surfaces": ["src/lib.rs"],
+                    "notes": null
+                },
+                "tasks": [
+                    {
+                        "id": "PROJ-002-T001",
+                        "title": "Implement worker fixture",
+                        "goal": "Complete the worker fixture behavior.",
+                        "requirement_refs": ["R1"],
+                        "depends_on": [],
+                        "owned_surfaces": ["src/lib.rs"],
+                        "verification": ["make check"],
+                        "acceptance": ["Worker backlog item acceptance is satisfied."],
+                        "notes": null
+                    }
+                ]
+            }
+        }),
+    )
+    .await?;
+    let mixed = call_tool_json(&client, "validate_backlog", json!({})).await?;
+    assert_stage_status("validate_backlog mixed", &mixed, "completed");
+    let mixed_next = mixed["next_action"].as_str().expect("mixed next");
+    assert!(mixed_next.contains("Direct-ready"));
+    assert!(mixed_next.contains("Worker-handoff"));
+    assert!(mixed_next.contains("commit_planning_artifacts"));
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Result<()> {
     let client = start_client(None).await?;
 

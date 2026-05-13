@@ -1,6 +1,6 @@
 use super::{
     filesystem::resolve_root,
-    validate::{valid_item_id, validate_backlog_at_root},
+    validate::{valid_item_id, validate_backlog_at_root, validation_next_action},
 };
 use crate::models::{
     ActionResult, ActionStatus, TaskPlanData, TaskPlanFile, TaskPlanItemParams, TaskPlanListData,
@@ -106,7 +106,8 @@ pub fn validate_task_plan(
         Err(error) => return ActionResult::failed(action, "Could not validate task plan.", error),
     };
     let include_errors = params.include_errors.unwrap_or(true);
-    let errors = validate_plans_at_root(&root, params.item_id.as_deref());
+    let item_filter = params.item_id.as_deref().map(normalize_item_id);
+    let errors = validate_plans_at_root(&root, item_filter.as_deref());
     let paths = plan_paths(&root).unwrap_or_default();
     let mut task_count = 0;
     for path in &paths {
@@ -126,14 +127,18 @@ pub fn validate_task_plan(
         },
     };
     if data.ok {
+        let backlog = validate_backlog_at_root(&root, true);
+        let next_action = if backlog.ok {
+            validation_next_action(&root, &backlog.items, item_filter.as_deref(), "Task plans")
+        } else {
+            "Task plans validate, but backlog must validate before work can be prepared."
+                .to_string()
+        };
         ActionResult {
             action: action.to_string(),
             status: ActionStatus::Completed,
             summary: format!("Task plans valid: {} plan(s).", data.plan_count),
-            next_action: Some(
-                "Commit task-plan artifacts before dispatching work if this validation followed writes."
-                    .to_string(),
-            ),
+            next_action: Some(next_action),
             recovery_action: None,
             data: Some(data),
             error: None,
@@ -250,14 +255,17 @@ pub fn write_task_plan(
         task_count: plan.tasks.len(),
         errors: Vec::new(),
     };
+    let backlog = validate_backlog_at_root(&root, true);
+    let next_action = if backlog.ok {
+        validation_next_action(&root, &backlog.items, Some(&item_id), "Task plan")
+    } else {
+        "Task plan validates, but backlog must validate before work can be prepared.".to_string()
+    };
     ActionResult {
         action: action.to_string(),
         status: ActionStatus::Completed,
         summary: format!("Wrote and validated task plan for {item_id}."),
-        next_action: Some(
-            "Task plan was validated before write. Commit backlog/plans/<ITEM>.yaml, then dispatch ready work."
-                .to_string(),
-        ),
+        next_action: Some(next_action),
         recovery_action: None,
         data: Some(TaskPlanWriteData {
             root: root.display().to_string(),
@@ -321,6 +329,10 @@ fn validate_plans_at_root(root: &Path, item_id: Option<&str>) -> Vec<String> {
         }
     }
     errors
+}
+
+pub(super) fn task_plan_ready_at_root(root: &Path, item_id: &str) -> bool {
+    validate_plans_at_root(root, Some(item_id)).is_empty()
 }
 
 fn validate_plan_with_backlog(root: &Path, plan: &TaskPlanFile) -> Vec<String> {

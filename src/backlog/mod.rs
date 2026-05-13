@@ -109,9 +109,10 @@ pub(crate) fn backlog_item_snapshot(
 mod tests {
     use super::*;
     use crate::models::{
-        ActionStatus, CreateBacklogItemParams, CreateBacklogItemsEntry, CreateBacklogItemsParams,
-        CreateEpicParams, PlannedTask, RootParams, TaskPlanDesign, TaskPlanFile,
-        TaskPlanQueryParams, TaskPlanRequirement, UpdateBacklogItemParams, WriteTaskPlanParams,
+        ActionStatus, ApprovalRespondParams, CreateBacklogItemParams, CreateBacklogItemsEntry,
+        CreateBacklogItemsParams, CreateEpicParams, PlannedTask, RequestPlanningApprovalParams,
+        RootParams, TaskPlanDesign, TaskPlanFile, TaskPlanQueryParams, TaskPlanRequirement,
+        UpdateBacklogItemParams, WriteTaskPlanParams,
     };
     use std::{fs, path::Path, process::Command};
     use tempfile::TempDir;
@@ -186,6 +187,128 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .contains("external_refs require url or locator"));
+    }
+
+    #[test]
+    fn validate_backlog_next_action_matches_direct_worker_and_mixed_queues() {
+        let direct = project_fixture();
+        write_item(direct.path(), "PROJ-001", "Direct work", "P1", &[]);
+        let direct_validation =
+            validate_backlog(direct.path(), Some(root_arg(direct.path()).as_str()), true);
+        let direct_next = direct_validation.next_action.as_deref().unwrap_or("");
+        assert!(matches!(direct_validation.status, ActionStatus::Completed));
+        assert!(direct_next.contains("prepare_work"));
+        assert!(direct_next.contains("complete_backlog_item"));
+        assert!(!direct_next.contains("Commit backlog artifacts before dispatching"));
+
+        let worker = project_fixture();
+        write_item(worker.path(), "PROJ-001", "Worker work", "P1", &[]);
+        set_item_policy(worker.path(), "PROJ-001", "worker_handoff", "task_plan");
+        let worker_blocked =
+            validate_backlog(worker.path(), Some(root_arg(worker.path()).as_str()), true);
+        let worker_blocked_next = worker_blocked.next_action.as_deref().unwrap_or("");
+        assert!(matches!(worker_blocked.status, ActionStatus::Completed));
+        assert!(worker_blocked_next.contains("need valid task plans"));
+        assert!(worker_blocked_next.contains("write_task_plan"));
+        assert!(!worker_blocked_next.contains("commit_planning_artifacts"));
+        let written = write_task_plan(
+            worker.path(),
+            WriteTaskPlanParams {
+                root: Some(root_arg(worker.path())),
+                item_id: "PROJ-001".to_string(),
+                plan: valid_task_plan("PROJ-001"),
+                overwrite: None,
+            },
+        );
+        assert!(matches!(written.status, ActionStatus::Completed));
+        let worker_validation =
+            validate_backlog(worker.path(), Some(root_arg(worker.path()).as_str()), true);
+        let worker_next = worker_validation.next_action.as_deref().unwrap_or("");
+        assert!(matches!(worker_validation.status, ActionStatus::Completed));
+        assert!(worker_next.contains("commit_planning_artifacts"));
+        assert!(worker_next.contains("worker worktrees"));
+
+        let mixed = project_fixture();
+        write_item(mixed.path(), "PROJ-001", "Direct work", "P1", &[]);
+        write_item(mixed.path(), "PROJ-002", "Worker work", "P1", &[]);
+        set_item_policy(mixed.path(), "PROJ-002", "worker_handoff", "task_plan");
+        let written = write_task_plan(
+            mixed.path(),
+            WriteTaskPlanParams {
+                root: Some(root_arg(mixed.path())),
+                item_id: "PROJ-002".to_string(),
+                plan: valid_task_plan("PROJ-002"),
+                overwrite: None,
+            },
+        );
+        assert!(matches!(written.status, ActionStatus::Completed));
+        let mixed_validation =
+            validate_backlog(mixed.path(), Some(root_arg(mixed.path()).as_str()), true);
+        let mixed_next = mixed_validation.next_action.as_deref().unwrap_or("");
+        assert!(matches!(mixed_validation.status, ActionStatus::Completed));
+        assert!(mixed_next.contains("Direct-ready"));
+        assert!(mixed_next.contains("Worker-handoff"));
+        assert!(mixed_next.contains("commit_planning_artifacts"));
+    }
+
+    #[test]
+    fn validate_backlog_next_action_respects_planning_approval_gate() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Approved worker work", "P1", &[]);
+        set_item_policy(
+            temp.path(),
+            "PROJ-001",
+            "worker_handoff",
+            "approved_task_plan",
+        );
+        let written = write_task_plan(
+            temp.path(),
+            WriteTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                plan: valid_task_plan("PROJ-001"),
+                overwrite: None,
+            },
+        );
+        assert!(matches!(written.status, ActionStatus::Completed));
+
+        let approval_needed =
+            validate_backlog(temp.path(), Some(root_arg(temp.path()).as_str()), true);
+        let approval_needed_next = approval_needed.next_action.as_deref().unwrap_or("");
+        assert!(matches!(approval_needed.status, ActionStatus::Completed));
+        assert!(approval_needed_next.contains("need planning approval"));
+        assert!(approval_needed_next.contains("request_planning_approval"));
+        assert!(!approval_needed_next.contains("commit_planning_artifacts"));
+
+        let requested = crate::approvals::request_planning_approval(
+            temp.path(),
+            RequestPlanningApprovalParams {
+                root: Some(root_arg(temp.path())),
+                item_ids: vec!["PROJ-001".to_string()],
+                requested_by: Some("manager".to_string()),
+                summary: Some("Review the task plan before dispatch.".to_string()),
+            },
+        );
+        assert!(matches!(requested.status, ActionStatus::Completed));
+        let approval = requested.data.expect("approval").approval;
+
+        let approved = crate::approvals::approval_respond(
+            temp.path(),
+            ApprovalRespondParams {
+                root: Some(root_arg(temp.path())),
+                approval_id: approval.id,
+                decision: "approve".to_string(),
+                responder: Some("user".to_string()),
+                reason: Some("Reviewed.".to_string()),
+            },
+        );
+        assert!(matches!(approved.status, ActionStatus::Completed));
+
+        let ready = validate_backlog(temp.path(), Some(root_arg(temp.path()).as_str()), true);
+        let ready_next = ready.next_action.as_deref().unwrap_or("");
+        assert!(matches!(ready.status, ActionStatus::Completed));
+        assert!(ready_next.contains("commit_planning_artifacts"));
+        assert!(ready_next.contains("worker worktrees"));
     }
 
     #[test]
@@ -1246,6 +1369,64 @@ mod tests {
         );
         assert!(matches!(validation.status, ActionStatus::Completed));
         assert!(validation.data.unwrap().ok);
+        let next_action = validation.next_action.as_deref().unwrap_or("");
+        assert!(next_action.contains("prepare_work"));
+        assert!(next_action.contains("complete_backlog_item"));
+        assert!(!next_action.contains("Commit task-plan artifacts before dispatching"));
+    }
+
+    #[test]
+    fn write_task_plan_next_action_protects_worker_handoff_artifacts() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Worker planning", "P1", &[]);
+        set_item_policy(temp.path(), "PROJ-001", "worker_handoff", "task_plan");
+
+        let written = write_task_plan(
+            temp.path(),
+            WriteTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                plan: valid_task_plan("PROJ-001"),
+                overwrite: None,
+            },
+        );
+        assert!(matches!(written.status, ActionStatus::Completed));
+        let next_action = written.next_action.as_deref().unwrap_or("");
+        assert!(next_action.contains("commit_planning_artifacts"));
+        assert!(next_action.contains("worker worktrees"));
+    }
+
+    #[test]
+    fn validate_task_plan_normalizes_item_filter_for_next_action() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Worker planning", "P1", &[]);
+        set_item_policy(temp.path(), "PROJ-001", "worker_handoff", "task_plan");
+
+        let written = write_task_plan(
+            temp.path(),
+            WriteTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                plan: valid_task_plan("PROJ-001"),
+                overwrite: None,
+            },
+        );
+        assert!(matches!(written.status, ActionStatus::Completed));
+
+        let validation = validate_task_plan(
+            temp.path(),
+            TaskPlanQueryParams {
+                root: Some(root_arg(temp.path())),
+                item_id: Some("proj-001".to_string()),
+                include_errors: Some(true),
+            },
+        );
+
+        let next_action = validation.next_action.as_deref().unwrap_or("");
+        assert!(matches!(validation.status, ActionStatus::Completed));
+        assert!(next_action.contains("commit_planning_artifacts"));
+        assert!(next_action.contains("worker worktrees"));
+        assert!(!next_action.contains("Inspect the queue"));
     }
 
     #[test]
@@ -1877,6 +2058,19 @@ tasks:
             "---\nid: {id}\ntitle: {title}\npriority: {priority}\ntype: feature\narea: tooling\nepic: general\ndepends_on: {depends}\nowned_surfaces: []\n---\n\n# {id} {title}\n\n## Goal\n\nGoal.\n\n## Implementation Contract\n\nContract.\n\n## Acceptance\n\n- Done.\n"
         );
         fs::write(root.join(format!("backlog/items/{id}.md")), text).expect("item");
+    }
+
+    fn set_item_policy(root: &Path, id: &str, execution_path: &str, planning_gate: &str) {
+        let path = root.join(format!("backlog/items/{id}.md"));
+        let text = fs::read_to_string(&path).expect("item");
+        let text = text.replacen(
+            "owned_surfaces: []",
+            &format!(
+                "owned_surfaces: []\nexecution_path: {execution_path}\nplanning_gate: {planning_gate}"
+            ),
+            1,
+        );
+        fs::write(path, text).expect("item");
     }
 
     fn batch_entry(
