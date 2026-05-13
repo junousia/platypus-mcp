@@ -6,7 +6,10 @@ use crate::models::{
     ActionResult, ActionStatus, BacklogCandidate, BacklogInventoryData, BacklogInventoryItem,
     BacklogListData, ProjectStatusData,
 };
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 pub fn inspect_status(
     default_root: &Path,
@@ -104,7 +107,7 @@ pub fn inspect_backlog_inventory(
         );
     }
     let closed_ids = closed_item_ids(&root);
-    let mut items = backlog_inventory_items(&validation.items, &closed_ids);
+    let mut items = backlog_inventory_items(&root, &validation.items, &closed_ids);
     let total = items.len();
     let runnable = items.iter().filter(|item| item.runnable).count();
     let closed = items.iter().filter(|item| item.closed).count();
@@ -175,13 +178,16 @@ fn runnable_backlog_candidates(
 }
 
 fn backlog_inventory_items(
+    root: &Path,
     items: &[ParsedBacklogItem],
     closed_ids: &BTreeSet<String>,
 ) -> Vec<BacklogInventoryItem> {
+    let evidence_counts = evidence_counts_by_item(root, items);
     let mut inventory: Vec<_> = items
         .iter()
         .map(|item| {
             let id = &item.frontmatter.id;
+            let evidence_count = evidence_counts.get(id).copied().unwrap_or(0);
             let closed = closed_ids.contains(id);
             let open_dependencies = item
                 .frontmatter
@@ -214,6 +220,8 @@ fn backlog_inventory_items(
                 open_dependencies,
                 closed,
                 runnable,
+                has_evidence: evidence_count > 0,
+                evidence_count,
                 reason,
             }
         })
@@ -226,6 +234,25 @@ fn backlog_inventory_items(
         )
     });
     inventory
+}
+
+fn evidence_counts_by_item(root: &Path, items: &[ParsedBacklogItem]) -> BTreeMap<String, usize> {
+    let Ok(Some(storage)) = crate::storage::connect_existing_read_only(root, None) else {
+        return BTreeMap::new();
+    };
+    let repository = storage.repository();
+    let Ok(all_counts) = repository.count_evidence_by_item() else {
+        return BTreeMap::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            all_counts
+                .get(item.frontmatter.id.as_str())
+                .copied()
+                .map(|count| (item.frontmatter.id.clone(), count))
+        })
+        .collect()
 }
 
 fn inventory_state_rank(item: &BacklogInventoryItem) -> u8 {

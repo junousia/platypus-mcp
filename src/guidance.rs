@@ -297,17 +297,44 @@ pub fn inspect_work_queue(
         recommended_tool = blocked_tool;
         reason = blocked_reason;
         params = map_params([("root", root.as_str())]);
-    } else if items.is_empty() && active_filtered > 0 {
+    } else if items.is_empty() && inventory.pending_integration_count > 0 {
+        recommended_tool = "inspect_integration_gates".to_string();
+        let task_id = inventory
+            .pending_integration_task_ids
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        reason = format!(
+            "{} task(s) have completed worker output awaiting integration. Inspect integration gates before creating more backlog work.",
+            inventory.pending_integration_count
+        );
+        params = map_params([("root", root.as_str())]);
+        if !task_id.is_empty() {
+            params.insert("task_id".to_string(), Value::String(task_id));
+        }
+    } else if items.is_empty() && (active_filtered > 0 || inventory.active_lifecycle_count > 0) {
         recommended_tool = active_task_ids
             .first()
+            .or_else(|| {
+                dispatch_blockers
+                    .values()
+                    .find(|blocker| blocker.queue_state == "active")
+                    .map(|blocker| &blocker.task_id)
+            })
             .map(|_| "inspect_task")
             .unwrap_or("inspect_work_queue")
             .to_string();
         reason = format!(
-            "{active_filtered} backlog item(s) already have active tasks or completed tasks awaiting integration. Use inspect_task to continue active work instead of creating new backlog items."
+            "{} backlog item(s) already have active tasks. Use inspect_task to continue active work instead of creating new backlog items.",
+            active_filtered.max(inventory.active_lifecycle_count)
         );
         params = map_params([("root", root.as_str())]);
-        if let Some(task_id) = active_task_ids.first() {
+        if let Some(task_id) = active_task_ids.first().or_else(|| {
+            dispatch_blockers
+                .values()
+                .find(|blocker| blocker.queue_state == "active")
+                .map(|blocker| &blocker.task_id)
+        }) {
             params.insert("task_id".to_string(), Value::String(task_id.clone()));
         }
     } else if items.is_empty() && inventory.dependency_blocked_count > 0 {
@@ -375,11 +402,17 @@ pub fn inspect_work_queue(
             blocked_label
         )
     };
-    let status = if items.is_empty() && active_filtered == 0 && inventory.total_count == 0 {
+    let status = if items.is_empty()
+        && active_filtered == 0
+        && inventory.total_count == 0
+        && inventory.active_lifecycle_count == 0
+        && inventory.pending_integration_count == 0
+    {
         ActionStatus::Skipped
     } else {
         ActionStatus::Completed
     };
+    let queue_state = overall_queue_state(&items, &inventory, active_filtered);
     ActionResult {
         action: action.to_string(),
         status,
@@ -388,6 +421,7 @@ pub fn inspect_work_queue(
         recovery_action: None,
         data: Some(WorkQueueData {
             root,
+            queue_state,
             require_task_plan,
             ready_count,
             blocked_count,
@@ -487,6 +521,8 @@ fn compact_queue_status(
         active_count: queue.inventory.active_lifecycle_count,
         pending_integration_count: queue.inventory.pending_integration_count,
         closed_count: queue.inventory.closed_count,
+        closed_with_evidence_count: queue.inventory.closed_with_evidence_count,
+        closed_without_evidence_count: queue.inventory.closed_without_evidence_count,
     };
     let top_ready_items = queue
         .items
@@ -529,6 +565,7 @@ fn compact_queue_status(
                 .count();
     QueueStatusData {
         root: queue.root.clone(),
+        queue_state: queue.queue_state.clone(),
         counts,
         top_ready_items,
         top_blocked_items,
@@ -588,6 +625,37 @@ fn queue_status_item_from_inventory_item(item: &BacklogInventoryItem) -> QueueSt
                 item.open_dependencies.join(", ")
             )
         },
+    }
+}
+
+fn overall_queue_state(
+    items: &[WorkQueueItem],
+    inventory: &WorkQueueInventorySummary,
+    active_filtered: usize,
+) -> String {
+    if let Some(first) = items.first() {
+        if first.ready_to_dispatch
+            && items
+                .iter()
+                .filter(|item| item.ready_to_dispatch)
+                .all(|item| item.queue_state == "direct_ready")
+        {
+            "direct_ready".to_string()
+        } else if first.ready_to_dispatch {
+            "ready".to_string()
+        } else {
+            first.queue_state.clone()
+        }
+    } else if inventory.pending_integration_count > 0 {
+        "completed_pending_integration".to_string()
+    } else if active_filtered > 0 || inventory.active_lifecycle_count > 0 {
+        "active".to_string()
+    } else if inventory.total_count == 0 {
+        "empty_backlog".to_string()
+    } else if inventory.dependency_blocked_count > 0 {
+        "dependency_blocked".to_string()
+    } else {
+        "closed".to_string()
     }
 }
 
@@ -671,6 +739,7 @@ fn task_summary_tool(blocker: &QueueDispatchBlocker) -> &'static str {
 
 fn queue_state_descriptions() -> Vec<QueueStateDescription> {
     [
+        "empty_backlog",
         "direct_ready",
         "ready",
         "planning_blocked",
@@ -680,6 +749,7 @@ fn queue_state_descriptions() -> Vec<QueueStateDescription> {
         "workspace_blocked",
         "active",
         "completed_pending_integration",
+        "closed",
     ]
     .into_iter()
     .map(|queue_state| QueueStateDescription {
@@ -691,6 +761,7 @@ fn queue_state_descriptions() -> Vec<QueueStateDescription> {
 
 fn queue_state_description(queue_state: &str) -> &'static str {
     match queue_state {
+        "empty_backlog" => "No backlog items exist yet.",
         "direct_ready" => "Ready for host-managed direct edits in the current workspace.",
         "ready" => "Ready for a worker handoff in an isolated worktree.",
         "planning_blocked" => "Requires a valid task plan before work can start.",
@@ -704,6 +775,7 @@ fn queue_state_description(queue_state: &str) -> &'static str {
             "An existing task lifecycle must continue before this item can be dispatched again."
         }
         "completed_pending_integration" => "Worker output is complete and awaiting integration.",
+        "closed" => "All known backlog items are closed.",
         _ => "Inspect the item before choosing the next execution step.",
     }
 }
@@ -993,6 +1065,8 @@ fn queue_inventory(
         .filter(|item| item.closed)
         .cloned()
         .collect::<Vec<_>>();
+    let closed_with_evidence_count = closed.iter().filter(|item| item.has_evidence).count();
+    let closed_without_evidence_count = closed.len().saturating_sub(closed_with_evidence_count);
     let active_lifecycle_item_ids = dispatch_blockers
         .iter()
         .filter(|(_, blocker)| blocker.queue_state == "active")
@@ -1009,6 +1083,8 @@ fn queue_inventory(
         runnable_count: inventory.runnable,
         dependency_blocked_count: dependency_blocked.len(),
         closed_count: inventory.closed,
+        closed_with_evidence_count,
+        closed_without_evidence_count,
         active_lifecycle_count: active_lifecycle_item_ids.len(),
         pending_integration_count: pending_integration_task_ids.len(),
         dependency_blocked_items: dependency_blocked.into_iter().take(limit).collect(),
@@ -1539,9 +1615,12 @@ fn map_params<const N: usize>(params: [(&str, &str); N]) -> BTreeMap<String, Val
 mod tests {
     use super::*;
     use crate::approvals::{approval_respond, request_planning_approval};
-    use crate::models::{ApprovalRespondParams, RequestPlanningApprovalParams};
+    use crate::evidence::record_evidence;
+    use crate::models::{
+        ApprovalRespondParams, RecordEvidenceParams, RequestPlanningApprovalParams,
+    };
     use crate::tasks::{create_task_record, NewTask};
-    use std::{fs, process::Command};
+    use std::{collections::BTreeMap, fs, process::Command};
     use tempfile::TempDir;
 
     #[test]
@@ -1564,6 +1643,44 @@ mod tests {
             !project.path().join(".platy").exists(),
             "read-only queue inspection must not create runtime state"
         );
+    }
+
+    #[test]
+    fn inspect_work_queue_reports_explicit_empty_backlog_state() {
+        let project = backlog_project();
+        init_git(project.path());
+
+        let queue = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: None,
+                require_planning_approval: None,
+            },
+        );
+        let queue_data = queue.data.expect("queue data");
+
+        assert_eq!(queue.status, ActionStatus::Skipped);
+        assert_eq!(queue_data.queue_state, "empty_backlog");
+        assert_eq!(queue_data.inventory.total_count, 0);
+        assert_eq!(queue_data.recommended_tool, "create_backlog_items");
+
+        let status = inspect_queue_status(
+            project.path(),
+            InspectQueueStatusParams {
+                root: None,
+                limit: Some(5),
+            },
+        );
+        let status_data = status.data.expect("status data");
+
+        assert_eq!(status.status, ActionStatus::Skipped);
+        assert_eq!(status_data.queue_state, "empty_backlog");
+        assert!(status_data
+            .state_descriptions
+            .iter()
+            .any(|state| state.queue_state == "empty_backlog"));
     }
 
     #[test]
@@ -1614,6 +1731,7 @@ mod tests {
 
         assert_eq!(result.status, ActionStatus::Completed);
         assert_eq!(data.recommended_tool, "prepare_work");
+        assert_eq!(data.queue_state, "direct_ready");
         assert!(data.items[0].ready_to_dispatch);
         assert_eq!(data.items[0].queue_state, "direct_ready");
     }
@@ -1956,6 +2074,7 @@ tasks:
         let data = result.data.expect("queue");
 
         assert_eq!(data.recommended_tool, "write_task_plan");
+        assert_eq!(data.queue_state, "planning_blocked");
         assert_eq!(data.items[0].planning.required_mode, "task_plan");
         assert_eq!(
             data.items[0].planning.required_artifact.as_deref(),
@@ -2130,6 +2249,7 @@ tasks:
         assert_eq!(data.counts.ready_count, 2);
         assert_eq!(data.counts.dependency_blocked_count, 1);
         assert_eq!(data.counts.blocked_count, 1);
+        assert_eq!(data.queue_state, "direct_ready");
         assert_eq!(data.top_ready_items.len(), 2);
         assert_eq!(data.top_ready_items[0].item_id, "PROJ-001");
         assert_eq!(data.top_ready_items[0].queue_state, "direct_ready");
@@ -2141,6 +2261,70 @@ tasks:
             .iter()
             .any(|state| state.queue_state == "planning_blocked"));
         assert!(data.active_tasks.is_empty());
+    }
+
+    #[test]
+    fn queue_inventory_exposes_closed_item_evidence_counts_without_details() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "Closed with evidence");
+        git(project.path(), &["add", "backlog"]);
+        git(
+            project.path(),
+            &[
+                "commit",
+                "-m",
+                "Close PROJ-001",
+                "-m",
+                "Platypus-Closes: PROJ-001",
+            ],
+        );
+        let recorded = record_evidence(
+            project.path(),
+            RecordEvidenceParams {
+                root: None,
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: None,
+                kind: "note".to_string(),
+                summary: "Closure evidence exists.".to_string(),
+                refs: vec!["manual:test".to_string()],
+                metadata: BTreeMap::new(),
+            },
+        );
+        assert_eq!(recorded.status, ActionStatus::Completed);
+
+        let queue = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: None,
+                require_planning_approval: None,
+            },
+        );
+        let queue_data = queue.data.expect("queue data");
+        let closed = &queue_data.inventory.closed_items[0];
+
+        assert_eq!(queue_data.inventory.closed_count, 1);
+        assert_eq!(queue_data.inventory.closed_with_evidence_count, 1);
+        assert_eq!(queue_data.inventory.closed_without_evidence_count, 0);
+        assert_eq!(closed.item_id, "PROJ-001");
+        assert_eq!(closed.has_evidence, true);
+        assert_eq!(closed.evidence_count, 1);
+
+        let status = inspect_queue_status(
+            project.path(),
+            InspectQueueStatusParams {
+                root: None,
+                limit: Some(5),
+            },
+        );
+        let status_data = status.data.expect("status data");
+
+        assert_eq!(status_data.counts.closed_count, 1);
+        assert_eq!(status_data.counts.closed_with_evidence_count, 1);
+        assert_eq!(status_data.counts.closed_without_evidence_count, 0);
     }
 
     #[test]
@@ -2272,6 +2456,8 @@ tasks:
         let data = result.data.expect("queue status");
 
         assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.queue_state, "completed_pending_integration");
+        assert_eq!(data.recommended_tool, "inspect_integration_gates");
         assert_eq!(data.counts.active_count, 0);
         assert_eq!(data.counts.pending_integration_count, 1);
         assert_eq!(data.active_tasks.len(), 1);
@@ -2284,6 +2470,139 @@ tasks:
             data.active_tasks[0].recommended_tool,
             "inspect_integration_gates"
         );
+    }
+
+    #[test]
+    fn inspect_queue_status_prioritizes_runtime_tasks_over_empty_backlog() {
+        let project = backlog_project();
+        init_git(project.path());
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Completed item without backlog file".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        crate::tasks::claim_next_task(
+            project.path(),
+            crate::models::ClaimNextTaskParams {
+                root: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("runner-1".to_string()),
+            },
+        );
+        crate::tasks::mark_task_running(project.path(), None, &task.id).expect("running");
+        crate::tasks::finish_task(project.path(), None, &task.id, "completed").expect("completed");
+
+        let result = inspect_queue_status(
+            project.path(),
+            InspectQueueStatusParams {
+                root: None,
+                limit: Some(5),
+            },
+        );
+        let data = result.data.expect("queue status");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.queue_state, "completed_pending_integration");
+        assert_eq!(data.recommended_tool, "inspect_integration_gates");
+        assert_eq!(data.active_tasks[0].task_id, task.id);
+    }
+
+    #[test]
+    fn inspect_queue_status_keeps_item_blocker_state_when_pending_integration_is_inventory_only() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "Needs a plan");
+        mark_worker_policy(project.path(), "PROJ-001", "task_plan");
+        git(project.path(), &["add", "backlog"]);
+        git(
+            project.path(),
+            &["commit", "-m", "Add planned backlog item"],
+        );
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-002".to_string(),
+                title: "Completed runtime-only item".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        crate::tasks::claim_next_task(
+            project.path(),
+            crate::models::ClaimNextTaskParams {
+                root: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("runner-1".to_string()),
+            },
+        );
+        crate::tasks::mark_task_running(project.path(), None, &task.id).expect("running");
+        crate::tasks::finish_task(project.path(), None, &task.id, "completed").expect("completed");
+
+        let result = inspect_queue_status(
+            project.path(),
+            InspectQueueStatusParams {
+                root: None,
+                limit: Some(5),
+            },
+        );
+        let data = result.data.expect("queue status");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.queue_state, "planning_blocked");
+        assert_eq!(data.recommended_tool, "write_task_plan");
+        assert_eq!(data.counts.pending_integration_count, 1);
+    }
+
+    #[test]
+    fn inspect_queue_status_follows_first_blocked_item_before_later_integration_item() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "Needs a plan");
+        mark_worker_policy(project.path(), "PROJ-001", "task_plan");
+        write_item(project.path(), "PROJ-002", "Awaiting integration");
+        git(project.path(), &["add", "backlog"]);
+        git(project.path(), &["commit", "-m", "Add mixed backlog items"]);
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-002".to_string(),
+                title: "Completed later item".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        crate::tasks::claim_next_task(
+            project.path(),
+            crate::models::ClaimNextTaskParams {
+                root: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("runner-1".to_string()),
+            },
+        );
+        crate::tasks::mark_task_running(project.path(), None, &task.id).expect("running");
+        crate::tasks::finish_task(project.path(), None, &task.id, "completed").expect("completed");
+
+        let result = inspect_queue_status(
+            project.path(),
+            InspectQueueStatusParams {
+                root: None,
+                limit: Some(5),
+            },
+        );
+        let data = result.data.expect("queue status");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.queue_state, "planning_blocked");
+        assert_eq!(data.recommended_tool, "write_task_plan");
+        assert_eq!(data.top_blocked_items[0].item_id, "PROJ-001");
+        assert_eq!(data.counts.pending_integration_count, 1);
     }
 
     #[test]
@@ -2358,6 +2677,7 @@ tasks:
         let data = result.data.expect("queue");
 
         assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.queue_state, "completed_pending_integration");
         assert_eq!(data.items.len(), 1);
         assert_eq!(data.items[0].queue_state, "completed_pending_integration");
         assert_eq!(data.items[0].recommended_tool, "integrate_worker_result");
