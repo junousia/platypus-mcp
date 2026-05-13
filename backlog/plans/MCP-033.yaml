@@ -28,7 +28,6 @@ tasks:
   owned_surfaces:
   - src/backlog
   - src/models.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -47,7 +46,6 @@ tasks:
   - src/backlog
   - src/models.rs
   - tests
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -65,7 +63,6 @@ tasks:
   owned_surfaces:
   - docs/tools.md
   - docs/workflow.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

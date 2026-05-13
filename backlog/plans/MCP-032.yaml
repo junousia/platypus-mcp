@@ -28,7 +28,6 @@ tasks:
   depends_on: []
   owned_surfaces:
   - docs/storage.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -45,7 +44,6 @@ tasks:
   - MCP-032-T01
   owned_surfaces:
   - docs/diagrams.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -63,7 +61,6 @@ tasks:
   owned_surfaces:
   - docs/roadmap.md
   - README.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

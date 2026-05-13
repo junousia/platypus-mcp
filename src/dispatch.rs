@@ -1,11 +1,11 @@
 use crate::{
-    approvals, assignments, backlog, config, execution_mode,
+    approvals, assignments, backlog, config, execution_mode, execution_policy,
     git_readiness::inspect_git_readiness,
-    guidance,
     models::{
-        ActionResult, ActionStatus, BacklogCandidate, DispatchNextWorkData, DispatchReadyWorkData,
+        ActionResult, ActionStatus, BacklogCandidate, CommitPlanningArtifactsData,
+        CommitPlanningArtifactsParams, DispatchNextWorkData, DispatchReadyWorkData,
         DispatchReadyWorkItem, DispatchReadyWorkParams, PrepareWorkerAssignmentParams, RootParams,
-        TaskRecord,
+        TaskRecord, WorkflowExecutionConfig,
     },
     state::{
         sqlite::SqliteProjectState, BacklogCandidateSnapshot, DispatchWorkCommand, ProjectState,
@@ -42,6 +42,7 @@ pub fn dispatch_next_work(
                     "Use inspect_task_events and an external harness to execute the queued task."
                         .to_string(),
                 ),
+                recovery_action: None,
                 data: Some(DispatchNextWorkData {
                     root: state.root().display().to_string(),
                     candidate: backlog_candidate(outcome.candidate),
@@ -55,6 +56,7 @@ pub fn dispatch_next_work(
             status: ActionStatus::Skipped,
             summary: "No runnable backlog items to dispatch.".to_string(),
             next_action: Some("Create or unblock backlog items.".to_string()),
+            recovery_action: None,
             data: None,
             error: None,
         },
@@ -67,6 +69,171 @@ pub fn dispatch_next_work(
         }
         Err(error) => state_error(action, "Could not dispatch runnable backlog work.", error),
     }
+}
+
+pub fn commit_planning_artifacts(
+    default_root: &Path,
+    params: CommitPlanningArtifactsParams,
+) -> ActionResult<CommitPlanningArtifactsData> {
+    let action = "commit_planning_artifacts";
+    let root = match crate::project::paths::resolve_root(default_root, params.root.as_deref()) {
+        Ok(root) => root,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not commit planning artifacts.", error)
+        }
+    };
+    let dry_run = params.dry_run.unwrap_or(false);
+    let include_project_config = params.include_project_config.unwrap_or(false);
+    let item_ids = params
+        .item_ids
+        .iter()
+        .map(|item_id| item_id.trim().to_ascii_uppercase())
+        .filter(|item_id| !item_id.is_empty())
+        .collect::<BTreeSet<_>>();
+    let entries = match git_dirty_entries(&root) {
+        Ok(entries) => entries,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect planning artifacts.", error)
+        }
+    };
+    let mut accepted_paths = Vec::new();
+    let mut rejected_paths = Vec::new();
+    for entry in &entries {
+        for path in entry.clone().paths() {
+            if planning_artifact_allowed(&path, &item_ids, include_project_config) {
+                accepted_paths.push(path);
+            } else {
+                rejected_paths.push(path);
+            }
+        }
+    }
+    accepted_paths.sort();
+    accepted_paths.dedup();
+    rejected_paths.sort();
+    rejected_paths.dedup();
+    if !rejected_paths.is_empty() {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Failed,
+            summary: "Refused to commit non-planning paths.".to_string(),
+            next_action: Some(
+                "Commit or discard rejected paths separately, then retry commit_planning_artifacts."
+                    .to_string(),
+            ),
+            recovery_action: Some(
+                "Keep this tool scoped to Platypus planning artifacts only.".to_string(),
+            ),
+            data: Some(CommitPlanningArtifactsData {
+                root: root.display().to_string(),
+                accepted_paths,
+                rejected_paths,
+                commit: None,
+                committed: false,
+                dry_run,
+            }),
+            error: Some("dirty workspace contains paths outside the allowed planning set".to_string()),
+        };
+    }
+    if accepted_paths.is_empty() {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Skipped,
+            summary: "No planning artifacts need a commit.".to_string(),
+            next_action: Some("Continue with inspect_work_queue or prepare_work.".to_string()),
+            recovery_action: None,
+            data: Some(CommitPlanningArtifactsData {
+                root: root.display().to_string(),
+                accepted_paths,
+                rejected_paths,
+                commit: None,
+                committed: false,
+                dry_run,
+            }),
+            error: None,
+        };
+    }
+    if dry_run {
+        return ActionResult::completed(
+            action,
+            format!(
+                "Dry run found {} planning artifact path(s) eligible for commit.",
+                accepted_paths.len()
+            ),
+            CommitPlanningArtifactsData {
+                root: root.display().to_string(),
+                accepted_paths,
+                rejected_paths,
+                commit: None,
+                committed: false,
+                dry_run,
+            },
+        );
+    }
+
+    let add = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("add")
+        .arg("--all")
+        .arg("--")
+        .args(&accepted_paths)
+        .output()
+        .map_err(|error| format!("failed to stage planning artifacts: {error}"));
+    let add = match add {
+        Ok(add) if add.status.success() => add,
+        Ok(add) => {
+            return ActionResult::failed(
+                action,
+                "Could not stage planning artifacts.",
+                String::from_utf8_lossy(&add.stderr).trim().to_string(),
+            )
+        }
+        Err(error) => {
+            return ActionResult::failed(action, "Could not stage planning artifacts.", error)
+        }
+    };
+    drop(add);
+    let message = params
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Commit Platypus planning artifacts");
+    let commit = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["commit", "-m", message])
+        .output()
+        .map_err(|error| format!("failed to commit planning artifacts: {error}"));
+    match commit {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            return ActionResult::failed(
+                action,
+                "Could not commit planning artifacts.",
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            )
+        }
+        Err(error) => {
+            return ActionResult::failed(action, "Could not commit planning artifacts.", error)
+        }
+    }
+    let commit = git_head(&root).ok();
+    ActionResult::completed(
+        action,
+        format!(
+            "Committed {} planning artifact path(s).",
+            accepted_paths.len()
+        ),
+        CommitPlanningArtifactsData {
+            root: root.display().to_string(),
+            accepted_paths,
+            rejected_paths,
+            commit,
+            committed: true,
+            dry_run,
+        },
+    )
 }
 
 pub fn dispatch_ready_work(
@@ -84,21 +251,12 @@ pub fn dispatch_ready_work(
         Ok(mode) => mode,
         Err(error) => return ActionResult::failed(action, "Could not dispatch work.", error),
     };
-    let manual_handoff = execution_mode::is_manual_handoff(&requested_execution_mode);
     let requested = params.max_tasks.unwrap_or(10).clamp(1, 10);
     let active_source_items = active_source_item_ids(state.root());
-    let profile_readiness = config::inspect_agent_profile_readiness(state.root()).ok();
-    let worker_ready = profile_readiness
-        .as_ref()
-        .is_some_and(|readiness| readiness.worker_ready());
-    let ready_worker_profiles = profile_readiness
-        .as_ref()
-        .map(|readiness| readiness.ready_worker_count)
-        .unwrap_or(0);
-    let preflight_warnings = if manual_handoff {
-        Vec::new()
-    } else {
-        dispatch_profile_warnings(profile_readiness.as_ref())
+    let preflight_warnings = legacy_dispatch_policy_warnings(params.require_planning_approval);
+    let execution_config = match config::effective_execution_config(state.root()) {
+        Ok(config) => config,
+        Err(error) => return ActionResult::failed(action, "Could not dispatch work.", error),
     };
     if params.dry_run.unwrap_or(false) {
         let listed = backlog::list_backlog(default_root, Some(root.as_str()), Some(100));
@@ -122,6 +280,8 @@ pub fn dispatch_ready_work(
             params.worker.as_deref(),
             &active_source_items,
         );
+        let (candidates, blocked_by_policy) =
+            filter_worker_policy_candidates(default_root, &root, candidates, &execution_config);
         let available_before_dispatch = candidates.len();
         let selected = candidates.into_iter().take(requested).collect::<Vec<_>>();
         let items = selected
@@ -143,6 +303,7 @@ pub fn dispatch_ready_work(
                 "Call dispatch_ready_work again with dry_run=false (or omit dry_run) to dispatch."
                     .to_string(),
             ),
+            recovery_action: None,
             data: Some(DispatchReadyWorkData {
                 root,
                 requested,
@@ -153,19 +314,21 @@ pub fn dispatch_ready_work(
                 started: 0,
                 failed: 0,
                 stopped_reason: if selected.is_empty() {
-                    if available_before_dispatch > 0 && !worker_ready {
-                        "worker_profile_missing".to_string()
-                    } else {
+                    if blocked_by_policy.is_empty() {
                         "no_runnable_items".to_string()
+                    } else {
+                        "policy_blocked".to_string()
                     }
                 } else {
                     "dry_run".to_string()
                 },
                 execution_mode: requested_execution_mode,
                 preflight_warnings,
-                worker_ready,
-                ready_worker_profiles,
-                items,
+                items: if items.is_empty() {
+                    blocked_by_policy
+                } else {
+                    items
+                },
             }),
             error: None,
         };
@@ -197,6 +360,8 @@ pub fn dispatch_ready_work(
         params.worker.as_deref(),
         &active_source_items,
     );
+    let (candidates, blocked_by_policy) =
+        filter_worker_policy_candidates(default_root, &root, candidates, &execution_config);
     let available_before_dispatch = candidates.len();
     let requested = params
         .max_tasks
@@ -207,52 +372,22 @@ pub fn dispatch_ready_work(
         .take(requested)
         .map(|candidate| candidate.item_id.clone())
         .collect::<BTreeSet<_>>();
-    if params.require_planning_approval.unwrap_or(false) {
-        let blocked =
-            planning_approval_blockers(default_root, &root, candidates.iter().take(requested));
-        if !blocked.is_empty() {
-            return ActionResult {
-                action: action.to_string(),
-                status: ActionStatus::Failed,
-                summary: format!(
-                    "{} selected non-direct backlog item(s) require planning approval before dispatch.",
-                    blocked.len()
-                ),
-                next_action: Some(
-                    "Call request_planning_approval for the blocked item(s), approve it with approval_respond, then retry dispatch_ready_work."
-                        .to_string(),
-                ),
-                data: Some(DispatchReadyWorkData {
-                    root,
-                    requested,
-                    available_before_dispatch,
-                    selected: 0,
-                    dispatched: 0,
-                    prepared: 0,
-                    started: 0,
-                    failed: 0,
-                    stopped_reason: "planning_approval_required".to_string(),
-                    execution_mode: requested_execution_mode,
-                    preflight_warnings,
-                    worker_ready,
-                    ready_worker_profiles,
-                    items: blocked,
-                }),
-                error: Some("Planning approval is required before dispatch.".to_string()),
-            };
-        }
-    }
-    if !manual_handoff && !selected_item_ids.is_empty() && !worker_ready {
+    if candidates.is_empty() && !blocked_by_policy.is_empty() {
         return ActionResult {
             action: action.to_string(),
             status: ActionStatus::Failed,
-            summary:
-                "Runnable backlog work exists, but no ready worker profile can execute it."
+            summary: format!(
+                "{} backlog item(s) are not ready for worker handoff under durable execution policy.",
+                blocked_by_policy.len()
+            ),
+            next_action: Some(
+                "Inspect returned per-item reasons. Use prepare_work for direct_edit items, write or validate task plans for task_plan gates, or approve approved_task_plan gates before retrying dispatch_ready_work."
                     .to_string(),
-            next_action: Some(format!(
-                "{} For manual handoff, call dispatch_ready_work with execution_mode=manual_handoff and prepare_handoffs=true, then run the returned assignment externally.",
-                config::worker_profile_setup_guidance()
-            )),
+            ),
+            recovery_action: Some(
+                "Resolve durable execution-policy blockers, then retry dispatch_ready_work."
+                    .to_string(),
+            ),
             data: Some(DispatchReadyWorkData {
                 root,
                 requested,
@@ -262,17 +397,12 @@ pub fn dispatch_ready_work(
                 prepared: 0,
                 started: 0,
                 failed: 0,
-                stopped_reason: "worker_profile_missing".to_string(),
+                stopped_reason: "policy_blocked".to_string(),
                 execution_mode: requested_execution_mode,
                 preflight_warnings,
-                worker_ready,
-                ready_worker_profiles,
-                items: Vec::new(),
+                items: blocked_by_policy,
             }),
-            error: Some(
-                "No ready worker profile is configured for profiled dispatch."
-                    .to_string(),
-            ),
+            error: Some("No selected backlog item is ready for worker_handoff.".to_string()),
         };
     }
     if let Some(blocked) = dispatch_readiness_result(
@@ -285,11 +415,7 @@ pub fn dispatch_ready_work(
     }
     let prepare_handoffs = params.prepare_handoffs.unwrap_or(true);
     let auto_start = params.auto_start.unwrap_or(false);
-    let applied_execution_mode = if manual_handoff {
-        execution_mode::MANUAL_HANDOFF.to_string()
-    } else {
-        execution_mode::PROFILED_WORKER.to_string()
-    };
+    let applied_execution_mode = execution_mode::MANUAL_HANDOFF.to_string();
     let claimant = params
         .claimant
         .clone()
@@ -307,8 +433,6 @@ pub fn dispatch_ready_work(
         stopped_reason: "max_tasks_reached".to_string(),
         execution_mode: applied_execution_mode,
         preflight_warnings,
-        worker_ready,
-        ready_worker_profiles,
         items: Vec::new(),
     };
 
@@ -495,16 +619,18 @@ pub fn dispatch_ready_work(
         "Inspect the returned per-item reasons and create or unblock backlog items if needed."
             .to_string()
     };
-    if !report.worker_ready && report.dispatched > 0 {
+    if report.dispatched > 0 {
         next_action = format!(
-            "{next_action} Manual handoff mode is externally managed; use start_worker_task, complete_worker_task, verification evidence, and integration to finish the lifecycle."
+            "{next_action} Host-managed handoff is externally managed; use start_worker_task, complete_worker_task, verification evidence, and integration to finish the lifecycle."
         );
     }
     next_action.push_str(
-        " Planning rationale for each queued item is available via inspect_work_queue and classify_planning_needs.",
+        " Queue readiness, task-plan state, and setup blockers are available via inspect_work_queue.",
     );
-    let summary = if !report.worker_ready && report.dispatched > 0 {
-        format!("{summary} Manual handoff mode selected; no ready worker profile was required.")
+    let summary = if report.dispatched > 0 {
+        format!(
+            "{summary} Host-managed handoff selected; no local worker configuration was required."
+        )
     } else {
         summary
     };
@@ -513,27 +639,10 @@ pub fn dispatch_ready_work(
         status,
         summary: summary.clone(),
         next_action: Some(next_action),
+        recovery_action: None,
         data: Some(report),
         error: None,
     }
-}
-
-fn dispatch_profile_warnings(readiness: Option<&config::AgentProfileReadiness>) -> Vec<String> {
-    let Some(readiness) = readiness else {
-        return vec![
-            "Could not inspect worker profiles. Run doctor_snapshot or configure_agent_profile before managed dispatch."
-                .to_string(),
-        ];
-    };
-    if readiness.worker_ready() {
-        return Vec::new();
-    }
-    readiness
-        .warnings
-        .iter()
-        .filter(|warning| warning.to_ascii_lowercase().contains("worker"))
-        .cloned()
-        .collect()
 }
 
 fn dispatch_readiness_result<T: schemars::JsonSchema + serde::Serialize>(
@@ -594,7 +703,8 @@ fn dispatch_readiness_result<T: schemars::JsonSchema + serde::Serialize>(
         action: action.to_string(),
         status: ActionStatus::Failed,
         summary: readiness.summary,
-        next_action: readiness.next_action,
+        next_action: readiness.next_action.clone(),
+        recovery_action: readiness.next_action,
         data: None,
         error: readiness.details,
     })
@@ -774,6 +884,30 @@ fn auto_commit_entry_allowed(entry: &DirtyEntry, selected_item_ids: &BTreeSet<St
         || selected_backlog_artifact_entry(entry, selected_item_ids)
 }
 
+fn planning_artifact_allowed(
+    path: &str,
+    item_ids: &BTreeSet<String>,
+    include_project_config: bool,
+) -> bool {
+    if include_project_config
+        && (matches!(
+            path,
+            ".gitignore" | "AGENTS.md" | "CLAUDE.md" | "WORKFLOW.md" | "platy.yaml"
+        ) || path == "backlog/README.md"
+            || (path.starts_with("backlog/templates/")
+                && (path.ends_with(".md") || path.ends_with(".yaml"))))
+    {
+        return true;
+    }
+    if path.starts_with("backlog/epics/") && path.ends_with(".md") {
+        return item_ids.is_empty();
+    }
+    if let Some(item_id) = backlog_artifact_item_id(path) {
+        return item_ids.is_empty() || item_ids.contains(item_id);
+    }
+    false
+}
+
 fn fixed_dispatch_artifact_entry(entry: &DirtyEntry) -> bool {
     if entry.status != "??" {
         return false;
@@ -816,6 +950,19 @@ fn backlog_artifact_item_id(path: &str) -> Option<&str> {
         .and_then(|value| value.strip_suffix(".yaml"))
 }
 
+fn git_head(root: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .map_err(|error| format!("failed to inspect git head: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 fn state_error<T: schemars::JsonSchema + serde::Serialize>(
     action: &str,
     summary: &str,
@@ -827,56 +974,115 @@ fn state_error<T: schemars::JsonSchema + serde::Serialize>(
 fn filter_candidates_for_dispatch(
     candidates: Vec<BacklogCandidate>,
     item_id: Option<&str>,
-    worker: Option<&str>,
+    _worker: Option<&str>,
     active_source_items: &BTreeSet<String>,
 ) -> Vec<BacklogCandidate> {
     candidates
         .into_iter()
         .filter(|candidate| item_id.is_none_or(|item_id| candidate.item_id == item_id))
-        .filter(|candidate| {
-            worker.is_none_or(|worker| candidate.suggested_worker.as_deref() == Some(worker))
-        })
         .filter(|candidate| !active_source_items.contains(&candidate.item_id))
         .collect()
 }
 
-fn planning_approval_blockers<'a>(
+fn filter_worker_policy_candidates(
     default_root: &Path,
     root: &str,
-    candidates: impl Iterator<Item = &'a BacklogCandidate>,
-) -> Vec<DispatchReadyWorkItem> {
-    candidates
-        .filter_map(|candidate| {
-            let planning = guidance::classify_candidate(candidate);
-            if planning.required_mode == "direct" {
-                return None;
+    candidates: Vec<BacklogCandidate>,
+    execution_config: &WorkflowExecutionConfig,
+) -> (Vec<BacklogCandidate>, Vec<DispatchReadyWorkItem>) {
+    let mut ready = Vec::new();
+    let mut blocked = Vec::new();
+    for candidate in candidates {
+        let policy =
+            backlog::backlog_item_execution_policy(default_root, Some(root), &candidate.item_id)
+                .map(|item_policy| {
+                    execution_policy::resolve_effective_policy(
+                        execution_config,
+                        item_policy.execution_path.as_deref(),
+                        item_policy.planning_gate.as_deref(),
+                    )
+                })
+                .unwrap_or_else(|_| {
+                    execution_policy::resolve_effective_policy(execution_config, None, None)
+                });
+        if policy.execution_path != execution_policy::WORKER_HANDOFF {
+            blocked.push(DispatchReadyWorkItem {
+                item_id: candidate.item_id,
+                title: candidate.title,
+                status: "blocked".to_string(),
+                reason: "Durable execution policy is direct_edit. Use prepare_work for manager-workspace direct work, or set execution_path=worker_handoff on the backlog item before dispatch_ready_work.".to_string(),
+                task: None,
+                assignment: None,
+            });
+            continue;
+        }
+        if execution_policy::plan_required(&policy.planning_gate) {
+            let plan = crate::backlog::validate_task_plan(
+                default_root,
+                crate::models::TaskPlanQueryParams {
+                    root: Some(root.to_string()),
+                    item_id: Some(candidate.item_id.clone()),
+                    include_errors: Some(true),
+                },
+            );
+            if !matches!(plan.status, ActionStatus::Completed) {
+                blocked.push(DispatchReadyWorkItem {
+                    item_id: candidate.item_id,
+                    title: candidate.title,
+                    status: "blocked".to_string(),
+                    reason: "Worker handoff requires a valid task plan. Call write_task_plan or validate_task_plan before dispatch_ready_work.".to_string(),
+                    task: None,
+                    assignment: None,
+                });
+                continue;
             }
+        }
+        if execution_policy::approval_required(&policy.planning_gate) {
             match approvals::planning_approval_state(
                 default_root,
                 Some(root),
                 &candidate.item_id,
                 true,
             ) {
-                Ok(state) if state.approved => None,
-                Ok(state) => Some(DispatchReadyWorkItem {
-                    item_id: candidate.item_id.clone(),
-                    title: candidate.title.clone(),
-                    status: "blocked".to_string(),
-                    reason: state.reason,
-                    task: None,
-                    assignment: None,
-                }),
-                Err(error) => Some(DispatchReadyWorkItem {
-                    item_id: candidate.item_id.clone(),
-                    title: candidate.title.clone(),
-                    status: "blocked".to_string(),
-                    reason: format!("Could not inspect planning approval state: {error}"),
-                    task: None,
-                    assignment: None,
-                }),
+                Ok(state) if state.approved => {}
+                Ok(state) => {
+                    blocked.push(DispatchReadyWorkItem {
+                        item_id: candidate.item_id,
+                        title: candidate.title,
+                        status: "blocked".to_string(),
+                        reason: state.reason,
+                        task: None,
+                        assignment: None,
+                    });
+                    continue;
+                }
+                Err(error) => {
+                    blocked.push(DispatchReadyWorkItem {
+                        item_id: candidate.item_id,
+                        title: candidate.title,
+                        status: "blocked".to_string(),
+                        reason: format!("Could not inspect planning approval state: {error}"),
+                        task: None,
+                        assignment: None,
+                    });
+                    continue;
+                }
             }
-        })
-        .collect()
+        }
+        ready.push(candidate);
+    }
+    (ready, blocked)
+}
+
+fn legacy_dispatch_policy_warnings(require_planning_approval: Option<bool>) -> Vec<String> {
+    if require_planning_approval.is_some() {
+        vec![
+            "Deprecated input require_planning_approval was ignored. Use backlog item planning_gate=approved_task_plan or workflow.execution instead."
+                .to_string(),
+        ]
+    } else {
+        Vec::new()
+    }
 }
 
 fn active_source_item_ids(root: &Path) -> BTreeSet<String> {
@@ -898,7 +1104,6 @@ fn backlog_candidate(candidate: BacklogCandidateSnapshot) -> BacklogCandidate {
         priority: candidate.priority,
         item_type: candidate.item_type,
         area: candidate.area,
-        suggested_worker: candidate.suggested_worker,
         owned_surfaces: candidate.owned_surfaces,
         external_refs: candidate.external_refs,
     }
@@ -937,8 +1142,8 @@ mod tests {
     use crate::{
         approvals::{approval_respond, request_planning_approval},
         models::{
-            ApprovalRespondParams, DispatchReadyWorkParams, InspectTaskEventsParams,
-            RequestPlanningApprovalParams,
+            ApprovalRespondParams, CommitPlanningArtifactsParams, DispatchReadyWorkParams,
+            InspectTaskEventsParams, RequestPlanningApprovalParams,
         },
         tasks,
     };
@@ -1089,9 +1294,9 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_ready_work_dry_run_reports_missing_worker_profile() {
+    fn dispatch_ready_work_dry_run_uses_host_managed_handoff_without_profiles() {
         let project = backlog_project(true);
-        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
+        write_ready_config(project.path());
 
         let result = dispatch_ready_work(
             project.path(),
@@ -1113,17 +1318,12 @@ mod tests {
         let data = result.data.expect("dry-run data");
 
         assert!(matches!(result.status, ActionStatus::Completed));
-        assert!(!data.worker_ready);
-        assert_eq!(data.ready_worker_profiles, 0);
-        assert!(data
-            .preflight_warnings
-            .iter()
-            .any(|warning| warning.contains("No worker profile")));
+        assert!(data.preflight_warnings.is_empty());
         assert_eq!(data.selected, 1);
     }
 
     #[test]
-    fn dispatch_ready_work_dry_run_filters_by_worker_like_real_dispatch() {
+    fn dispatch_ready_work_dry_run_worker_does_not_filter_backlog() {
         let project = backlog_project(true);
 
         let result = dispatch_ready_work(
@@ -1146,10 +1346,10 @@ mod tests {
         let data = result.data.expect("dry-run data");
 
         assert!(matches!(result.status, ActionStatus::Completed));
-        assert_eq!(data.available_before_dispatch, 0);
-        assert_eq!(data.selected, 0);
-        assert!(data.items.is_empty());
-        assert_eq!(data.stopped_reason, "no_runnable_items");
+        assert_eq!(data.available_before_dispatch, 2);
+        assert_eq!(data.selected, 1);
+        assert_eq!(data.items.len(), 1);
+        assert_eq!(data.stopped_reason, "dry_run");
     }
 
     #[test]
@@ -1264,9 +1464,8 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_ready_work_auto_start_fails_without_ready_worker_profile() {
+    fn dispatch_ready_work_auto_start_uses_host_managed_handoff() {
         let project = backlog_project(true);
-        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
 
         let result = dispatch_ready_work(
             project.path(),
@@ -1287,23 +1486,16 @@ mod tests {
         );
         let data = result.data.expect("batch data");
 
-        assert!(matches!(result.status, ActionStatus::Failed));
-        assert_eq!(data.stopped_reason, "worker_profile_missing");
-        assert_eq!(data.execution_mode, "auto");
-        assert_eq!(data.dispatched, 0);
-        assert!(result
-            .next_action
-            .as_deref()
-            .unwrap_or("")
-            .contains("manual handoff"));
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert_eq!(data.execution_mode, "manual_handoff");
+        assert_eq!(data.dispatched, 1);
+        assert_eq!(data.prepared, 1);
+        assert_eq!(data.started, 1);
     }
 
     #[test]
-    fn dispatch_ready_work_manual_handoff_prepares_without_worker_profile() {
+    fn dispatch_ready_work_manual_handoff_prepares_without_local_worker_config() {
         let project = backlog_project(true);
-        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
-        git(project.path(), &["add", "platy.yaml"]);
-        git(project.path(), &["commit", "-m", "Remove worker profile"]);
 
         let result = dispatch_ready_work(
             project.path(),
@@ -1328,7 +1520,6 @@ mod tests {
 
         assert!(matches!(result.status, ActionStatus::Completed));
         assert_eq!(data.execution_mode, "manual_handoff");
-        assert!(!data.worker_ready);
         assert_eq!(data.prepared, 1);
         assert_eq!(assignment.execution_mode, "manual_handoff");
         assert_eq!(assignment.bundle.execution_mode, "manual_handoff");
@@ -1359,11 +1550,8 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_ready_work_profiled_worker_requires_ready_worker_profile() {
+    fn dispatch_ready_work_rejects_unknown_execution_mode() {
         let project = backlog_project(true);
-        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
-        git(project.path(), &["add", "platy.yaml"]);
-        git(project.path(), &["commit", "-m", "Remove worker profile"]);
 
         let result = dispatch_ready_work(
             project.path(),
@@ -1373,7 +1561,7 @@ mod tests {
                 max_tasks: Some(1),
                 worker: Some("coder".to_string()),
                 claimant: Some("tester".to_string()),
-                execution_mode: Some("profiled_worker".to_string()),
+                execution_mode: Some("managed_worker".to_string()),
                 prepare_handoffs: Some(true),
                 auto_start: None,
                 auto_commit_artifacts: None,
@@ -1382,17 +1570,37 @@ mod tests {
                 verification_command: Vec::new(),
             },
         );
-        let data = result.data.expect("batch data");
 
         assert!(matches!(result.status, ActionStatus::Failed));
-        assert_eq!(data.stopped_reason, "worker_profile_missing");
-        assert_eq!(data.execution_mode, "profiled_worker");
-        assert_eq!(data.dispatched, 0);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("expected auto or manual_handoff"));
     }
 
     #[test]
     fn dispatch_ready_work_requires_planning_approval_when_requested() {
         let project = backlog_project(true);
+        mark_item_policy(
+            project.path(),
+            "PROJ-001",
+            "worker_handoff",
+            "approved_task_plan",
+        );
+        write_plan(project.path(), "PROJ-001");
+        git(
+            project.path(),
+            &[
+                "add",
+                "backlog/items/PROJ-001.md",
+                "backlog/plans/PROJ-001.yaml",
+            ],
+        );
+        git(
+            project.path(),
+            &["commit", "-m", "Require planning approval"],
+        );
 
         let blocked = dispatch_ready_work(
             project.path(),
@@ -1406,7 +1614,7 @@ mod tests {
                 prepare_handoffs: Some(true),
                 auto_start: None,
                 auto_commit_artifacts: None,
-                require_planning_approval: Some(true),
+                require_planning_approval: None,
                 dry_run: None,
                 verification_command: Vec::new(),
             },
@@ -1414,7 +1622,7 @@ mod tests {
         let blocked_data = blocked.data.expect("blocked data");
 
         assert!(matches!(blocked.status, ActionStatus::Failed));
-        assert_eq!(blocked_data.stopped_reason, "planning_approval_required");
+        assert_eq!(blocked_data.stopped_reason, "policy_blocked");
         assert_eq!(blocked_data.items[0].status, "blocked");
 
         let approval = request_planning_approval(
@@ -1452,7 +1660,7 @@ mod tests {
                 prepare_handoffs: Some(true),
                 auto_start: None,
                 auto_commit_artifacts: None,
-                require_planning_approval: Some(true),
+                require_planning_approval: None,
                 dry_run: None,
                 verification_command: Vec::new(),
             },
@@ -1615,9 +1823,97 @@ mod tests {
         );
     }
 
+    #[test]
+    fn commit_planning_artifacts_commits_only_allowed_backlog_paths() {
+        let project = backlog_project(true);
+        fs::write(
+            project.path().join("backlog/items/PROJ-003.md"),
+            r#"---
+id: PROJ-003
+title: Third
+priority: P1
+type: feature
+area: app
+epic: general
+depends_on: []
+owned_surfaces: []
+---
+
+# PROJ-003 Third
+
+## Goal
+
+Third.
+
+## Implementation Contract
+
+Third.
+
+## Acceptance
+
+- Done.
+"#,
+        )
+        .expect("item");
+
+        let result = commit_planning_artifacts(
+            project.path(),
+            CommitPlanningArtifactsParams {
+                root: None,
+                item_ids: vec!["PROJ-003".to_string()],
+                include_project_config: None,
+                message: Some("Commit third planning item".to_string()),
+                dry_run: None,
+            },
+        );
+        let data = result.data.expect("commit data");
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        assert!(data.committed);
+        assert!(data.commit.is_some());
+        assert_eq!(data.accepted_paths, vec!["backlog/items/PROJ-003.md"]);
+        let status = Command::new("git")
+            .args(["status", "--porcelain=v1", "--untracked-files=all"])
+            .current_dir(project.path())
+            .output()
+            .expect("git status");
+        assert!(status.status.success());
+        assert!(String::from_utf8_lossy(&status.stdout).trim().is_empty());
+    }
+
+    #[test]
+    fn commit_planning_artifacts_rejects_mixed_source_changes() {
+        let project = backlog_project(true);
+        fs::write(
+            project.path().join("backlog/items/PROJ-003.md"),
+            "# draft\n",
+        )
+        .expect("item");
+        fs::write(project.path().join("src.rs"), "fn main() {}\n").expect("source");
+
+        let result = commit_planning_artifacts(
+            project.path(),
+            CommitPlanningArtifactsParams {
+                root: None,
+                item_ids: Vec::new(),
+                include_project_config: None,
+                message: None,
+                dry_run: None,
+            },
+        );
+        let data = result.data.expect("commit data");
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(data
+            .accepted_paths
+            .contains(&"backlog/items/PROJ-003.md".to_string()));
+        assert!(data.rejected_paths.contains(&"src.rs".to_string()));
+        assert!(!data.committed);
+    }
+
     fn backlog_project(with_git: bool) -> TempDir {
         let project = TempDir::new().expect("temp dir");
-        write_ready_profiles(project.path());
+        write_ready_config(project.path());
         fs::create_dir_all(project.path().join("backlog/items")).expect("items");
         fs::create_dir_all(project.path().join("backlog/epics")).expect("epics");
         fs::write(
@@ -1650,20 +1946,10 @@ area: general
         project
     }
 
-    fn write_ready_profiles(root: &Path) {
+    fn write_ready_config(root: &Path) {
         fs::write(
             root.join("platy.yaml"),
-            r#"agents:
-  profiles:
-    manager:
-      role: manager
-      harness: codex
-      executable: git
-    coder:
-      role: worker
-      harness: codex
-      executable: git
-"#,
+            "project: test\nworkflow:\n  execution:\n    default_path: worker_handoff\n    worker_planning_gate: none\n",
         )
         .expect("config");
     }
@@ -1680,7 +1966,6 @@ type: feature
 area: app
 epic: general
 depends_on: []
-suggested_worker: coder
 owned_surfaces:
 - {surface}
 ---
@@ -1702,6 +1987,54 @@ Edit {surface}.
             ),
         )
         .expect("item");
+    }
+
+    fn mark_item_policy(root: &Path, id: &str, execution_path: &str, planning_gate: &str) {
+        let path = root.join("backlog/items").join(format!("{id}.md"));
+        let text = fs::read_to_string(&path).expect("item");
+        let text = text.replace(
+            "\n---\n\n#",
+            &format!(
+                "\nexecution_path: {execution_path}\nplanning_gate: {planning_gate}\n---\n\n#"
+            ),
+        );
+        fs::write(path, text).expect("item policy");
+    }
+
+    fn write_plan(root: &Path, item_id: &str) {
+        fs::create_dir_all(root.join("backlog/plans")).expect("plans");
+        fs::write(
+            root.join("backlog/plans").join(format!("{item_id}.yaml")),
+            format!(
+                r#"item_id: {item_id}
+version: 1
+mode: standard
+requirements:
+  - id: R1
+    text: Do the work.
+design:
+  summary: Focused implementation.
+  owned_surfaces:
+    - src/lib.rs
+  notes: null
+tasks:
+  - id: {item_id}-T001
+    title: Implement item
+    goal: Complete the item.
+    requirement_refs:
+      - R1
+    depends_on: []
+    owned_surfaces:
+      - src/lib.rs
+    verification:
+      - make check
+    acceptance:
+      - The item is implemented and verified.
+    notes: null
+"#
+            ),
+        )
+        .expect("plan");
     }
 
     fn git(root: &Path, args: &[&str]) {

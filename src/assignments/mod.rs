@@ -6,6 +6,7 @@ use crate::{
         RunTaskVerificationParams, StartWorkerExecutionParams, TaskEventRecord,
         TaskVerificationRunData, WorkerAssignment, WorkerAssignmentData, WorkerAssignmentEventData,
     },
+    process::run_process_with_input,
     state::{
         sqlite::SqliteProjectState, AppendWorkerEventCommand, AssignmentLifecycleState,
         AssignmentQuery, AssignmentSnapshot, CompleteExecutionCommand, PrepareAssignmentCommand,
@@ -13,7 +14,6 @@ use crate::{
         StartExecutionCommand, TaskQuery, WorkerEventSnapshot,
     },
     tasks,
-    workers::run_harness_process,
 };
 use serde_json::Value;
 use std::{
@@ -33,8 +33,9 @@ use validation::{
 const DEFAULT_CLAIMANT: &str = "external-worker";
 const DEFAULT_VERIFICATION_TIMEOUT_SECONDS: u64 = 60;
 const MAX_CAPTURE_BYTES: usize = 8192;
-const ALLOWED_VERIFICATION_EXECUTABLES: &[&str] =
-    &["make", "cargo", "npm", "pnpm", "yarn", "bun", "deno", "uv"];
+const ALLOWED_VERIFICATION_EXECUTABLES: &[&str] = &[
+    "make", "cargo", "npm", "pnpm", "yarn", "bun", "deno", "uv", "python", "python3",
+];
 
 pub fn prepare_worker_assignment(
     default_root: &Path,
@@ -67,6 +68,7 @@ pub fn prepare_worker_assignment(
                 "Use inspect_worker_assignment, then start or complete the existing assignment."
                     .to_string(),
             ),
+            recovery_action: None,
             data: Some(WorkerAssignmentData {
                 root: state.root().display().to_string(),
                 assignment: worker_assignment(snapshot),
@@ -271,6 +273,7 @@ pub fn start_worker_execution(
                 "Run edits inside `{}` (the assignment worktree), then record progress or complete the task.",
                 snapshot.worktree_path
             )),
+            recovery_action: None,
             data: Some(WorkerAssignmentData {
                 root: state.root().display().to_string(),
                 assignment: worker_assignment(snapshot),
@@ -452,6 +455,7 @@ pub fn complete_worker_execution(
                 next_action: Some(
                     "Prepare and start an assignment before completing execution.".to_string(),
                 ),
+                recovery_action: None,
                 data: None,
                 error: Some("worker assignment was not found".to_string()),
             }
@@ -464,6 +468,7 @@ pub fn complete_worker_execution(
                 next_action: Some(
                     "Only running assignments can be completed. Call start_worker_task first, or retry complete_worker_task with auto_start_if_prepared=true when you are finishing in one session.".to_string(),
                 ),
+                recovery_action: None,
                 data: None,
                 error: Some("assignment is not running".to_string()),
             }
@@ -664,7 +669,7 @@ pub fn run_task_verification(
     for command in &commands {
         let executable = command[0].clone();
         let args = command[1..].to_vec();
-        let outcome = run_harness_process(
+        let outcome = run_process_with_input(
             Path::new(&executable),
             &args,
             &snapshot.worktree_path,
@@ -775,6 +780,7 @@ pub fn run_task_verification(
                     "Resolve the evidence storage error, then retry run_task_verification before integrating the worker result."
                         .to_string(),
                 ),
+                recovery_action: None,
                 data: Some(data),
                 error: evidence_result.error.or(Some(evidence_result.summary)),
             };
@@ -831,6 +837,17 @@ fn executable_commands(values: Vec<String>) -> Result<Vec<Vec<String>>, String> 
             .collect();
     }
     Ok(vec![values])
+}
+
+#[cfg(test)]
+pub(crate) fn validate_verification_command_values(values: &[String]) -> Result<(), String> {
+    let commands = executable_commands(values.to_vec())?;
+    for command in &commands {
+        if let Some(executable) = command.first() {
+            ensure_verification_command_allowed(executable)?;
+        }
+    }
+    Ok(())
 }
 
 fn parse_verification_command_entry(value: &str) -> Result<Vec<String>, String> {

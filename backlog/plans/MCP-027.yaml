@@ -27,7 +27,6 @@ tasks:
   - src/main.rs
   - src/cli.rs
   - src/server.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -47,7 +46,6 @@ tasks:
   - tests
   - docs/tools.md
   - README.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

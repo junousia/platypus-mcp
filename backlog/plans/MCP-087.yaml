@@ -1,0 +1,70 @@
+item_id: MCP-087
+version: 1
+mode: minimal
+requirements:
+- id: R1
+  text: Deferred-schema hosts receive small named tool groups for each workflow phase.
+- id: R2
+  text: Guidance remains advisory and host-neutral.
+- id: R3
+  text: Feedback scripts evaluate the preload guidance explicitly.
+design:
+  summary: Refine existing preload guidance into phase-specific groups that reduce cold-start friction without requiring a custom host protocol.
+  owned_surfaces:
+  - src/host_guidance.rs
+  - src/project/init.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - scripts/dev/harness-feedback.sh
+  - tests/stdio_protocol.rs
+  notes: This continues MCP-073 based on fresh harness feedback.
+tasks:
+- id: MCP-087-T001
+  title: Define phase-specific preload groups
+  goal: Split startup, planning, direct execution, worker handoff, recovery, and evidence tools into concise named groups.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/host_guidance.rs
+  - docs/tools.md
+  verification:
+  - cargo test --test stdio_protocol stdio_server_lists_and_reads_host_guidance_resources
+  acceptance:
+  - Groups are small enough to be loaded incrementally.
+  - Guidance says hosts may ignore groups and call tools on demand.
+  notes: null
+- id: MCP-087-T002
+  title: Update generated host files
+  goal: Put the phase-specific preload guidance into generated AGENTS.md and CLAUDE.md.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on:
+  - MCP-087-T001
+  owned_surfaces:
+  - src/project/init.rs
+  - tests/stdio_protocol.rs
+  verification:
+  - cargo test project::init::tests
+  acceptance:
+  - Generated files name the group to load at session start.
+  - Generated files name the group to load before direct work, worker handoff, and recovery.
+  notes: null
+- id: MCP-087-T003
+  title: Add feedback script prompt coverage
+  goal: Ask Claude, Codex, and OpenCode feedback runs whether preload guidance reduced cold-start friction.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-087-T002
+  owned_surfaces:
+  - scripts/dev/harness-feedback.sh
+  - docs/workflow.md
+  verification:
+  - make check
+  acceptance:
+  - Feedback reports include a required section on schema preload guidance.
+  - The prompt still frames Platypus as long-term product tooling.
+  notes: null

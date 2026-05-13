@@ -30,7 +30,6 @@ tasks:
   - src/state
   - src/storage
   - src/lib.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -48,7 +47,6 @@ tasks:
   owned_surfaces:
   - src/state/sqlite
   - tests
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

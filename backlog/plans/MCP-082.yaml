@@ -1,0 +1,75 @@
+item_id: MCP-082
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Validation next actions are derived from effective execution policy.
+- id: R2
+  text: Direct-edit validation does not imply a mandatory planning commit.
+- id: R3
+  text: Worker-handoff validation still protects worktree isolation and planning artifact consistency.
+design:
+  summary: Route validation next_action generation through queue and execution policy context instead of returning one static commit-before-dispatch message.
+  owned_surfaces:
+  - src/backlog/validate.rs
+  - src/backlog/plan.rs
+  - src/guidance.rs
+  - src/models.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  notes: Keep validation deterministic; do not infer product intent from goal text.
+tasks:
+- id: MCP-082-T001
+  title: Centralize validation next-action policy
+  goal: Add a helper that chooses validation next actions from queue state and execution policy.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - src/backlog/validate.rs
+  - src/backlog/plan.rs
+  - src/guidance.rs
+  verification:
+  - cargo test backlog::tests
+  acceptance:
+  - Direct-ready queues return direct lifecycle guidance.
+  - Worker-handoff queues return planning and commit guidance only when relevant.
+  notes: null
+- id: MCP-082-T002
+  title: Update validation responses
+  goal: Apply the contextual next action to validate_backlog and write_task_plan.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-082-T001
+  owned_surfaces:
+  - src/backlog/validate.rs
+  - src/backlog/plan.rs
+  - src/models.rs
+  verification:
+  - cargo test backlog::tests
+  acceptance:
+  - Static commit-before-dispatch wording is removed from direct paths.
+  - Worker-handoff task plans still advise committing planning artifacts where needed.
+  notes: null
+- id: MCP-082-T003
+  title: Cover mixed queues and docs
+  goal: Add protocol tests and docs for direct-only, worker-only, and mixed queue validation guidance.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-082-T002
+  owned_surfaces:
+  - tests/stdio_protocol.rs
+  - docs/tools.md
+  - docs/workflow.md
+  verification:
+  - make check
+  acceptance:
+  - Tests prove direct paths do not receive misleading commit nudges.
+  - Docs explain commit_planning_artifacts as optional for direct work and useful for worker handoff.
+  notes: null

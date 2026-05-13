@@ -25,7 +25,6 @@ tasks:
   depends_on: []
   owned_surfaces:
   - tests/stdio_protocol.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -41,7 +40,6 @@ tasks:
   - MCP-039-T01
   owned_surfaces:
   - tests/stdio_protocol.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -57,7 +55,6 @@ tasks:
   owned_surfaces:
   - docs/workflow.md
   - docs/tools.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

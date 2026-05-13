@@ -26,7 +26,6 @@ tasks:
   owned_surfaces:
   - src/state/memory
   - src/state/mod.rs
-  suggested_worker: coder
   verification:
   - cargo test state::memory
   acceptance:
@@ -44,7 +43,6 @@ tasks:
   owned_surfaces:
   - tests
   - src/state
-  suggested_worker: coder
   verification:
   - cargo test state_contract
   acceptance:
@@ -64,7 +62,6 @@ tasks:
   owned_surfaces:
   - tests
   - src/state
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

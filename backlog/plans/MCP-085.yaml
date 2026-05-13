@@ -1,0 +1,74 @@
+item_id: MCP-085
+version: 1
+mode: minimal
+requirements:
+- id: R1
+  text: Generated host guidance matches all states emitted by the lifecycle tools.
+- id: R2
+  text: Guidance explains when inspect_session satisfies startup detector steps.
+- id: R3
+  text: Guidance includes a minimum viable direct-edit loop and explains the traceability tradeoff.
+design:
+  summary: Treat host guidance as an exact workflow contract. Update resources, generated files, and docs to match current tool states and reduce unnecessary detector calls.
+  owned_surfaces:
+  - src/host_guidance.rs
+  - src/project/init.rs
+  - docs/workflow.md
+  - docs/tools.md
+  - README.md
+  - tests/stdio_protocol.rs
+  notes: This is documentation and generated-guidance work, not a behavior change.
+tasks:
+- id: MCP-085-T001
+  title: Audit emitted lifecycle states
+  goal: List states emitted by inspect_session, inspect_work_queue, prepare_work, finish_work, complete_backlog_item, and integration tools.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - src/host_guidance.rs
+  - docs/workflow.md
+  verification:
+  - cargo test guidance::tests
+  acceptance:
+  - Every emitted state has an intended row or documented follow-up.
+  notes: null
+- id: MCP-085-T002
+  title: Update generated guidance and docs
+  goal: Add missing direct states, inspect_session detector coverage, and minimum viable direct-edit flow.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-085-T001
+  owned_surfaces:
+  - src/host_guidance.rs
+  - src/project/init.rs
+  - docs/workflow.md
+  - docs/tools.md
+  - README.md
+  verification:
+  - cargo test project::init::tests
+  acceptance:
+  - Generated AGENTS.md and CLAUDE.md mention the minimum viable direct-edit loop.
+  - Workflow docs say when inspect_session replaces separate doctor/status/queue calls.
+  - Guidance labels one-shot overhead as a traceability tradeoff.
+  notes: null
+- id: MCP-085-T003
+  title: Add guidance regression tests
+  goal: Verify generated host guidance contains critical state names and direct lifecycle steps.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-085-T002
+  owned_surfaces:
+  - tests/stdio_protocol.rs
+  - src/project/init.rs
+  verification:
+  - make check
+  acceptance:
+  - Tests fail if generated guidance drops direct_ready, direct prepared handling, complete_backlog_item, or inspect_session coverage.
+  notes: null

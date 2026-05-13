@@ -20,7 +20,6 @@ struct BundleFrontmatter {
     title: String,
     #[serde(default)]
     depends_on: Vec<String>,
-    suggested_worker: Option<String>,
     #[serde(default)]
     owned_surfaces: Vec<String>,
 }
@@ -115,10 +114,7 @@ pub fn generate_task_bundle(
         task_id: task.id.clone(),
         item_id: item.frontmatter.id.clone(),
         title: item.frontmatter.title.clone(),
-        worker: task
-            .worker
-            .clone()
-            .or_else(|| item.frontmatter.suggested_worker.clone()),
+        worker: task.worker.clone(),
         workspace_path: workspace_path.display().to_string(),
         goal: item.goal,
         implementation_contract: item.implementation_contract,
@@ -376,11 +372,7 @@ fn bundle_brief(
         task_id = task.id.as_str(),
         title = item.frontmatter.title.as_str(),
         workspace = workspace_path.display(),
-        worker = task
-            .worker
-            .as_deref()
-            .or(item.frontmatter.suggested_worker.as_deref())
-            .unwrap_or("unspecified"),
+        worker = task.worker.as_deref().unwrap_or("unspecified"),
         goal = item.goal.as_str(),
         contract = item.implementation_contract.as_str(),
     ))
@@ -801,7 +793,6 @@ area: execution
 epic: general
 depends_on:
 - MCP-006
-suggested_worker: coder
 owned_surfaces:
 - src/bundle.rs
 ---

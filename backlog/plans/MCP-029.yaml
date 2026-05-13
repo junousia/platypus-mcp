@@ -28,7 +28,6 @@ tasks:
   depends_on: []
   owned_surfaces:
   - src/storage
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -49,7 +48,6 @@ tasks:
   - src/events.rs
   - src/tasks.rs
   - src/storage
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -67,7 +65,6 @@ tasks:
   - MCP-029-T02
   owned_surfaces:
   - docs/storage.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

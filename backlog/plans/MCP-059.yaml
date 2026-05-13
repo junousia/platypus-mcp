@@ -32,7 +32,6 @@ tasks:
   - src/models.rs
   - src/server.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test guidance::tests::classifies_workflow_fit
   - cargo test server::tests::tool_router_exposes_basic_tool_set
@@ -52,7 +51,6 @@ tasks:
   - src/host_guidance.rs
   - docs/workflow.md
   - docs/tools.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

@@ -3,7 +3,8 @@ use super::traits::{
     TaskStore, TransitionInsert, TransitionStore,
 };
 use crate::models::{
-    ApprovalRecord, EventRecord, LeaseRecord, RuntimeTransitionRecord, TaskEventRecord, TaskRecord,
+    ApprovalRecord, EventRecord, EvidenceRecord, FindingRecord, LeaseRecord,
+    RuntimeTransitionRecord, TaskEventRecord, TaskRecord,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
 use serde_json::Value;
@@ -46,6 +47,47 @@ impl<'connection> Repository<'connection> {
         LeaseRepository {
             connection: self.connection,
         }
+    }
+
+    pub fn list_evidence_for_item(
+        &self,
+        item_id: &str,
+        limit: usize,
+    ) -> RepositoryResult<Vec<EvidenceRecord>> {
+        let mut statement = self.connection.prepare(
+            r#"
+            SELECT id, source_item_id, source_task_id, kind, summary, refs_json, metadata_json,
+                   created_at
+            FROM evidence
+            WHERE source_item_id = ?1
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = statement.query_map(params![item_id, limit], row_to_evidence)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(RepositoryError::from)
+    }
+
+    pub fn list_findings_for_item(
+        &self,
+        item_id: &str,
+        limit: usize,
+    ) -> RepositoryResult<Vec<FindingRecord>> {
+        let mut statement = self.connection.prepare(
+            r#"
+            SELECT id, source_item_id, source_task_id, source_finding_ref, title, status,
+                   severity, required, summary, owner, disposition_reason, evidence_json,
+                   metadata_json, created_at, updated_at
+            FROM findings
+            WHERE source_item_id = ?1
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = statement.query_map(params![item_id, limit], row_to_finding)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(RepositoryError::from)
     }
 }
 
@@ -237,6 +279,16 @@ pub struct TaskRepository<'connection> {
     connection: &'connection Connection,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceItemDispatchBlocker {
+    pub source_item_id: String,
+    pub task_id: String,
+    pub task_status: String,
+    pub assignment_id: Option<String>,
+    pub assignment_status: Option<String>,
+    pub queue_state: String,
+}
+
 impl TaskStore for TaskRepository<'_> {
     fn create(&self, task: TaskInsert) -> RepositoryResult<TaskRecord> {
         let id = self.next_task_id(&task.source_item_id)?;
@@ -399,6 +451,57 @@ impl TaskRepository<'_> {
             "#,
         )?;
         let rows = statement.query_map([], |row| row.get::<_, String>("source_item_id"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(RepositoryError::from)
+    }
+
+    pub fn source_item_dispatch_blockers(
+        &self,
+    ) -> RepositoryResult<Vec<SourceItemDispatchBlocker>> {
+        let mut statement = self.connection.prepare(
+            r#"
+            SELECT tasks.source_item_id,
+                   tasks.id AS task_id,
+                   tasks.status AS task_status,
+                   worker_assignments.id AS assignment_id,
+                   worker_assignments.status AS assignment_status,
+                   CASE
+                     WHEN tasks.status IN ('queued', 'claimed', 'running') THEN 'active'
+                     WHEN tasks.status = 'completed' THEN 'completed_pending_integration'
+                   END AS queue_state
+            FROM tasks
+            LEFT JOIN worker_assignments
+              ON worker_assignments.task_id = tasks.id
+             AND worker_assignments.status IN ('prepared', 'running')
+            WHERE tasks.status IN ('queued', 'claimed', 'running')
+               OR (
+                    tasks.status = 'completed'
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM evidence integration
+                        WHERE integration.source_task_id = tasks.id
+                          AND integration.kind = 'commit'
+                    )
+               )
+            ORDER BY
+                CASE
+                    WHEN tasks.status IN ('running', 'claimed', 'queued') THEN 0
+                    ELSE 1
+                END,
+                tasks.updated_at ASC,
+                tasks.id ASC
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(SourceItemDispatchBlocker {
+                source_item_id: row.get("source_item_id")?,
+                task_id: row.get("task_id")?,
+                task_status: row.get("task_status")?,
+                assignment_id: row.get("assignment_id")?,
+                assignment_status: row.get("assignment_status")?,
+                queue_state: row.get("queue_state")?,
+            })
+        })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(RepositoryError::from)
     }
@@ -1011,6 +1114,52 @@ fn row_to_lease(row: &Row<'_>) -> rusqlite::Result<LeaseRecord> {
         released_at: row.get("released_at")?,
         expires_at: row.get("expires_at")?,
     })
+}
+
+fn row_to_evidence(row: &Row<'_>) -> rusqlite::Result<EvidenceRecord> {
+    let refs_json: Option<String> = row.get("refs_json")?;
+    let metadata_json: Option<String> = row.get("metadata_json")?;
+    Ok(EvidenceRecord {
+        id: row.get("id")?,
+        source_item_id: row.get("source_item_id")?,
+        source_task_id: row.get("source_task_id")?,
+        kind: row.get("kind")?,
+        summary: row.get("summary")?,
+        refs: parse_json(refs_json),
+        metadata: parse_json(metadata_json),
+        created_at: row.get("created_at")?,
+    })
+}
+
+fn row_to_finding(row: &Row<'_>) -> rusqlite::Result<FindingRecord> {
+    let evidence_json: Option<String> = row.get("evidence_json")?;
+    let metadata_json: Option<String> = row.get("metadata_json")?;
+    let required: i64 = row.get("required")?;
+    Ok(FindingRecord {
+        id: row.get("id")?,
+        source_item_id: row.get("source_item_id")?,
+        source_task_id: row.get("source_task_id")?,
+        source_finding_ref: row.get("source_finding_ref")?,
+        title: row.get("title")?,
+        status: row.get("status")?,
+        severity: row.get("severity")?,
+        required: required != 0,
+        summary: row.get("summary")?,
+        owner: row.get("owner")?,
+        disposition_reason: row.get("disposition_reason")?,
+        evidence_refs: parse_json(evidence_json),
+        metadata: parse_json(metadata_json),
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+fn parse_json<T>(raw: Option<String>) -> T
+where
+    T: serde::de::DeserializeOwned + Default,
+{
+    raw.and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
 }
 
 fn safe_id_prefix(value: &str) -> String {

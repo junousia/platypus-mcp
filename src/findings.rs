@@ -155,8 +155,10 @@ pub fn validate_findings(
                     status: ActionStatus::Failed,
                     summary: format!("{count} required finding(s) are unresolved."),
                     next_action: Some(
-                        "Resolve, reject, or mark each required finding as duplicate.".to_string(),
+                        "Accept, defer, resolve, reject, or mark each required finding as duplicate."
+                            .to_string(),
                     ),
+                    recovery_action: None,
                     data: Some(data),
                     error: None,
                 }

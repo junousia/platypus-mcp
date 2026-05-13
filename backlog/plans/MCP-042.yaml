@@ -22,7 +22,6 @@ tasks:
   - docs/storage.md
   - docs/diagrams.md
   - README.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

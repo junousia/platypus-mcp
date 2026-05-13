@@ -30,7 +30,6 @@ tasks:
   owned_surfaces:
   - src/storage
   - src/models.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -50,7 +49,6 @@ tasks:
   - src/storage
   - src/tasks.rs
   - src/approvals.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -70,7 +68,6 @@ tasks:
   - src/events.rs
   - docs/storage.md
   - tests
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

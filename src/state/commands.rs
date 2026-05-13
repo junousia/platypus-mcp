@@ -152,12 +152,6 @@ pub enum IntegrationStrategy {
     External,
 }
 
-/// Query for safe-action guidance.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
-pub struct NextSafeActionQuery {
-    pub worker: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct TaskQuery {
     pub task_id: String,

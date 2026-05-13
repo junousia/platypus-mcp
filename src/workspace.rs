@@ -1,8 +1,9 @@
 use crate::{
-    config, events, evidence,
+    config, events, evidence, findings,
     git_readiness::{inspect_git_readiness, GitReadinessStatus},
     models::{
-        ActionResult, ActionStatus, IntegrateWorkerResultParams, RecordEvidenceParams,
+        ActionResult, ActionStatus, InspectIntegrationGatesParams, IntegrateWorkerResultParams,
+        IntegrationGate, IntegrationGateData, RecordEvidenceParams, ValidateFindingsParams,
         WorkerResultIntegrationData, WorktreeCleanupData, WorktreeCleanupParams,
         WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffFile, WorktreeDiffParams,
         WorktreeStatusParams,
@@ -16,6 +17,7 @@ use crate::{
 use std::{
     collections::BTreeMap,
     fs,
+    io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -85,7 +87,8 @@ pub fn worktree_create(
             action: action.to_string(),
             status: ActionStatus::Failed,
             summary: git_readiness.summary,
-            next_action: git_readiness.next_action,
+            next_action: git_readiness.next_action.clone(),
+            recovery_action: git_readiness.next_action,
             data: None,
             error: git_readiness.details,
         };
@@ -325,6 +328,10 @@ pub fn worktree_diff(
         if !workspace_diff.trim().is_empty() {
             diff_sections.push(workspace_diff);
         }
+        let untracked_diff = untracked_file_diff(&worktree.path, &files);
+        if !untracked_diff.trim().is_empty() {
+            diff_sections.push(untracked_diff);
+        }
     }
     if has_committed_changes {
         let range = format!("{}..{}", worktree.base_ref, worktree.branch);
@@ -401,6 +408,7 @@ pub fn worktree_cleanup(
             status: ActionStatus::Skipped,
             summary: format!("Task `{task_id}` worktree has local changes."),
             next_action: Some("Inspect worktree_diff, then retry with force=true only if the changes can be discarded.".to_string()),
+            recovery_action: None,
             data: None,
             error: None,
         };
@@ -485,7 +493,8 @@ pub fn integrate_worker_result(
             action: action.to_string(),
             status: ActionStatus::Failed,
             summary: readiness.summary,
-            next_action: readiness.next_action,
+            next_action: readiness.next_action.clone(),
+            recovery_action: readiness.next_action,
             data: None,
             error: readiness.details,
         };
@@ -531,6 +540,49 @@ pub fn integrate_worker_result(
         }
         None => "verification not recorded".to_string(),
     };
+    let findings_validation = findings::validate_findings(
+        default_root,
+        ValidateFindingsParams {
+            root: Some(root_string.clone()),
+            source_item_id: Some(worktree.source_item_id.clone()),
+            source_task_id: Some(task_id.clone()),
+        },
+    );
+    match findings_validation {
+        ActionResult {
+            status: ActionStatus::Completed,
+            ..
+        } => {}
+        ActionResult {
+            status: ActionStatus::Failed,
+            data: Some(data),
+            error,
+            ..
+        } => {
+            return ActionResult {
+                action: action.to_string(),
+                status: ActionStatus::Skipped,
+                summary: format!(
+                    "Task `{task_id}` has {} open required finding(s).",
+                    data.unresolved_required_count
+                ),
+                next_action: Some(
+                    "Accept, defer, resolve, reject, or mark required findings as duplicate before integrating worker results."
+                        .to_string(),
+                ),
+                recovery_action: None,
+                data: None,
+                error,
+            }
+        }
+        ActionResult { summary, error, .. } => {
+            return ActionResult::failed(
+                action,
+                "Could not validate task findings before integration.",
+                error.unwrap_or(summary),
+            )
+        }
+    }
     if config.require_clean_manager_workspace {
         let readiness = inspect_git_readiness(&root, true);
         match readiness.status {
@@ -553,7 +605,8 @@ pub fn integrate_worker_result(
                     action: action.to_string(),
                     status: ActionStatus::Failed,
                     summary: readiness.summary,
-                    next_action: readiness.next_action,
+                    next_action: readiness.next_action.clone(),
+                    recovery_action: readiness.next_action,
                     data: None,
                     error: readiness.details,
                 }
@@ -613,6 +666,7 @@ pub fn integrate_worker_result(
                 status: ActionStatus::Failed,
                 summary: "Could not integrate worker result.".to_string(),
                 next_action: Some("Resolve the source conflict, or retry with strategy=apply_changed_files when replacing changed worker files is acceptable.".to_string()),
+                recovery_action: None,
                 data: None,
                 error: Some(detail),
             };
@@ -717,6 +771,7 @@ pub fn integrate_worker_result(
         status: ActionStatus::Completed,
         summary: format!("Integrated worker result for task `{task_id}`."),
         next_action,
+        recovery_action: None,
         data: Some(WorkerResultIntegrationData {
             root: root_string,
             task_id,
@@ -728,6 +783,375 @@ pub fn integrate_worker_result(
             cleanup_error,
         }),
         error: None,
+    }
+}
+
+pub fn inspect_integration_gates(
+    default_root: &Path,
+    params: InspectIntegrationGatesParams,
+) -> ActionResult<IntegrationGateData> {
+    let action = "inspect_integration_gates";
+    let task_id = match clean_task_id(&params.task_id) {
+        Ok(task_id) => task_id,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect integration gates.", error)
+        }
+    };
+    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
+        Ok(state) => state,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not open project state.", error.to_string())
+        }
+    };
+    let root = state.root().to_path_buf();
+    let root_string = root.display().to_string();
+    let config = match config::effective_workflow_config(&root) {
+        Ok(config) => config,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect workflow config.", error)
+        }
+    };
+
+    let mut gates = Vec::new();
+    let task = match load_task(&state, &task_id) {
+        Ok(task) => {
+            let (status, blocking, summary, tool, next_action) = if task.status == "completed" {
+                (
+                    "ready",
+                    false,
+                    format!("Task `{task_id}` is completed."),
+                    None,
+                    None,
+                )
+            } else {
+                (
+                    "blocked",
+                    true,
+                    format!("Task `{task_id}` is `{}`.", task.status),
+                    Some(lifecycle_recovery_tool(&task.status)),
+                    Some(integration_prerequisite_guidance(&task.status).to_string()),
+                )
+            };
+            gates.push(integration_gate(
+                "task_lifecycle",
+                status,
+                blocking,
+                summary,
+                tool,
+                next_action,
+            ));
+            Some(task)
+        }
+        Err(WorkspaceLoadError::Missing) => {
+            gates.push(integration_gate(
+                "task_lifecycle",
+                "blocked",
+                true,
+                format!("Task `{task_id}` was not found."),
+                Some("dispatch_ready_work"),
+                Some("Dispatch backlog work before inspecting integration gates.".to_string()),
+            ));
+            None
+        }
+        Err(WorkspaceLoadError::Backend(error)) => {
+            return ActionResult::failed(action, "Could not inspect task.", error)
+        }
+    };
+
+    let source_item_id = task.as_ref().map(|task| task.source_item_id.clone());
+    let worktree = if task.is_some() {
+        match recorded_worktree::<IntegrationGateData>(action, &state, &root, &task_id) {
+            Ok(worktree) => {
+                gates.push(integration_gate(
+                    "worktree",
+                    "ready",
+                    false,
+                    format!(
+                        "Task `{task_id}` has recorded worktree `{}`.",
+                        worktree.path.display()
+                    ),
+                    None,
+                    None,
+                ));
+                Some(worktree)
+            }
+            Err(result) => {
+                gates.push(integration_gate(
+                    "worktree",
+                    "blocked",
+                    true,
+                    result.summary,
+                    Some("worktree_create"),
+                    result.next_action,
+                ));
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(operation) = in_progress_git_operation(&root) {
+        gates.push(integration_gate(
+            "git_operation",
+            "blocked",
+            true,
+            format!("Git operation `{operation}` is already in progress."),
+            None,
+            Some(
+                "Finish or abort the current Git operation before integrating worker results."
+                    .to_string(),
+            ),
+        ));
+    } else {
+        gates.push(integration_gate(
+            "git_operation",
+            "ready",
+            false,
+            "No in-progress Git operation was detected.".to_string(),
+            None,
+            None,
+        ));
+    }
+
+    if config.require_clean_manager_workspace {
+        let readiness = inspect_git_readiness(&root, true);
+        match readiness.status {
+            GitReadinessStatus::Ready => gates.push(integration_gate(
+                "manager_workspace",
+                "ready",
+                false,
+                readiness.summary,
+                None,
+                None,
+            )),
+            GitReadinessStatus::Dirty => gates.push(integration_gate(
+                "manager_workspace",
+                "blocked",
+                true,
+                readiness.summary,
+                None,
+                readiness.next_action,
+            )),
+            _ => gates.push(integration_gate(
+                "manager_workspace",
+                "blocked",
+                true,
+                readiness.summary,
+                Some("doctor_snapshot"),
+                readiness.next_action.or(readiness.details),
+            )),
+        }
+    } else {
+        gates.push(integration_gate(
+            "manager_workspace",
+            "ready",
+            false,
+            "Clean manager workspace is not required by workflow policy.".to_string(),
+            None,
+            None,
+        ));
+    }
+
+    match latest_verification_summary(&state, &task_id) {
+        Some(summary) => gates.push(integration_gate(
+            "verification",
+            "ready",
+            false,
+            format!("Verification evidence is recorded: {summary}"),
+            None,
+            None,
+        )),
+        None if config.require_verification_evidence => gates.push(integration_gate(
+            "verification",
+            "blocked",
+            true,
+            format!("Task `{task_id}` has no verification evidence."),
+            Some("record_verification_evidence"),
+            Some(
+                "Run verification with run_task_verification or record verification evidence before integrating, or retry integration with allow_unverified=true for low-risk work."
+                    .to_string(),
+            ),
+        )),
+        None => gates.push(integration_gate(
+            "verification",
+            "warning",
+            false,
+            "Verification evidence is not required and was not recorded.".to_string(),
+            Some("record_verification_evidence"),
+            Some("Record verification evidence when useful before integrating.".to_string()),
+        )),
+    }
+
+    if let Some(source_item_id) = source_item_id.as_ref() {
+        match findings::validate_findings(
+            default_root,
+            ValidateFindingsParams {
+                root: Some(root_string.clone()),
+                source_item_id: Some(source_item_id.clone()),
+                source_task_id: Some(task_id.clone()),
+            },
+        ) {
+            ActionResult {
+                status: ActionStatus::Completed,
+                ..
+            } => gates.push(integration_gate(
+                "findings",
+                "ready",
+                false,
+                "No open required findings block integration.".to_string(),
+                None,
+                None,
+            )),
+            ActionResult {
+                status: ActionStatus::Failed,
+                data: Some(data),
+                error,
+                ..
+            } => gates.push(integration_gate(
+                "findings",
+                "blocked",
+                true,
+                format!(
+                    "{} required finding(s) still need disposition.",
+                    data.unresolved_required_count
+                ),
+                Some("update_finding_disposition"),
+                Some(error.unwrap_or_else(|| {
+                    "Accept, defer, resolve, reject, or mark required findings as duplicate before integrating."
+                        .to_string()
+                })),
+            )),
+            ActionResult { summary, error, .. } => gates.push(integration_gate(
+                "findings",
+                "blocked",
+                true,
+                format!("Could not validate findings: {}", error.unwrap_or(summary)),
+                Some("validate_findings"),
+                Some("Inspect findings before integrating worker results.".to_string()),
+            )),
+        }
+    } else {
+        gates.push(integration_gate(
+            "findings",
+            "blocked",
+            true,
+            "Task source item is unknown, so required findings cannot be checked.".to_string(),
+            Some("inspect_task"),
+            Some("Inspect or recreate the task before integrating worker results.".to_string()),
+        ));
+    }
+
+    if let Some(worktree) = worktree.as_ref() {
+        let dirty = match run_git(
+            &worktree.path,
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+        ) {
+            Ok(status) => !status.trim().is_empty(),
+            Err(error) => {
+                gates.push(integration_gate(
+                    "branch_changes",
+                    "blocked",
+                    true,
+                    format!("Could not inspect worker worktree: {error}"),
+                    Some("worktree_status"),
+                    Some("Inspect the task worktree before integrating.".to_string()),
+                ));
+                false
+            }
+        };
+        if !gates.iter().any(|gate| gate.name == "branch_changes") {
+            match branch_ahead_count(&root, &worktree.base_ref, &worktree.branch) {
+                Ok(ahead) if dirty || ahead > 0 => gates.push(integration_gate(
+                    "branch_changes",
+                    "ready",
+                    false,
+                    if dirty {
+                        "Worker worktree has local changes ready to commit during integration."
+                            .to_string()
+                    } else {
+                        format!("Worker branch is {ahead} commit(s) ahead of `{}`.", worktree.base_ref)
+                    },
+                    Some("worktree_diff"),
+                    None,
+                )),
+                Ok(_) => gates.push(integration_gate(
+                    "branch_changes",
+                    "blocked",
+                    true,
+                    format!("Task `{task_id}` branch has no changes to integrate."),
+                    Some("worktree_diff"),
+                    Some("Inspect the task worktree and ensure edits were made in the task branch, not the manager workspace.".to_string()),
+                )),
+                Err(error) => gates.push(integration_gate(
+                    "branch_changes",
+                    "blocked",
+                    true,
+                    format!("Could not inspect task branch: {error}"),
+                    Some("worktree_status"),
+                    Some("Inspect the task worktree before integrating.".to_string()),
+                )),
+            }
+        }
+    }
+
+    let ok = gates.iter().all(|gate| !gate.blocking);
+    let next_action = gates
+        .iter()
+        .find(|gate| gate.blocking)
+        .and_then(|gate| gate.next_action.clone())
+        .unwrap_or_else(|| format!("Task `{task_id}` is ready for integrate_worker_result."));
+    let summary = if ok {
+        format!("Task `{task_id}` is ready for integration.")
+    } else {
+        format!(
+            "Task `{task_id}` has {} blocking integration gate(s).",
+            gates.iter().filter(|gate| gate.blocking).count()
+        )
+    };
+
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Completed,
+        summary,
+        next_action: Some(next_action.clone()),
+        recovery_action: None,
+        data: Some(IntegrationGateData {
+            root: root_string,
+            task_id,
+            source_item_id,
+            ok,
+            gates,
+            next_action,
+        }),
+        error: None,
+    }
+}
+
+fn integration_gate(
+    name: &str,
+    status: &str,
+    blocking: bool,
+    summary: String,
+    recommended_tool: Option<&str>,
+    next_action: Option<String>,
+) -> IntegrationGate {
+    IntegrationGate {
+        name: name.to_string(),
+        status: status.to_string(),
+        blocking,
+        summary,
+        recommended_tool: recommended_tool.map(str::to_string),
+        next_action,
+    }
+}
+
+fn lifecycle_recovery_tool(task_status: &str) -> &'static str {
+    match task_status {
+        "queued" => "prepare_work",
+        "claimed" | "running" => "finish_work",
+        "failed" | "cancelled" => "inspect_task_events",
+        _ => "inspect_task",
     }
 }
 
@@ -1059,6 +1483,58 @@ fn merge_committed_files(files: &mut Vec<WorktreeDiffFile>, committed_files: &[C
     }
 }
 
+fn untracked_file_diff(worktree: &Path, files: &[WorktreeDiffFile]) -> String {
+    let sections = files
+        .iter()
+        .filter(|file| file.status == "??")
+        .take(8)
+        .filter_map(|file| untracked_file_diff_section(worktree, &file.path))
+        .collect::<Vec<_>>();
+    if sections.is_empty() {
+        String::new()
+    } else {
+        limit_output(&sections.join("\n"))
+    }
+}
+
+fn untracked_file_diff_section(worktree: &Path, relative_path: &str) -> Option<String> {
+    let relative = Path::new(relative_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    let path = worktree.join(relative);
+    let canonical_worktree = fs::canonicalize(worktree).ok()?;
+    let canonical_path = fs::canonicalize(&path).ok()?;
+    if !canonical_path.starts_with(&canonical_worktree) || !canonical_path.is_file() {
+        return None;
+    }
+    let mut file = fs::File::open(&canonical_path).ok()?;
+    let mut bytes = Vec::new();
+    let mut limited = file.by_ref().take(OUTPUT_LIMIT as u64 + 1);
+    limited.read_to_end(&mut bytes).ok()?;
+    let truncated = bytes.len() > OUTPUT_LIMIT;
+    if truncated {
+        bytes.truncate(OUTPUT_LIMIT);
+    }
+    let body = String::from_utf8_lossy(&bytes);
+    let mut section = format!(
+        "diff --git a/{relative_path} b/{relative_path}\nnew file mode 100644\n--- /dev/null\n+++ b/{relative_path}\n@@\n"
+    );
+    for line in body.lines() {
+        section.push('+');
+        section.push_str(line);
+        section.push('\n');
+    }
+    if truncated {
+        section.push_str("+...\n");
+    }
+    Some(section)
+}
+
 fn normalize_changed_file_status(status: &str) -> String {
     if status.starts_with('A') {
         "A".to_string()
@@ -1199,6 +1675,7 @@ fn existing_workspace_data(
         } else {
             Some("Use the persisted worktree for task execution.".to_string())
         },
+        recovery_action: None,
         data: Some(WorktreeData {
             root: root.display().to_string(),
             task_id: task.id.clone(),
@@ -1507,9 +1984,11 @@ mod tests {
     use crate::{
         events::events_replay,
         evidence::{list_evidence, record_evidence},
+        findings::{record_finding, update_finding_disposition},
         models::{
             ClaimNextTaskParams, EventsReplayParams, IntegrateWorkerResultParams,
-            ListEvidenceParams, RecordEvidenceParams,
+            ListEvidenceParams, RecordEvidenceParams, RecordFindingParams,
+            UpdateFindingDispositionParams,
         },
         tasks::{create_task_record, inspect_task_events, NewTask},
     };
@@ -1863,6 +2342,8 @@ mod tests {
             "files: {:?}",
             diff_data.files
         );
+        assert!(diff_data.diff.contains("diff --git a/untracked.txt"));
+        assert!(diff_data.diff.contains("+new"));
 
         let refused = worktree_cleanup(
             project.path(),
@@ -1973,6 +2454,45 @@ mod tests {
             .events
             .iter()
             .any(|event| event.event_type == "worker_result_integrated"));
+    }
+
+    #[test]
+    fn refuses_integration_with_unresolved_required_findings() {
+        let project = git_project();
+        let (task_id, _worktree) = completed_task_with_change(&project, "# Integrated\n");
+        let finding = record_finding(
+            project.path(),
+            RecordFindingParams {
+                root: None,
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: Some(task_id.clone()),
+                source_finding_ref: None,
+                title: "Missing product acceptance".to_string(),
+                summary: "A required follow-up must be dispositioned before integration."
+                    .to_string(),
+                severity: Some("medium".to_string()),
+                required: Some(true),
+                evidence_refs: Vec::new(),
+                metadata: BTreeMap::new(),
+            },
+        );
+        assert!(matches!(finding.status, ActionStatus::Completed));
+
+        let result = integrate_worker_result(
+            project.path(),
+            IntegrateWorkerResultParams {
+                root: None,
+                task_id,
+                strategy: None,
+                allow_unverified: None,
+                cleanup_after: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Skipped));
+        assert!(result.summary.contains("open required finding"));
+        assert!(result.next_action.expect("next action").contains("Accept"));
     }
 
     #[test]
@@ -2314,6 +2834,126 @@ mod tests {
             .next_action
             .expect("next action")
             .contains("Record verification evidence"));
+    }
+
+    #[test]
+    fn integration_gates_report_ready_task() {
+        let project = git_project();
+        let (task_id, _worktree) = completed_task_with_change(&project, "# Integrated\n");
+
+        let result = inspect_integration_gates(
+            project.path(),
+            InspectIntegrationGatesParams {
+                root: None,
+                task_id,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let data = result.data.expect("gate data");
+        assert!(data.ok);
+        assert!(data
+            .gates
+            .iter()
+            .any(|gate| gate.name == "branch_changes" && !gate.blocking));
+    }
+
+    #[test]
+    fn integration_gates_report_missing_verification_evidence() {
+        let project = git_project();
+        fs::write(
+            project.path().join("platy.yaml"),
+            "workflow:\n  integration:\n    require_verification_evidence: true\n",
+        )
+        .expect("config");
+        run_git(project.path(), &["add", "platy.yaml"]).expect("git add config");
+        run_git(
+            project.path(),
+            &["commit", "-m", "Require verification evidence"],
+        )
+        .expect("git commit config");
+        let (task_id, _worktree) =
+            completed_task_with_change_without_evidence(&project, "# Changed\n");
+
+        let result = inspect_integration_gates(
+            project.path(),
+            InspectIntegrationGatesParams {
+                root: None,
+                task_id,
+            },
+        );
+
+        let data = result.data.expect("gate data");
+        assert!(!data.ok);
+        let verification = data
+            .gates
+            .iter()
+            .find(|gate| gate.name == "verification")
+            .expect("verification gate");
+        assert!(verification.blocking);
+        assert_eq!(
+            verification.recommended_tool.as_deref(),
+            Some("record_verification_evidence")
+        );
+    }
+
+    #[test]
+    fn accepted_required_finding_does_not_block_integration_gate() {
+        let project = git_project();
+        let (task_id, _worktree) = completed_task_with_change(&project, "# Integrated\n");
+        let recorded = record_finding(
+            project.path(),
+            RecordFindingParams {
+                root: None,
+                id: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: Some(task_id.clone()),
+                source_finding_ref: None,
+                title: "Track follow-up".to_string(),
+                summary: "A required finding that can be accepted.".to_string(),
+                severity: Some("medium".to_string()),
+                required: Some(true),
+                evidence_refs: Vec::new(),
+                metadata: BTreeMap::new(),
+            },
+        );
+        let finding = recorded.data.expect("finding").finding;
+
+        let blocked = inspect_integration_gates(
+            project.path(),
+            InspectIntegrationGatesParams {
+                root: None,
+                task_id: task_id.clone(),
+            },
+        )
+        .data
+        .expect("blocked gates");
+        assert!(!blocked.ok);
+
+        let updated = update_finding_disposition(
+            project.path(),
+            UpdateFindingDispositionParams {
+                root: None,
+                finding_id: finding.id,
+                status: "accepted".to_string(),
+                owner: Some("manager".to_string()),
+                disposition_reason: Some("accepted as explicit follow-up".to_string()),
+                evidence_refs: Vec::new(),
+                metadata: BTreeMap::new(),
+            },
+        );
+        assert!(matches!(updated.status, ActionStatus::Completed));
+
+        let ready = inspect_integration_gates(
+            project.path(),
+            InspectIntegrationGatesParams {
+                root: None,
+                task_id,
+            },
+        )
+        .data
+        .expect("ready gates");
+        assert!(ready.ok);
     }
 
     #[test]

@@ -3,15 +3,15 @@ version: 1
 mode: full
 requirements:
 - id: R1
-  text: Dispatch exposes an explicit execution_mode so hosts choose between profiled workers, manual handoff, and automatic selection instead of relying on profile side effects.
+  text: Dispatch exposes an explicit execution_mode so hosts choose host-managed handoff behavior without relying on local agent setup side effects.
 - id: R2
   text: Manual handoff dispatch prepares the normal task, assignment, worktree, and bundle while recording externally managed execution metadata.
 - id: R3
-  text: Default dispatch without ready profiles fails or skips with concrete recovery guidance, and evidence stays tied to valid lifecycle tasks.
+  text: Default dispatch creates lifecycle-safe host-managed handoff state, and evidence stays tied to valid lifecycle tasks.
 - id: R4
   text: Reconciliation reports evidence attached to tasks that never reached a valid lifecycle state.
 design:
-  summary: Extend dispatch_ready_work with a small execution-mode enum and keep worker launch concerns outside the MCP server. Profiled mode requires a ready worker profile before creating work. Manual handoff mode intentionally bypasses profile readiness but records the assignment as externally managed so hosts know to start, complete, verify, and integrate through the normal lifecycle.
+  summary: Extend dispatch_ready_work with a small execution-mode enum and keep worker launch concerns outside the MCP server. Host-managed handoff records the assignment as externally managed so hosts know to start, complete, verify, and integrate through the normal lifecycle.
   owned_surfaces:
   - src/dispatch.rs
   - src/assignments
@@ -24,7 +24,7 @@ design:
 tasks:
 - id: MCP-071-T01
   title: Add dispatch execution mode
-  goal: Add a typed dispatch execution_mode parameter and route auto, profiled_worker, and manual_handoff consistently.
+  goal: Add a typed dispatch execution_mode parameter and route auto and manual_handoff consistently.
   requirement_refs:
   - R1
   - R3
@@ -33,13 +33,12 @@ tasks:
   - src/dispatch.rs
   - src/models.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test dispatch::tests
   acceptance:
-  - Default auto mode does not silently create lifecycle work when no ready worker profile exists.
-  - manual_handoff can dispatch and prepare without a worker profile.
-  - profiled_worker requires a ready worker profile.
+  - Default auto mode creates host-managed lifecycle work instead of editing the manager workspace.
+  - manual_handoff can dispatch and prepare without local worker configuration.
+  - Removed local worker modes are rejected as invalid input.
   notes:
   - Keep legacy prepare_handoffs and auto_start semantics compatible where possible.
 - id: MCP-071-T02
@@ -54,7 +53,6 @@ tasks:
   - src/state
   - src/models.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test assignments::tests
   - cargo test dispatch::tests
@@ -76,7 +74,6 @@ tasks:
   - src/reconcile.rs
   - src/state
   - tests
-  suggested_worker: coder
   verification:
   - cargo test reconcile::tests
   acceptance:
@@ -97,7 +94,6 @@ tasks:
   owned_surfaces:
   - docs/workflow.md
   - tests/stdio_protocol.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

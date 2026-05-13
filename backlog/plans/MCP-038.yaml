@@ -30,7 +30,6 @@ tasks:
   - src/integrations
   - src/models.rs
   - src/server.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -51,7 +50,6 @@ tasks:
   - src/events.rs
   - src/models.rs
   - tests/stdio_protocol.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -68,7 +66,6 @@ tasks:
   - MCP-038-T02
   owned_surfaces:
   - docs/tools.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

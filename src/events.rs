@@ -80,6 +80,7 @@ pub fn events_replay(
             status: ActionStatus::Skipped,
             summary: "No events matched the replay filters.".to_string(),
             next_action: Some("Run work or create approvals before replaying events.".to_string()),
+            recovery_action: None,
             data: Some(data),
             error: None,
         }

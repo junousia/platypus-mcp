@@ -28,7 +28,6 @@ tasks:
   owned_surfaces:
   - src/dispatch.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test dispatch::tests
   acceptance:
@@ -48,7 +47,6 @@ tasks:
   - src/models.rs
   - src/server.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test dispatch::tests
   - cargo test server::tests::tool_router_exposes_basic_tool_set
@@ -69,7 +67,6 @@ tasks:
   - docs/tools.md
   - docs/workflow.md
   - src/host_guidance.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

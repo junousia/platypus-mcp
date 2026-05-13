@@ -53,6 +53,7 @@ pub fn capability_probe(
             next_action: Some(
                 "Inspect failed checks before enabling this backend for runtime state.".to_string(),
             ),
+            recovery_action: None,
             data: Some(data),
             error: Some("one or more storage capability checks failed".to_string()),
         }

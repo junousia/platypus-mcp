@@ -1,6 +1,5 @@
 mod closure;
 mod create;
-mod draft;
 mod epic;
 mod filesystem;
 mod graph;
@@ -8,22 +7,45 @@ mod parse;
 mod plan;
 mod status;
 mod types;
+mod update;
 mod validate;
 
 pub use create::{create_backlog_item, create_backlog_items};
-pub use draft::{
-    draft_backlog_items, draft_backlog_items_from_sample, draft_backlog_items_sampling_prompt,
-};
 pub use epic::{create_epic, list_epics};
 pub use graph::inspect_dependency_graph;
-pub use plan::{
-    draft_task_plan, draft_task_plan_from_sample, draft_task_plan_sampling_prompt,
-    inspect_task_plan, list_task_plans, validate_task_plan, write_task_plan,
-};
+pub use plan::{inspect_task_plan, list_task_plans, validate_task_plan, write_task_plan};
 pub use status::{inspect_backlog_inventory, inspect_status, list_backlog};
+pub use update::update_backlog_item;
 pub use validate::validate_backlog;
 
 pub(crate) use closure::closed_item_ids;
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BacklogItemExecutionPolicy {
+    pub execution_path: Option<String>,
+    pub planning_gate: Option<String>,
+}
+
+pub(crate) fn backlog_item_execution_policy(
+    default_root: &std::path::Path,
+    root: Option<&str>,
+    item_id: &str,
+) -> Result<BacklogItemExecutionPolicy, String> {
+    let root = filesystem::resolve_root(default_root, root)?;
+    let validation = validate::validate_backlog_at_root(&root, true);
+    if !validation.ok {
+        return Err(validation.errors.join("\n"));
+    }
+    let item = validation
+        .items
+        .iter()
+        .find(|item| item.frontmatter.id == item_id)
+        .ok_or_else(|| format!("backlog item `{item_id}` was not found"))?;
+    Ok(BacklogItemExecutionPolicy {
+        execution_path: item.frontmatter.execution_path.clone(),
+        planning_gate: item.frontmatter.planning_gate.clone(),
+    })
+}
 
 pub(crate) fn resolve_backlog_root(
     default_root: &std::path::Path,
@@ -51,6 +73,8 @@ pub(crate) fn external_ref_keys(
 pub(crate) struct BacklogItemSnapshot {
     pub id: String,
     pub title: String,
+    pub path: std::path::PathBuf,
+    pub sections: Vec<String>,
     pub external_refs: Vec<crate::models::ExternalRef>,
 }
 
@@ -74,6 +98,8 @@ pub(crate) fn backlog_item_snapshot(
         BacklogItemSnapshot {
             id: item.frontmatter.id.clone(),
             title: item.frontmatter.title.clone(),
+            path: item.path.clone(),
+            sections: item.sections.iter().cloned().collect(),
             external_refs: item.frontmatter.external_refs.clone(),
         },
     ))
@@ -84,9 +110,8 @@ mod tests {
     use super::*;
     use crate::models::{
         ActionStatus, CreateBacklogItemParams, CreateBacklogItemsEntry, CreateBacklogItemsParams,
-        CreateEpicParams, DraftBacklogItemsParams, PlannedTask, RootParams, TaskPlanDesign,
-        TaskPlanFile, TaskPlanItemParams, TaskPlanQueryParams, TaskPlanRequirement,
-        WriteTaskPlanParams,
+        CreateEpicParams, PlannedTask, RootParams, TaskPlanDesign, TaskPlanFile,
+        TaskPlanQueryParams, TaskPlanRequirement, UpdateBacklogItemParams, WriteTaskPlanParams,
     };
     use std::{fs, path::Path, process::Command};
     use tempfile::TempDir;
@@ -109,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn inspect_status_reports_agent_profile_readiness() {
+    fn inspect_status_reports_project_readiness_without_local_worker_config() {
         let temp = project_fixture();
         write_item(temp.path(), "PROJ-001", "First task", "P1", &[]);
 
@@ -117,13 +142,8 @@ mod tests {
         let data = status.data.expect("status");
 
         assert_eq!(data.runnable_backlog_items, 1);
-        assert_eq!(data.agent_profiles, 0);
-        assert!(!data.manager_ready);
-        assert!(!data.worker_ready);
-        assert!(data
-            .agent_profile_warnings
-            .iter()
-            .any(|warning| warning.contains("No worker profile")));
+        assert!(data.tasks_supported);
+        assert!(data.findings_supported);
     }
 
     #[test]
@@ -431,7 +451,6 @@ mod tests {
                 area: Some("tooling".to_string()),
                 epic: Some("general".to_string()),
                 depends_on: vec!["PROJ-001".to_string()],
-                suggested_worker: Some("coder".to_string()),
                 owned_surfaces: vec!["src".to_string()],
                 external_refs: vec![crate::models::ExternalRef {
                     provider: "github".to_string(),
@@ -442,6 +461,8 @@ mod tests {
                     imported_at: None,
                     source_hash: Some("sha256:test".to_string()),
                 }],
+                execution_path: None,
+                planning_gate: None,
                 goal: "Create the feature.".to_string(),
                 implementation_contract: Some("Implement the scoped change.".to_string()),
                 contract: None,
@@ -490,9 +511,10 @@ mod tests {
                 area: None,
                 epic: None,
                 depends_on: Vec::new(),
-                suggested_worker: None,
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: "Create a new item.".to_string(),
                 implementation_contract: None,
                 contract: None,
@@ -526,9 +548,10 @@ mod tests {
                 area: None,
                 epic: None,
                 depends_on: Vec::new(),
-                suggested_worker: None,
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: "Scaffold frontend".to_string(),
                 implementation_contract: None,
                 contract: None,
@@ -558,9 +581,10 @@ mod tests {
                 area: None,
                 epic: None,
                 depends_on: Vec::new(),
-                suggested_worker: None,
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: String::new(),
                 implementation_contract: None,
                 contract: None,
@@ -596,9 +620,10 @@ mod tests {
                 area: Some("planning".to_string()),
                 epic: Some("general".to_string()),
                 depends_on: Vec::new(),
-                suggested_worker: Some("coder".to_string()),
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: "Seed initial backlog items.".to_string(),
                 implementation_contract: Some("Create valid backlog items.".to_string()),
                 contract: None,
@@ -646,9 +671,10 @@ mod tests {
                 area: Some("general".to_string()),
                 epic: Some("general".to_string()),
                 depends_on: Vec::new(),
-                suggested_worker: Some("coder".to_string()),
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: "Goal.".to_string(),
                 implementation_contract: Some("Contract.".to_string()),
                 contract: None,
@@ -679,9 +705,10 @@ mod tests {
                 area: Some("general".to_string()),
                 epic: Some("general".to_string()),
                 depends_on: Vec::new(),
-                suggested_worker: Some("coder".to_string()),
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: "Goal.".to_string(),
                 implementation_contract: Some("Contract.".to_string()),
                 contract: None,
@@ -705,9 +732,10 @@ mod tests {
                 area: Some("general".to_string()),
                 epic: Some("general".to_string()),
                 depends_on: Vec::new(),
-                suggested_worker: Some("coder".to_string()),
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: String::new(),
                 implementation_contract: None,
                 contract: None,
@@ -739,9 +767,10 @@ mod tests {
                 area: Some("general".to_string()),
                 epic: Some("general".to_string()),
                 depends_on: Vec::new(),
-                suggested_worker: Some("coder".to_string()),
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: "Goal.".to_string(),
                 implementation_contract: Some("Contract.".to_string()),
                 contract: None,
@@ -773,9 +802,10 @@ mod tests {
                 area: Some("general".to_string()),
                 epic: Some("webapp".to_string()),
                 depends_on: Vec::new(),
-                suggested_worker: Some("coder".to_string()),
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: "Goal.".to_string(),
                 implementation_contract: Some("Contract.".to_string()),
                 contract: None,
@@ -807,9 +837,10 @@ mod tests {
                 area: Some("general".to_string()),
                 epic: Some("../../README".to_string()),
                 depends_on: Vec::new(),
-                suggested_worker: Some("coder".to_string()),
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: "Goal.".to_string(),
                 implementation_contract: Some("Contract.".to_string()),
                 contract: None,
@@ -833,9 +864,10 @@ mod tests {
                 area: Some("general".to_string()),
                 epic: Some("general".to_string()),
                 depends_on: vec!["PROJ-999".to_string()],
-                suggested_worker: Some("coder".to_string()),
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: "Goal.".to_string(),
                 implementation_contract: Some("Contract.".to_string()),
                 contract: None,
@@ -872,9 +904,10 @@ mod tests {
                 area: Some("general".to_string()),
                 epic: Some("general".to_string()),
                 depends_on: Vec::new(),
-                suggested_worker: Some("coder".to_string()),
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: "Goal.".to_string(),
                 implementation_contract: Some("Contract.".to_string()),
                 contract: None,
@@ -915,9 +948,10 @@ mod tests {
                 area: Some("general".to_string()),
                 epic: Some("general".to_string()),
                 depends_on: Vec::new(),
-                suggested_worker: Some("coder".to_string()),
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
                 goal: "Goal.".to_string(),
                 implementation_contract: Some("Contract.".to_string()),
                 contract: None,
@@ -1163,84 +1197,40 @@ mod tests {
     }
 
     #[test]
-    fn draft_backlog_items_skips_without_sampling() {
-        let result = draft_backlog_items(DraftBacklogItemsParams {
-            goal: "Build MCP tools".to_string(),
-            suggested_worker: Some("coder".to_string()),
-            owned_surfaces: vec!["src".to_string()],
-            verification_command: vec!["cargo".to_string(), "test".to_string()],
-        });
-
-        assert!(matches!(result.status, ActionStatus::Skipped));
-        let drafts = result.data.unwrap().drafts;
-        assert!(drafts.is_empty());
-    }
-
-    #[test]
-    fn sampled_task_plan_writes_and_validates_strict_task_plan() {
+    fn write_task_plan_writes_and_validates_strict_task_plan() {
         let temp = project_fixture();
         write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);
-
-        let drafted = draft_task_plan(
-            temp.path(),
-            crate::models::DraftTaskPlanParams {
-                root: Some(root_arg(temp.path())),
-                item_id: "PROJ-001".to_string(),
-            },
-        );
-        assert!(matches!(drafted.status, ActionStatus::Completed));
-        let starter = drafted.data.expect("starter plan").plan;
-        assert_eq!(starter.item_id, "PROJ-001");
-        assert_eq!(starter.mode, "standard");
-        assert_eq!(starter.tasks[0].id, "PROJ-001-T001");
-        assert!(starter.tasks[0].verification.is_empty());
-
-        let sampled = draft_task_plan_from_sample(
-            temp.path(),
-            &crate::models::DraftTaskPlanParams {
-                root: Some(root_arg(temp.path())),
-                item_id: "PROJ-001".to_string(),
-            },
-            r#"{
-              "plan": {
-                "item_id": "PROJ-001",
-                "version": 1,
-                "mode": "standard",
-                "requirements": [
-                  { "id": "R1", "text": "Deliver the backlog item." }
-                ],
-                "design": {
-                  "summary": "Implement a focused task planning slice.",
-                  "owned_surfaces": ["README.md"],
-                  "notes": null
-                },
-                "tasks": [
-                  {
-                    "id": "PROJ-001-T01",
-                    "title": "Implement task planning",
-                    "goal": "Deliver concrete task planning behavior.",
-                    "requirement_refs": ["R1"],
-                    "depends_on": [],
-                    "owned_surfaces": ["README.md"],
-                    "suggested_worker": "coder",
-                    "verification": ["make check"],
-                    "acceptance": ["Task planning behavior is concrete."],
-                    "notes": null
-                  }
-                ]
-              }
-            }"#,
-        );
-        assert!(matches!(sampled.status, ActionStatus::Completed));
-        let plan = sampled.data.unwrap().plan;
-        assert_eq!(plan.tasks[0].id, "PROJ-001-T01");
 
         let written = write_task_plan(
             temp.path(),
             WriteTaskPlanParams {
                 root: Some(root_arg(temp.path())),
                 item_id: "PROJ-001".to_string(),
-                plan,
+                plan: TaskPlanFile {
+                    item_id: "PROJ-001".to_string(),
+                    version: 1,
+                    mode: "standard".to_string(),
+                    requirements: vec![TaskPlanRequirement {
+                        id: "R1".to_string(),
+                        text: "Deliver the backlog item.".to_string(),
+                    }],
+                    design: TaskPlanDesign {
+                        summary: "Implement a focused task planning slice.".to_string(),
+                        owned_surfaces: vec!["README.md".to_string()],
+                        notes: None,
+                    },
+                    tasks: vec![PlannedTask {
+                        id: "PROJ-001-T001".to_string(),
+                        title: "Implement task planning".to_string(),
+                        goal: "Deliver concrete task planning behavior.".to_string(),
+                        requirement_refs: vec!["R1".to_string()],
+                        depends_on: Vec::new(),
+                        owned_surfaces: vec!["README.md".to_string()],
+                        verification: vec!["make check".to_string()],
+                        acceptance: vec!["Task planning behavior is concrete.".to_string()],
+                        notes: None,
+                    }],
+                },
                 overwrite: None,
             },
         );
@@ -1259,7 +1249,7 @@ mod tests {
     }
 
     #[test]
-    fn write_task_plan_accepts_goal_mode_aliases_and_stores_canonical_mode() {
+    fn write_task_plan_rejects_goal_workflow_mode_aliases() {
         let temp = project_fixture();
         write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);
 
@@ -1288,7 +1278,6 @@ mod tests {
                         requirement_refs: vec!["R1".to_string()],
                         depends_on: Vec::new(),
                         owned_surfaces: vec!["README.md".to_string()],
-                        suggested_worker: Some("coder".to_string()),
                         verification: vec!["make check".to_string()],
                         acceptance: vec!["Direct task is complete.".to_string()],
                         notes: None,
@@ -1298,16 +1287,13 @@ mod tests {
             },
         );
 
-        assert!(matches!(written.status, ActionStatus::Completed));
-        assert!(written.data.as_ref().expect("write data").validation.ok);
-        let inspected = inspect_task_plan(
-            temp.path(),
-            TaskPlanItemParams {
-                root: Some(root_arg(temp.path())),
-                item_id: "PROJ-001".to_string(),
-            },
-        );
-        assert_eq!(inspected.data.expect("plan").plan.mode, "direct");
+        assert!(matches!(written.status, ActionStatus::Failed));
+        assert!(written
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("expected one of: minimal, standard, full"));
+        assert!(!temp.path().join("backlog/plans/PROJ-001.yaml").exists());
     }
 
     #[test]
@@ -1383,7 +1369,6 @@ tasks:
     depends_on: []
     owned_surfaces:
       - README.md
-    suggested_worker: coder
     verification:
       - make check
     acceptance:
@@ -1417,7 +1402,6 @@ tasks:
     requirement_refs:
       - R1
     depends_on: []
-    suggested_worker: coder
     verification:
       - make check
     acceptance:
@@ -1440,34 +1424,6 @@ tasks:
         let written =
             fs::read_to_string(temp.path().join("backlog/plans/PROJ-001.yaml")).expect("plan");
         assert!(written.contains("owned_surfaces:\n  - README.md"));
-    }
-
-    #[test]
-    fn sampled_backlog_items_reject_generic_fastapi_react_templates() {
-        let params = DraftBacklogItemsParams {
-            goal: "Build a simple FastAPI + React web app".to_string(),
-            suggested_worker: None,
-            owned_surfaces: Vec::new(),
-            verification_command: Vec::new(),
-        };
-        let result = draft_backlog_items_from_sample(
-            &params,
-            r#"[
-              {
-                "candidate_id": "draft-1",
-                "title": "Shape Build a simple FastAPI + React web app",
-                "objective": "Clarify scope.",
-                "type": "foundation",
-                "area": "planning",
-                "owned_surfaces": [],
-                "suggested_worker": "coder",
-                "verification_command": []
-              }
-            ]"#,
-        );
-
-        assert!(matches!(result.status, ActionStatus::Failed));
-        assert!(result.error.unwrap().contains("generic placeholder"));
     }
 
     #[cfg(unix)]
@@ -1505,7 +1461,6 @@ tasks:
     depends_on: []
     owned_surfaces:
       - README.md
-    suggested_worker: coder
     verification:
       - make check
     acceptance:
@@ -1553,7 +1508,6 @@ tasks:
     depends_on:
       - PROJ-001-T99
     owned_surfaces: []
-    suggested_worker: coder
     verification: []
     acceptance: []
 "#,
@@ -1600,7 +1554,6 @@ tasks:
     depends_on:
       - PROJ-001-T99
     owned_surfaces: []
-    suggested_worker: coder
     verification: []
     acceptance: []
 "#,
@@ -1691,6 +1644,209 @@ tasks:
         assert!(error.contains("circular task dependency"), "{error}");
     }
 
+    #[test]
+    fn update_backlog_item_updates_fields_sections_and_validates() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Old title", "P1", &[]);
+
+        let result = update_backlog_item(
+            temp.path(),
+            UpdateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "proj-001".to_string(),
+                title: Some("New title".to_string()),
+                priority: Some("P0".to_string()),
+                item_type: Some("docs".to_string()),
+                area: Some("documentation".to_string()),
+                epic: None,
+                depends_on: Some(Vec::new()),
+                owned_surfaces: Some(vec!["README.md".to_string()]),
+                external_refs: None,
+                execution_path: Some("worker_handoff".to_string()),
+                planning_gate: Some("task_plan".to_string()),
+                goal: Some("Update the backlog item safely.".to_string()),
+                implementation_contract: Some("Patch the item through the MCP tool.".to_string()),
+                contract: None,
+                acceptance: Some(vec!["Updated item validates.".to_string()]),
+                notes: Some("Reviewed from feedback.".to_string()),
+                force_closed: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let data = result.data.expect("data");
+        assert_eq!(data.item_id, "PROJ-001");
+        assert!(data.changed_fields.contains(&"title".to_string()));
+        assert!(data.changed_fields.contains(&"acceptance".to_string()));
+        let text = fs::read_to_string(temp.path().join("backlog/items/PROJ-001.md")).unwrap();
+        assert!(text.contains("title: New title"));
+        assert!(text.contains("priority: P0"));
+        assert!(text.contains("type: docs"));
+        assert!(text.contains("execution_path: worker_handoff"));
+        assert!(text.contains("planning_gate: task_plan"));
+        assert!(text.contains("## Notes\n\nReviewed from feedback."));
+        assert!(text.contains("- Updated item validates."));
+    }
+
+    #[test]
+    fn update_backlog_item_rejects_invalid_update_and_rolls_back() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Stable title", "P1", &[]);
+        let path = temp.path().join("backlog/items/PROJ-001.md");
+        let before = fs::read_to_string(&path).expect("before");
+
+        let result = update_backlog_item(
+            temp.path(),
+            UpdateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                title: Some("Changed title".to_string()),
+                priority: Some("P9".to_string()),
+                item_type: None,
+                area: None,
+                epic: None,
+                depends_on: None,
+                owned_surfaces: None,
+                external_refs: None,
+                execution_path: None,
+                planning_gate: None,
+                goal: None,
+                implementation_contract: None,
+                contract: None,
+                acceptance: None,
+                notes: None,
+                force_closed: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("invalid priority"));
+        assert_eq!(fs::read_to_string(path).expect("after"), before);
+    }
+
+    #[test]
+    fn update_backlog_item_rolls_back_unknown_dependency() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Stable title", "P1", &[]);
+        let path = temp.path().join("backlog/items/PROJ-001.md");
+        let before = fs::read_to_string(&path).expect("before");
+
+        let result = update_backlog_item(
+            temp.path(),
+            UpdateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                title: Some("Changed title".to_string()),
+                priority: None,
+                item_type: None,
+                area: None,
+                epic: None,
+                depends_on: Some(vec!["PROJ-999".to_string()]),
+                owned_surfaces: None,
+                external_refs: None,
+                execution_path: None,
+                planning_gate: None,
+                goal: None,
+                implementation_contract: None,
+                contract: None,
+                acceptance: None,
+                notes: None,
+                force_closed: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("unknown dependency `PROJ-999`"));
+        assert_eq!(fs::read_to_string(path).expect("after"), before);
+    }
+
+    #[test]
+    fn update_backlog_item_protects_closed_items_unless_forced() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Closed title", "P1", &[]);
+        git(temp.path(), &["init"]);
+        git(temp.path(), &["config", "user.name", "Platypus Test"]);
+        git(
+            temp.path(),
+            &["config", "user.email", "platypus@example.invalid"],
+        );
+        git(temp.path(), &["add", "--all"]);
+        git(
+            temp.path(),
+            &[
+                "commit",
+                "-m",
+                "Close item",
+                "-m",
+                "Platypus-Closes: PROJ-001",
+            ],
+        );
+
+        let blocked = update_backlog_item(
+            temp.path(),
+            UpdateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                title: Some("Blocked update".to_string()),
+                priority: None,
+                item_type: None,
+                area: None,
+                epic: None,
+                depends_on: None,
+                owned_surfaces: None,
+                external_refs: None,
+                execution_path: None,
+                planning_gate: None,
+                goal: None,
+                implementation_contract: None,
+                contract: None,
+                acceptance: None,
+                notes: None,
+                force_closed: None,
+            },
+        );
+        assert!(matches!(blocked.status, ActionStatus::Failed));
+        assert!(blocked
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("already closed"));
+
+        let forced = update_backlog_item(
+            temp.path(),
+            UpdateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                title: Some("Forced update".to_string()),
+                priority: None,
+                item_type: None,
+                area: None,
+                epic: None,
+                depends_on: None,
+                owned_surfaces: None,
+                external_refs: None,
+                execution_path: None,
+                planning_gate: None,
+                goal: None,
+                implementation_contract: None,
+                contract: None,
+                acceptance: None,
+                notes: None,
+                force_closed: Some(true),
+            },
+        );
+        assert!(matches!(forced.status, ActionStatus::Completed));
+        assert!(forced.data.unwrap().closed);
+    }
+
     fn project_fixture() -> TempDir {
         let temp = TempDir::new().expect("temp dir");
         fs::create_dir_all(temp.path().join("backlog/items")).expect("items dir");
@@ -1718,7 +1874,7 @@ tasks:
             )
         };
         let text = format!(
-            "---\nid: {id}\ntitle: {title}\npriority: {priority}\ntype: feature\narea: tooling\nepic: general\ndepends_on: {depends}\nsuggested_worker: coder\nowned_surfaces: []\n---\n\n# {id} {title}\n\n## Goal\n\nGoal.\n\n## Implementation Contract\n\nContract.\n\n## Acceptance\n\n- Done.\n"
+            "---\nid: {id}\ntitle: {title}\npriority: {priority}\ntype: feature\narea: tooling\nepic: general\ndepends_on: {depends}\nowned_surfaces: []\n---\n\n# {id} {title}\n\n## Goal\n\nGoal.\n\n## Implementation Contract\n\nContract.\n\n## Acceptance\n\n- Done.\n"
         );
         fs::write(root.join(format!("backlog/items/{id}.md")), text).expect("item");
     }
@@ -1740,9 +1896,10 @@ tasks:
             area: Some("general".to_string()),
             epic: Some("general".to_string()),
             depends_on: Vec::new(),
-            suggested_worker: Some("coder".to_string()),
             owned_surfaces: Vec::new(),
             external_refs: Vec::new(),
+            execution_path: None,
+            planning_gate: None,
             goal: format!("{title}."),
             implementation_contract: Some(format!("Implement {title}.")),
             contract: None,
@@ -1772,7 +1929,6 @@ tasks:
                 requirement_refs: vec!["R1".to_string()],
                 depends_on: Vec::new(),
                 owned_surfaces: vec!["README.md".to_string()],
-                suggested_worker: Some("coder".to_string()),
                 verification: vec!["make check".to_string()],
                 acceptance: vec!["Task is complete.".to_string()],
                 notes: None,

@@ -31,7 +31,6 @@ pub struct ExternalIntakeRequest {
     pub provider: String,
     pub records: Vec<ExternalWorkRecord>,
     pub existing_refs: BTreeSet<ExternalRefKey>,
-    pub suggested_worker: Option<String>,
     pub owned_surfaces: Vec<String>,
     pub verification_command: Vec<String>,
     pub limit: usize,
@@ -80,10 +79,6 @@ impl ExternalIntakeAdapter for HostProvidedIntakeAdapter {
             return Err(ExternalIntakeError::new("provider is required"));
         }
         let provider = clean_token("provider", &request.provider)?;
-        let worker = request
-            .suggested_worker
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| Some("coder".to_string()));
         let verification = if request.verification_command.is_empty() {
             vec!["make".to_string(), "check".to_string()]
         } else {
@@ -124,7 +119,6 @@ impl ExternalIntakeAdapter for HostProvidedIntakeAdapter {
                 item_type: type_from_labels(&record.labels).to_string(),
                 area: area_from_labels(&record.labels).to_string(),
                 owned_surfaces: request.owned_surfaces.clone(),
-                suggested_worker: worker.clone(),
                 verification_command: verification.clone(),
                 external_ref,
                 labels: record.labels,
@@ -176,7 +170,6 @@ pub fn draft_external_backlog_items(
         provider: params.provider.clone(),
         records: params.records,
         existing_refs,
-        suggested_worker: params.suggested_worker,
         owned_surfaces: params.owned_surfaces,
         verification_command: params.verification_command,
         limit: bounded_limit(params.limit),
@@ -208,6 +201,7 @@ pub fn draft_external_backlog_items(
             next_action: Some(
                 "Provide external records that have not already been imported.".to_string(),
             ),
+            recovery_action: None,
             data: Some(data),
             error: None,
         }
@@ -299,7 +293,6 @@ pub fn import_github_issues(
             root: params.root.clone(),
             provider: "github".to_string(),
             records,
-            suggested_worker: params.suggested_worker.clone(),
             owned_surfaces: params.owned_surfaces.clone(),
             verification_command: params.verification_command.clone(),
             limit: Some(limit),
@@ -340,9 +333,10 @@ pub fn import_github_issues(
                 area: Some(draft.area.clone()),
                 epic: Some("general".to_string()),
                 depends_on: Vec::new(),
-                suggested_worker: draft.suggested_worker.clone(),
                 owned_surfaces: draft.owned_surfaces.clone(),
                 external_refs: vec![draft.external_ref.clone()],
+                execution_path: None,
+                planning_gate: None,
                 goal: draft.objective.clone(),
                 implementation_contract: Some(format!(
                     "Implement the local backlog snapshot imported from GitHub issue `{}`. Keep execution decisions in this repository.",
@@ -400,6 +394,7 @@ pub fn import_github_issues(
             status: ActionStatus::Skipped,
             summary: "No GitHub issues were imported.".to_string(),
             next_action: Some("Inspect skipped issues or provide new issue records.".to_string()),
+            recovery_action: None,
             data: Some(data),
             error: None,
         }
@@ -592,7 +587,6 @@ mod tests {
                     },
                 ],
                 existing_refs: existing,
-                suggested_worker: Some("coder".to_string()),
                 owned_surfaces: vec!["docs".to_string()],
                 verification_command: vec!["make".to_string(), "check".to_string()],
                 limit: 10,

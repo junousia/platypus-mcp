@@ -27,7 +27,6 @@ tasks:
   depends_on: []
   owned_surfaces:
   - tests
-  suggested_worker: coder
   verification:
   - cargo test --test sql_isolation
   acceptance:
@@ -44,7 +43,6 @@ tasks:
   - MCP-049-T01
   owned_surfaces:
   - docs/storage.md
-  suggested_worker: coder
   verification:
   - cargo test --test sql_isolation
   acceptance:
@@ -64,7 +62,6 @@ tasks:
   owned_surfaces:
   - Makefile
   - tests
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

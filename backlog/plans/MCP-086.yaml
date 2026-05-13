@@ -1,0 +1,79 @@
+item_id: MCP-086
+version: 1
+mode: minimal
+requirements:
+- id: R1
+  text: Recovery tools explain what they check and whether they mutate state.
+- id: R2
+  text: Reconciliation failure modes are documented in tool descriptions and docs.
+- id: R3
+  text: Recovery next actions are concrete and executable.
+design:
+  summary: Improve recovery wording across tool annotations, result summaries, and docs without changing the recovery algorithms.
+  owned_surfaces:
+  - src/reconcile.rs
+  - src/project/doctor.rs
+  - src/host_guidance.rs
+  - src/models.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  notes: Keep read-only and mutating recovery paths distinct.
+tasks:
+- id: MCP-086-T001
+  title: Audit recovery tool wording
+  goal: Review reconcile_project, doctor_snapshot, inspect_integration_gates, and related recovery next actions for vague wording.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/reconcile.rs
+  - src/project/doctor.rs
+  - src/host_guidance.rs
+  verification:
+  - cargo check
+  acceptance:
+  - The audit identifies every vague recovery phrase to update.
+  notes: null
+- id: MCP-086-T002
+  title: Update descriptions and next actions
+  goal: Make recovery tools say what they inspect, what they mutate, and which follow-up tool to call.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-086-T001
+  owned_surfaces:
+  - src/reconcile.rs
+  - src/project/doctor.rs
+  - src/models.rs
+  - src/server.rs
+  verification:
+  - cargo test server::tests::tools_expose_schema_annotations_and_execution_hints
+  acceptance:
+  - Reconcile docs mention orphaned evidence, missing trailers, unintegrated tasks, unresolved findings, and stale lifecycle state.
+  - Read-only tools are labeled read-only.
+  - Mutating repair actions are not implied where none exist.
+  notes: null
+- id: MCP-086-T003
+  title: Document recovery playbook
+  goal: Add concise docs for common recovery scenarios and tie them to exact tools.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-086-T002
+  owned_surfaces:
+  - docs/tools.md
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  verification:
+  - make check
+  acceptance:
+  - Docs include exact recovery paths for dirty workspace, pending integration, unresolved findings, and orphaned evidence.
+  - Tests assert recovery descriptions remain present in public tool metadata.
+  notes: null

@@ -6,7 +6,6 @@ type: feature
 area: general
 epic: general
 depends_on: []
-suggested_worker: coder
 owned_surfaces: []
 ---
 

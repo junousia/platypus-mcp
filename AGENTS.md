@@ -53,10 +53,10 @@ If `cargo fmt` is unavailable, report that `rustfmt` is missing and still run
 - The MCP host (Codex, Claude, or another client) owns conversation and model
   turn lifecycle.
 - Mutating tools must be easy to identify from their name, schema, and result.
-- Tool responses should include `status`, `summary`, and `next_action` when the
-  caller needs a recovery path.
-- Sampling is optional. Do not make core project state transitions depend on
-  client-side sampling support.
+- Tool responses should include `status`, `summary`, `next_action` for normal
+  continuation, and `recovery_action` when the caller needs a recovery path.
+- Model judgment belongs to the MCP host. Do not expose pseudo-intelligent MCP
+  tools that hide model decisions behind deterministic-looking names.
 - Prefer stable tool names and versioned schemas over hidden behavior changes.
 
 ## Initial Tool Surface
@@ -67,7 +67,6 @@ The first production tool set should cover:
 - `init_project`
 - `list_backlog`
 - `validate_backlog`
-- `draft_backlog_items`
 - `create_backlog_item`
 - `dispatch_next_work`
 - `inspect_task_events`

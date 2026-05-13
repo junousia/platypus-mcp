@@ -103,35 +103,32 @@ pub enum EpicStatusSchema {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum GoalWorkflowModeSchema {
-    Auto,
-    DirectScaffold,
-    Hybrid,
-    PlatypusWorkflow,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum GoalPlanningIntentSchema {
-    Auto,
-    PlanningOnly,
-    ReadyToExecute,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
 pub enum ExecutionModeSchema {
     Auto,
-    ProfiledWorker,
     ManualHandoff,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskPlanModeSchema {
-    Direct,
+    Minimal,
     Standard,
     Full,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BacklogExecutionPathSchema {
+    DirectEdit,
+    WorkerHandoff,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningGateSchema {
+    None,
+    TaskPlan,
+    ApprovedTaskPlan,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -175,22 +172,6 @@ pub enum ApprovalStatusSchema {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum AgentRoleSchema {
-    Manager,
-    Worker,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentHarnessSchema {
-    Codex,
-    Claude,
-    Fake,
-    Custom,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
 pub enum WorkerTerminalStatusSchema {
     Completed,
     Failed,
@@ -216,6 +197,38 @@ pub enum HostActionKindSchema {
     IntegrateResult,
     InspectOrRecover,
     Done,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkQueueStateSchema {
+    Ready,
+    DirectReady,
+    PlanningBlocked,
+    ApprovalBlocked,
+    DependencyBlocked,
+    ConfigBlocked,
+    WorkspaceBlocked,
+    Active,
+    CompletedPendingIntegration,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkExecutionPathSchema {
+    DirectEdit,
+    WorkerHandoff,
+    Blocked,
+    Active,
+    PendingIntegration,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PreparedStateSchema {
+    NotPrepared,
+    DirectPrepared,
+    WorktreePrepared,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -260,32 +273,38 @@ pub struct DispatchReadyWorkParams {
     pub item_id: Option<String>,
     /// Maximum number of tasks to include or process.
     #[schemars(range(min = 1, max = 10))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub max_tasks: Option<usize>,
     /// Worker name associated with this item.
     pub worker: Option<String>,
     /// Name recorded as the task claimant.
     pub claimant: Option<String>,
-    /// Execution mode for this dispatch. Use profiled_worker to require a ready
-    /// configured worker profile, manual_handoff to prepare lifecycle-safe
-    /// worktree handoffs for an external MCP host or human-managed worker, or
-    /// auto to require a profile unless manual_handoff is explicitly requested.
+    /// Execution mode for this dispatch. Omit this or use manual_handoff to
+    /// prepare lifecycle-safe worktree handoffs for an external MCP host or
+    /// human-managed worker. Platypus does not launch or configure workers.
     #[schemars(with = "Option<ExecutionModeSchema>")]
     pub execution_mode: Option<String>,
     /// Whether to claim tasks, create worktrees, and persist worker handoff bundles during dispatch.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub prepare_handoffs: Option<bool>,
     /// Whether to immediately mark prepared assignments as running in the local
     /// lifecycle state machine. This does not launch an external worker process.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub auto_start: Option<bool>,
     /// Whether dispatch should auto-commit tracked planning artifacts when local
     /// dirt is limited to `backlog/items/*.md` and `backlog/plans/*.yaml`.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub auto_commit_artifacts: Option<bool>,
-    /// Whether non-direct work must have approved planning before dispatch.
+    /// Deprecated compatibility hint. Durable planning approval policy now
+    /// comes from `workflow.execution` or backlog item `planning_gate`.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub require_planning_approval: Option<bool>,
     /// Preview dispatchable work without mutating task, assignment, or Git
     /// lifecycle state.
     #[schemars(example = example_true())]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub dry_run: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Verification command to run or record for this item.
     pub verification_command: Vec<String>,
 }
@@ -300,6 +319,7 @@ pub struct PrepareWorkParams {
     pub item_id: Option<String>,
     /// Maximum number of tasks to prepare for host-run execution.
     #[schemars(range(min = 1, max = 10))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub max_tasks: Option<usize>,
     /// Worker name associated with this item.
     #[schemars(example = example_worker())]
@@ -307,29 +327,30 @@ pub struct PrepareWorkParams {
     /// Name recorded as the task claimant.
     pub claimant: Option<String>,
     /// Execution mode to prepare. Omit this for manual_handoff, which prepares
-    /// a worktree for the MCP host or a human-managed worker without requiring
-    /// a configured worker profile.
+    /// a worktree for the MCP host or a human-managed worker. Platypus does not
+    /// launch or configure workers.
     #[schemars(with = "Option<ExecutionModeSchema>")]
     pub execution_mode: Option<String>,
-    /// Whether dispatch readiness should require task-plan artifacts for
-    /// non-direct work before preparing a worktree.
+    /// Deprecated compatibility hint. Durable task-plan policy now comes from
+    /// `workflow.execution` or backlog item `planning_gate`.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub require_task_plan: Option<bool>,
-    /// Whether dispatch readiness should require approved planning for
-    /// non-direct work before preparing a worktree.
+    /// Deprecated compatibility hint. Durable approval policy now comes from
+    /// `workflow.execution` or backlog item `planning_gate`.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub require_planning_approval: Option<bool>,
     /// Whether preparation should auto-commit tracked backlog and task-plan
     /// artifacts when those are the only manager workspace changes.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub auto_commit_artifacts: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Verification command to run or record for this item.
     #[schemars(example = example_verification_command())]
     pub verification_command: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct NextSafeActionParams {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: Option<String>,
+    /// Include the full inspect_work_queue snapshot in the response. Omit or
+    /// set false for a compact host handoff.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
+    pub include_queue_snapshot: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -338,127 +359,51 @@ pub struct InspectWorkQueueParams {
     pub root: Option<String>,
     /// Maximum number of records to return.
     #[schemars(range(min = 1, max = 200))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
-    /// Whether dispatch readiness should require task-plan artifacts for non-direct work.
+    /// Deprecated compatibility hint. Durable task-plan policy now comes from
+    /// `workflow.execution` or backlog item `planning_gate`.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub require_task_plan: Option<bool>,
-    /// Whether dispatch readiness should require approved planning for non-direct work.
+    /// Deprecated compatibility hint. Durable approval policy now comes from
+    /// `workflow.execution` or backlog item `planning_gate`.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub require_planning_approval: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct ClassifyPlanningNeedsParams {
+pub struct InspectSessionParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
-    /// Backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
-    pub item_id: Option<String>,
-    /// Maximum number of records to return.
+    /// Maximum number of queue records to return.
     #[schemars(range(min = 1, max = 200))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
+    /// Deprecated compatibility hint. Durable task-plan policy now comes from
+    /// `workflow.execution` or backlog item `planning_gate`.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
+    pub require_task_plan: Option<bool>,
+    /// Deprecated compatibility hint. Durable approval policy now comes from
+    /// `workflow.execution` or backlog item `planning_gate`.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
+    pub require_planning_approval: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct ClassifyWorkflowFitParams {
+pub struct InspectItemParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
-    /// Goal text that drives this request or record.
-    #[schemars(example = example_goal())]
-    pub goal: String,
-    #[serde(default)]
-    /// Relative paths or top-level areas the work is expected to touch. Use broad
-    /// directories for early scaffolding, for example `backend/` and `frontend/`.
-    /// These values guide planning mode and later changed-file validation; use an
-    /// empty list only when the surface is genuinely unknown.
-    #[schemars(example = example_owned_surfaces())]
-    pub owned_surfaces: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct PlanGoalWorkParams {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: Option<String>,
-    /// Goal text to classify and turn into concrete next-tool guidance.
-    #[schemars(example = example_goal())]
-    pub goal: String,
-    /// Workflow mode. Omit or pass null to let Platypus choose automatically.
-    /// Supported values are auto, direct_scaffold, hybrid, and platypus_workflow.
-    #[schemars(with = "Option<GoalWorkflowModeSchema>")]
-    pub mode: Option<String>,
-    /// Planning intent. Omit or pass auto to infer from the goal text.
-    /// Use planning_only when the user wants backlog or design shaping without
-    /// immediate execution. Use ready_to_execute when the user wants tracking
-    /// and dispatch guidance now.
-    #[schemars(with = "Option<GoalPlanningIntentSchema>")]
-    pub intent: Option<String>,
-    #[serde(default)]
-    /// Relative paths or top-level areas the work is expected to touch. Use broad
-    /// directories for early scaffolding, for example `backend/` and `frontend/`.
-    /// These values guide planning mode and later changed-file validation; use an
-    /// empty list only when the surface is genuinely unknown.
-    #[schemars(example = example_owned_surfaces())]
-    pub owned_surfaces: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct StartGoalWorkParams {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: Option<String>,
-    /// Goal text that drives this request or record.
-    #[schemars(example = example_goal())]
-    pub goal: String,
-    /// Workflow mode. Omit or pass null to let Platypus choose automatically.
-    /// Supported values are auto, direct_scaffold, hybrid, and platypus_workflow.
-    #[schemars(with = "Option<GoalWorkflowModeSchema>")]
-    pub mode: Option<String>,
-    /// When true, create or reuse tracking and immediately route the item
-    /// through dispatch. This can auto-commit tracking artifacts, prepare
-    /// worker handoffs/worktrees, and mark assignments running depending on the
-    /// other start_goal_work flags.
-    #[schemars(example = example_true())]
-    pub dispatch: Option<bool>,
-    /// Whether dispatch should prepare worker handoffs and task worktrees when
-    /// dispatch=true.
-    #[schemars(example = example_true())]
-    pub prepare_handoffs: Option<bool>,
-    /// Whether dispatch should immediately mark prepared assignments as running
-    /// in local lifecycle state when dispatch=true.
-    #[schemars(example = example_true())]
-    pub auto_start: Option<bool>,
-    /// Execution mode to pass to dispatch when dispatch=true.
-    ///
-    /// Use manual_handoff when the MCP host will run the returned assignment
-    /// worktree itself instead of requiring a configured worker profile.
-    #[schemars(with = "Option<ExecutionModeSchema>")]
-    pub execution_mode: Option<String>,
-    /// Whether dispatch should auto-commit tracked planning artifacts when
-    /// local Git dirt is limited to backlog items/plans and dispatch=true.
-    #[schemars(example = example_true())]
-    pub auto_commit_artifacts: Option<bool>,
-    /// Also create one lightweight backlog tracking item for this goal. This is
-    /// useful when the recommendation is direct_scaffold but the baseline should
-    /// still be visible in Platypus after the host agent edits files directly.
-    pub also_track: Option<bool>,
-    /// Legacy compatibility guard for the removed scaffold_in_place flag. This
-    /// field is intentionally hidden from the MCP schema; callers that still
-    /// send it receive a structured failure before any project mutation.
-    #[schemars(skip)]
-    pub scaffold_in_place: Option<bool>,
-    /// Maximum number of tasks to include or process.
-    #[schemars(range(min = 1, max = 10))]
-    pub max_tasks: Option<usize>,
-    /// Suggested worker name for this item.
-    pub suggested_worker: Option<String>,
-    #[serde(default)]
-    /// Relative paths or top-level areas the work is expected to touch. Use broad
-    /// directories for early scaffolding, for example `backend/` and `frontend/`.
-    /// These values guide planning mode and later changed-file validation; use an
-    /// empty list only when the surface is genuinely unknown.
-    #[schemars(example = example_owned_surfaces())]
-    pub owned_surfaces: Vec<String>,
-    #[serde(default)]
-    /// Verification command to run or record for this item.
-    #[schemars(example = example_verification_command())]
-    pub verification_command: Vec<String>,
+    /// Backlog item identifier to inspect.
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
+    pub item_id: String,
+    /// Deprecated compatibility hint. Durable task-plan policy now comes from
+    /// `workflow.execution` or backlog item `planning_gate`.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
+    pub require_task_plan: Option<bool>,
+    /// Deprecated compatibility hint. Durable approval policy now comes from
+    /// `workflow.execution` or backlog item `planning_gate`.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
+    pub require_planning_approval: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -468,6 +413,7 @@ pub struct InitProjectParams {
     /// Project name written into initialized Platypus configuration.
     pub project_name: Option<String>,
     /// Whether to overwrite an existing file or record.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub overwrite: Option<bool>,
 }
 
@@ -477,6 +423,7 @@ pub struct LimitParams {
     pub root: Option<String>,
     /// Maximum number of records to return.
     #[schemars(range(min = 1, max = 200))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
 }
 
@@ -493,8 +440,9 @@ pub struct AcquireLeaseParams {
     pub owner: String,
     /// Time to live in seconds.
     #[schemars(range(min = 1, max = 86400))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_u64")]
     pub ttl_seconds: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_map")]
     /// Free-form metadata attached to this record.
     pub metadata: BTreeMap<String, Value>,
 }
@@ -512,9 +460,11 @@ pub struct ListLeasesParams {
     #[schemars(with = "Option<LeaseStatusSchema>")]
     pub status: Option<String>,
     /// Whether expired records should be included.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub include_expired: Option<bool>,
     /// Maximum number of records to return.
     #[schemars(range(min = 1, max = 200))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
 }
 
@@ -528,6 +478,7 @@ pub struct RenewLeaseParams {
     pub owner: String,
     /// Time to live in seconds.
     #[schemars(range(min = 1, max = 86400))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_u64")]
     pub ttl_seconds: Option<u64>,
 }
 
@@ -546,6 +497,7 @@ pub struct ValidateBacklogParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
     /// Whether validation errors should be included.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub include_errors: Option<bool>,
 }
 
@@ -555,6 +507,7 @@ pub struct RequestPlanningApprovalParams {
     pub root: Option<String>,
     /// Backlog item IDs covered by this planning approval.
     #[schemars(example = example_item_ids())]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     pub item_ids: Vec<String>,
     /// Person or agent requesting the approval.
     pub requested_by: Option<String>,
@@ -574,30 +527,14 @@ pub struct InspectDependencyGraphParams {
     ///
     /// Closed state is derived from reachable Platypus-Closes Git trailers.
     #[schemars(example = example_true())]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub include_closed: Option<bool>,
     /// Maximum number of graph nodes to return after focus filtering.
     ///
     /// Defaults to 200 and is capped at 500.
     #[schemars(range(min = 1, max = 500))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct DraftBacklogItemsParams {
-    /// Goal text that drives this request or record.
-    #[schemars(example = example_goal())]
-    pub goal: String,
-    /// Suggested worker name for this item.
-    #[schemars(example = example_worker())]
-    pub suggested_worker: Option<String>,
-    #[serde(default)]
-    /// Owned code or documentation surfaces for this item.
-    #[schemars(example = example_owned_surfaces())]
-    pub owned_surfaces: Vec<String>,
-    #[serde(default)]
-    /// Verification command to run or record for this item.
-    #[schemars(example = example_verification_command())]
-    pub verification_command: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -606,13 +543,10 @@ pub struct DraftExternalBacklogItemsParams {
     pub root: Option<String>,
     /// External provider name.
     pub provider: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec")]
     /// External work records supplied by the host client.
     pub records: Vec<ExternalWorkRecord>,
-    /// Suggested worker name for this item.
-    #[schemars(example = example_worker())]
-    pub suggested_worker: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Owned code or documentation surfaces for this item.
     #[schemars(example = example_owned_surfaces())]
     pub owned_surfaces: Vec<String>,
@@ -622,6 +556,7 @@ pub struct DraftExternalBacklogItemsParams {
     pub verification_command: Vec<String>,
     /// Maximum number of records to return.
     #[schemars(range(min = 1, max = 200))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
 }
 
@@ -633,7 +568,7 @@ pub struct ImportGitHubIssuesParams {
     pub owner: String,
     /// Repository name in the external provider.
     pub repo: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec")]
     /// Issue records supplied by the host client.
     pub issues: Vec<GitHubIssueRecord>,
     /// State or status value.
@@ -641,10 +576,7 @@ pub struct ImportGitHubIssuesParams {
     /// Identifier prefix used when allocating new local backlog item IDs.
     #[schemars(example = example_id_prefix(), pattern(r"^[A-Z]+$"))]
     pub id_prefix: Option<String>,
-    /// Suggested worker name for this item.
-    #[schemars(example = example_worker())]
-    pub suggested_worker: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Owned code or documentation surfaces for this item.
     #[schemars(example = example_owned_surfaces())]
     pub owned_surfaces: Vec<String>,
@@ -654,6 +586,7 @@ pub struct ImportGitHubIssuesParams {
     pub verification_command: Vec<String>,
     /// Maximum number of records to return.
     #[schemars(range(min = 1, max = 200))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
 }
 
@@ -679,6 +612,7 @@ pub struct DraftExternalReportParams {
     pub title: Option<String>,
     /// Maximum number of evidence records to include.
     #[schemars(range(min = 1, max = 200))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub evidence_limit: Option<usize>,
 }
 
@@ -714,7 +648,7 @@ pub struct RecordExternalReportDispatchParams {
     pub outbound_ref: Option<String>,
     /// Error message returned when the action failed.
     pub error: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_map")]
     /// Free-form metadata attached to this record.
     pub metadata: BTreeMap<String, Value>,
 }
@@ -805,23 +739,29 @@ pub struct CreateBacklogItemParams {
     pub area: Option<String>,
     /// Epic or grouping identifier for this item.
     pub epic: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Dependencies that must be satisfied first.
     #[schemars(inner(pattern(r"^[A-Z]+-[0-9]{3}$")))]
     pub depends_on: Vec<String>,
-    /// Suggested worker name for this item.
-    #[schemars(example = example_worker())]
-    pub suggested_worker: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Relative paths or top-level areas the work is expected to touch. Use broad
     /// directories for early scaffolding, for example `backend/` and `frontend/`.
     /// These values guide planning mode and later changed-file validation; use an
     /// empty list only when the surface is genuinely unknown.
     #[schemars(example = example_owned_surfaces())]
     pub owned_surfaces: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec")]
     /// External references tied to this record.
     pub external_refs: Vec<ExternalRef>,
+    /// Durable execution path for this item. Omit to use workflow.execution
+    /// defaults. Use direct_edit for manager-workspace edits and worker_handoff
+    /// for isolated worktree handoff.
+    #[schemars(with = "Option<BacklogExecutionPathSchema>")]
+    pub execution_path: Option<String>,
+    /// Durable planning gate for this item. Omit to use the default gate for
+    /// its execution_path. Use none, task_plan, or approved_task_plan.
+    #[schemars(with = "Option<PlanningGateSchema>")]
+    pub planning_gate: Option<String>,
     #[serde(default)]
     /// Goal text that drives this request or record.
     #[schemars(example = example_goal())]
@@ -830,7 +770,7 @@ pub struct CreateBacklogItemParams {
     pub implementation_contract: Option<String>,
     /// Optional contract text for this backlog item.
     pub contract: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Acceptance criteria for this item.
     pub acceptance: Vec<String>,
     /// Optional notes for this item.
@@ -845,7 +785,7 @@ pub struct CreateBacklogItemsParams {
     /// item id is omitted. Item-level id_prefix overrides this value.
     #[schemars(example = example_id_prefix(), pattern(r"^[A-Z]+$"))]
     pub id_prefix: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec")]
     /// Backlog items to create atomically. If any item is invalid, no item files
     /// are written.
     pub items: Vec<CreateBacklogItemsEntry>,
@@ -859,7 +799,7 @@ pub struct CreateBacklogItemsEntry {
     /// allocated.
     #[schemars(example = example_client_key())]
     pub client_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Client keys from this same batch that this item depends on. Platypus
     /// resolves these keys to allocated or explicit backlog item IDs before
     /// writing files.
@@ -887,20 +827,26 @@ pub struct CreateBacklogItemsEntry {
     pub area: Option<String>,
     /// Epic or grouping identifier for this item.
     pub epic: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Existing backlog item IDs that must be satisfied before this item.
     #[schemars(inner(pattern(r"^[A-Z]+-[0-9]{3}$")))]
     pub depends_on: Vec<String>,
-    /// Suggested worker name for this item.
-    #[schemars(example = example_worker())]
-    pub suggested_worker: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Relative paths or top-level areas the work is expected to touch.
     #[schemars(example = example_owned_surfaces())]
     pub owned_surfaces: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec")]
     /// External references tied to this record.
     pub external_refs: Vec<ExternalRef>,
+    /// Durable execution path for this item. Omit to use workflow.execution
+    /// defaults. Use direct_edit for manager-workspace edits and worker_handoff
+    /// for isolated worktree handoff.
+    #[schemars(with = "Option<BacklogExecutionPathSchema>")]
+    pub execution_path: Option<String>,
+    /// Durable planning gate for this item. Omit to use the default gate for
+    /// its execution_path. Use none, task_plan, or approved_task_plan.
+    #[schemars(with = "Option<PlanningGateSchema>")]
+    pub planning_gate: Option<String>,
     #[serde(default)]
     /// Goal text that drives this request or record.
     #[schemars(example = example_goal())]
@@ -909,11 +855,63 @@ pub struct CreateBacklogItemsEntry {
     pub implementation_contract: Option<String>,
     /// Optional contract text for this backlog item.
     pub contract: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Acceptance criteria for this item.
     pub acceptance: Vec<String>,
     /// Optional notes for this item.
     pub notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateBacklogItemParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Backlog item identifier.
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
+    pub item_id: String,
+    /// Human-readable title or short label.
+    #[schemars(example = example_title())]
+    pub title: Option<String>,
+    /// Backlog priority. Supported values: P0, P1, P2.
+    #[schemars(with = "Option<BacklogPrioritySchema>")]
+    pub priority: Option<String>,
+    /// Backlog item type. Supported values: foundation, feature, safety, ux, test, docs.
+    #[serde(rename = "type")]
+    #[schemars(with = "Option<BacklogItemTypeSchema>")]
+    pub item_type: Option<String>,
+    /// Primary area or surface for this item.
+    pub area: Option<String>,
+    /// Epic or grouping identifier for this item.
+    pub epic: Option<String>,
+    /// Existing backlog item IDs that must be satisfied before this item.
+    #[schemars(inner(pattern(r"^[A-Z]+-[0-9]{3}$")))]
+    pub depends_on: Option<Vec<String>>,
+    /// Relative paths or top-level areas the work is expected to touch.
+    #[schemars(example = example_owned_surfaces())]
+    pub owned_surfaces: Option<Vec<String>>,
+    /// External references tied to this record.
+    pub external_refs: Option<Vec<ExternalRef>>,
+    /// Durable execution path for this item. Use direct_edit for
+    /// manager-workspace edits and worker_handoff for isolated worktree handoff.
+    #[schemars(with = "Option<BacklogExecutionPathSchema>")]
+    pub execution_path: Option<String>,
+    /// Durable planning gate for this item. Use none, task_plan, or approved_task_plan.
+    #[schemars(with = "Option<PlanningGateSchema>")]
+    pub planning_gate: Option<String>,
+    /// Goal text that drives this request or record.
+    #[schemars(example = example_goal())]
+    pub goal: Option<String>,
+    /// Implementation contract text for this backlog item.
+    pub implementation_contract: Option<String>,
+    /// Optional alias for implementation_contract.
+    pub contract: Option<String>,
+    /// Acceptance criteria for this item. Provide at least one criterion when updating this section.
+    pub acceptance: Option<Vec<String>>,
+    /// Optional notes section. Empty string removes notes when present.
+    pub notes: Option<String>,
+    /// Allow updates to items already closed by Git trailer or direct completion.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
+    pub force_closed: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1037,20 +1035,12 @@ pub struct TaskPlanQueryParams {
     #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
     pub item_id: Option<String>,
     /// Whether validation errors should be included.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub include_errors: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TaskPlanItemParams {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: Option<String>,
-    /// Backlog item identifier.
-    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
-    pub item_id: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct DraftTaskPlanParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
     /// Backlog item identifier.
@@ -1068,6 +1058,7 @@ pub struct WriteTaskPlanParams {
     /// Task plan state or file for this item.
     pub plan: TaskPlanFile,
     /// Whether to overwrite an existing file or record.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub overwrite: Option<bool>,
 }
 
@@ -1080,6 +1071,7 @@ pub struct InspectTaskEventsParams {
     pub task_id: String,
     /// Maximum number of records to return.
     #[schemars(range(min = 1, max = 200))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
 }
 
@@ -1132,6 +1124,15 @@ pub struct WorktreeDiffParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct InspectIntegrationGatesParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Task identifier whose integration readiness should be inspected.
+    #[schemars(example = example_task_id())]
+    pub task_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct WorktreeCleanupParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
@@ -1139,6 +1140,7 @@ pub struct WorktreeCleanupParams {
     #[schemars(example = example_task_id())]
     pub task_id: String,
     /// Whether to force the operation.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub force: Option<bool>,
 }
 
@@ -1157,8 +1159,10 @@ pub struct IntegrateWorkerResultParams {
     /// Permit integration without separately recorded verification evidence.
     ///
     /// This is explicit so low-risk work can move without weakening strict project policy.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub allow_unverified: Option<bool>,
     /// Remove the task worktree after successful integration when it is clean.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub cleanup_after: Option<bool>,
 }
 
@@ -1169,7 +1173,7 @@ pub struct GenerateTaskBundleParams {
     /// Task identifier.
     #[schemars(example = example_task_id())]
     pub task_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Verification command to run or record for this item.
     pub verification_command: Vec<String>,
 }
@@ -1187,13 +1191,12 @@ pub struct PrepareWorkerAssignmentParams {
     pub claimant: Option<String>,
     /// Execution mode to record on the prepared assignment bundle.
     ///
-    /// Supported values are profiled_worker and manual_handoff. Omit this for
-    /// normal profiled-worker handoffs.
+    /// Supported value is manual_handoff. Omit this for host-managed handoffs.
     #[schemars(with = "Option<ExecutionModeSchema>")]
     pub execution_mode: Option<String>,
     /// Git base reference.
     pub base_ref: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Verification command to run or record for this item.
     pub verification_command: Vec<String>,
 }
@@ -1237,7 +1240,7 @@ pub struct RecordWorkerEventParams {
     /// Human-readable summary of the record or result.
     #[schemars(example = example_summary())]
     pub summary: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_map")]
     /// Structured payload for this record.
     pub payload: BTreeMap<String, Value>,
 }
@@ -1258,7 +1261,7 @@ pub struct CompleteWorkerExecutionParams {
     /// Human-readable summary of the record or result.
     #[schemars(example = example_summary())]
     pub summary: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Files changed by the worker, relative to the task worktree.
     pub changed_files: Vec<String>,
     /// Verification status for the task or result.
@@ -1267,6 +1270,7 @@ pub struct CompleteWorkerExecutionParams {
     /// Whether completion may auto-start a prepared assignment before marking
     /// it terminal. Defaults to true so same-session MCP hosts can finish a
     /// prepared task without a separate start_worker_task call.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub auto_start_if_prepared: Option<bool>,
 }
 
@@ -1282,11 +1286,12 @@ pub struct FinishWorkFindingInput {
     /// Severity level for this follow-up finding.
     #[schemars(with = "Option<FindingSeveritySchema>")]
     pub severity: Option<String>,
-    /// Whether this finding must be resolved before the work can be considered done.
+    /// Whether this finding must receive an explicit disposition before the work can be considered done.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub required: Option<bool>,
     /// Owner name or repository owner, depending on context.
     pub owner: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// References for evidence.
     pub evidence_refs: Vec<String>,
 }
@@ -1295,6 +1300,10 @@ pub struct FinishWorkFindingInput {
 pub struct FinishWorkParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
+    /// Backlog item identifier for direct-work recovery guidance. Direct work
+    /// should be completed with complete_backlog_item rather than finish_work.
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
+    pub item_id: Option<String>,
     /// Worker assignment identifier.
     #[schemars(example = example_assignment_id())]
     pub assignment_id: Option<String>,
@@ -1307,7 +1316,7 @@ pub struct FinishWorkParams {
     /// Human-readable summary of the worker result.
     #[schemars(example = example_summary())]
     pub summary: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Files changed by the worker, relative to the task worktree. Omit to let
     /// Platypus infer the list from the recorded worktree diff.
     pub changed_files: Vec<String>,
@@ -1317,32 +1326,73 @@ pub struct FinishWorkParams {
     /// Summary of verification that should be recorded as evidence when the
     /// worker reports verification passed.
     pub verification_summary: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// References such as commands, files, commits, URLs, or evidence IDs.
     pub verification_refs: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec")]
     /// Findings or follow-up work discovered while implementing this task.
     pub findings: Vec<FinishWorkFindingInput>,
-    /// Set true when the worker explicitly checked for follow-up findings and
-    /// found none. If false or omitted, Platypus will recommend recording or
-    /// confirming findings before final integration.
+    /// Set true only when the worker explicitly checked for follow-up findings
+    /// and found none. This does not accept, resolve, or waive required
+    /// findings supplied in the same call; required findings must still be
+    /// dispositioned before final integration.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub findings_reviewed: Option<bool>,
     /// Whether completion may auto-start a prepared assignment before marking
     /// it terminal. Defaults to true so same-session MCP hosts can finish a
     /// prepared task without a separate start_worker_task call.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub auto_start_if_prepared: Option<bool>,
     /// Whether to integrate the completed task immediately when verification
     /// and finding gates permit it.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub integrate_if_ready: Option<bool>,
     /// Permit integration without separately recorded verification evidence.
     ///
     /// This is explicit so low-risk work can move without weakening strict project policy.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub allow_unverified: Option<bool>,
     /// Override workflow.integration.merge_style for this integration.
     #[schemars(with = "Option<IntegrationStrategySchema>")]
     pub integration_strategy: Option<String>,
     /// Remove the task worktree after successful integration when it is clean.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub cleanup_after: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CompleteBacklogItemParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Backlog item identifier.
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
+    pub item_id: String,
+    /// Human-readable summary of the completed direct work.
+    #[schemars(example = example_summary())]
+    pub summary: String,
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
+    /// Files changed by the direct host work, relative to the manager workspace.
+    pub changed_files: Vec<String>,
+    /// Verification status for this direct work.
+    #[schemars(with = "Option<VerificationStatusSchema>")]
+    pub verification_status: Option<String>,
+    /// Summary of verification that should be recorded as evidence.
+    pub verification_summary: Option<String>,
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
+    /// References such as commands, files, commits, URLs, or evidence IDs.
+    pub verification_refs: Vec<String>,
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
+    /// Existing evidence identifiers or references that support this completion.
+    pub evidence_refs: Vec<String>,
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
+    /// Existing finding identifiers or references reviewed for this completion.
+    pub finding_refs: Vec<String>,
+    /// Whether Platypus should create a Git commit for the supplied changed_files
+    /// with Platypus-Closes and Platypus-Verification trailers.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
+    pub commit: Option<bool>,
+    /// Optional subject for the closure commit when commit=true.
+    pub commit_message: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1357,25 +1407,8 @@ pub struct RunTaskVerificationParams {
     pub task_id: Option<String>,
     /// Maximum execution time in seconds for the verification command.
     #[schemars(range(min = 1, max = 600))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_u64")]
     pub timeout_seconds: Option<u64>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct RunnerPrepareParams {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: Option<String>,
-    /// Worker name associated with this item.
-    pub worker: Option<String>,
-    /// Name recorded as the task claimant.
-    pub claimant: Option<String>,
-    /// Maximum number of tasks to include or process.
-    #[schemars(range(min = 1, max = 10))]
-    pub max_tasks: Option<usize>,
-    /// Whether to inspect the operation without mutating state.
-    pub dry_run: Option<bool>,
-    #[serde(default)]
-    /// Verification command to run or record for this item.
-    pub verification_command: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1387,6 +1420,7 @@ pub struct ApprovalListParams {
     pub status: Option<String>,
     /// Maximum number of records to return.
     #[schemars(range(min = 1, max = 200))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
 }
 
@@ -1416,6 +1450,7 @@ pub struct EventsReplayParams {
     pub scope: Option<String>,
     /// Maximum number of records to return.
     #[schemars(range(min = 1, max = 200))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
 }
 
@@ -1448,10 +1483,10 @@ pub struct RecordEvidenceParams {
     /// Human-readable summary of the record or result.
     #[schemars(example = example_summary())]
     pub summary: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// References such as commands, files, commits, URLs, or evidence IDs.
     pub refs: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_map")]
     /// Free-form metadata attached to this record.
     pub metadata: BTreeMap<String, Value>,
 }
@@ -1471,10 +1506,10 @@ pub struct RecordVerificationEvidenceParams {
     /// Human-readable summary of the record or result.
     #[schemars(example = example_summary())]
     pub summary: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// References such as commands, files, commits, URLs, or evidence IDs.
     pub refs: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_map")]
     /// Free-form metadata attached to this record.
     pub metadata: BTreeMap<String, Value>,
 }
@@ -1494,6 +1529,7 @@ pub struct ListEvidenceParams {
     pub kind: Option<String>,
     /// Maximum number of records to return.
     #[schemars(range(min = 1, max = 200))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
 }
 
@@ -1501,34 +1537,6 @@ pub struct ListEvidenceParams {
 pub struct ReconcileParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct AgentProfilesParams {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct ConfigureAgentProfileParams {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: Option<String>,
-    /// Name of this check, profile, or record.
-    pub name: String,
-    /// Role name for this agent profile.
-    #[schemars(with = "AgentRoleSchema")]
-    pub role: String,
-    /// Harness name for this agent profile.
-    #[schemars(with = "AgentHarnessSchema")]
-    pub harness: String,
-    /// Executable path or command for this profile.
-    pub executable: String,
-    #[serde(default)]
-    /// Capability names advertised by this profile.
-    pub capabilities: Vec<String>,
-    #[serde(default)]
-    /// Free-form metadata attached to this record.
-    pub metadata: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1553,6 +1561,19 @@ pub struct WorkflowDispatchConfig {
     pub auto_commit_artifacts_default: bool,
 }
 
+#[derive(Debug, Serialize, Clone, JsonSchema)]
+pub struct WorkflowExecutionConfig {
+    /// Default execution path for backlog items that do not specify one.
+    #[schemars(with = "BacklogExecutionPathSchema")]
+    pub default_path: String,
+    /// Planning gate used by direct_edit items when they do not specify one.
+    #[schemars(with = "PlanningGateSchema")]
+    pub direct_planning_gate: String,
+    /// Planning gate used by worker_handoff items when they do not specify one.
+    #[schemars(with = "PlanningGateSchema")]
+    pub worker_planning_gate: String,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct WorkflowConfigData {
     /// Project root that bounds all file, Git, and state operations.
@@ -1561,6 +1582,46 @@ pub struct WorkflowConfigData {
     pub integration: WorkflowIntegrationConfig,
     /// Effective workflow dispatch policy.
     pub dispatch: WorkflowDispatchConfig,
+    /// Effective workflow execution policy.
+    pub execution: WorkflowExecutionConfig,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CommitPlanningArtifactsParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Restrict allowed planning artifacts to these backlog item IDs. When
+    /// omitted, all backlog/items, backlog/plans, and backlog/epics artifacts
+    /// may be committed.
+    #[schemars(example = example_item_ids())]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
+    pub item_ids: Vec<String>,
+    /// Also allow project-level scaffold/config artifacts such as platy.yaml,
+    /// AGENTS.md, CLAUDE.md, WORKFLOW.md, backlog/README.md, templates, and
+    /// .gitignore. Defaults to false.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
+    pub include_project_config: Option<bool>,
+    /// Commit message. Defaults to a scoped Platypus planning message.
+    pub message: Option<String>,
+    /// Preview accepted and rejected paths without staging or committing.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
+    pub dry_run: Option<bool>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CommitPlanningArtifactsData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Paths accepted as Platypus planning artifacts.
+    pub accepted_paths: Vec<String>,
+    /// Paths rejected because they are outside the allowed planning artifact set.
+    pub rejected_paths: Vec<String>,
+    /// Git commit hash created by this operation.
+    pub commit: Option<String>,
+    /// Whether this tool call changed repository state.
+    pub committed: bool,
+    /// Whether this was a dry run.
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1600,12 +1661,13 @@ pub struct RecordFindingParams {
     /// Severity level.
     #[schemars(with = "Option<FindingSeveritySchema>")]
     pub severity: Option<String>,
-    /// Whether this finding or item must be resolved before completion.
+    /// Whether this finding or item must receive an explicit disposition before completion.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub required: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// References for evidence.
     pub evidence_refs: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_map")]
     /// Free-form metadata attached to this record.
     pub metadata: BTreeMap<String, Value>,
 }
@@ -1625,6 +1687,7 @@ pub struct ListFindingsParams {
     pub status: Option<String>,
     /// Maximum number of records to return.
     #[schemars(range(min = 1, max = 100))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
 }
 
@@ -1652,10 +1715,10 @@ pub struct UpdateFindingDispositionParams {
     pub owner: Option<String>,
     /// Reason recorded for the finding disposition decision.
     pub disposition_reason: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// References for evidence.
     pub evidence_refs: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_map")]
     /// Free-form metadata attached to this record.
     pub metadata: BTreeMap<String, Value>,
 }
@@ -1677,8 +1740,11 @@ pub struct ActionResult<T: Serialize + JsonSchema> {
     /// Human-readable summary of the record or result.
     pub summary: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Suggested next action.
+    /// Suggested normal continuation after a completed or skipped result.
     pub next_action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Recovery action for failed or blocked results.
+    pub recovery_action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Structured success payload for this action.
     pub data: Option<T>,
@@ -1694,6 +1760,7 @@ impl<T: Serialize + JsonSchema> ActionResult<T> {
             status: ActionStatus::Completed,
             summary: summary.into(),
             next_action: None,
+            recovery_action: None,
             data: Some(data),
             error: None,
         }
@@ -1705,17 +1772,20 @@ impl<T: Serialize + JsonSchema> ActionResult<T> {
             status: ActionStatus::Skipped,
             summary: summary.into(),
             next_action: Some(next_action.to_string()),
+            recovery_action: None,
             data: None,
             error: None,
         }
     }
 
     pub fn failed(action: &str, summary: impl Into<String>, error: impl Into<String>) -> Self {
+        let recovery_action = "Inspect the request and project setup.".to_string();
         Self {
             action: action.to_string(),
             status: ActionStatus::Failed,
             summary: summary.into(),
-            next_action: Some("Inspect the request and project setup.".to_string()),
+            next_action: Some(recovery_action.clone()),
+            recovery_action: Some(recovery_action),
             data: None,
             error: Some(error.into()),
         }
@@ -1754,6 +1824,11 @@ pub struct PrepareWorkData {
     pub root: String,
     /// Summary of the queue or dispatch state inspected by this operation.
     pub queue_summary: String,
+    /// Preparation state reached by this call.
+    #[schemars(with = "PreparedStateSchema")]
+    pub prepared_state: String,
+    /// Backlog item identifiers selected by this preparation call.
+    pub selected_item_ids: Vec<String>,
     /// Number of queue items ready to dispatch before preparation.
     pub ready_count: usize,
     /// Number of queue items blocked before dispatch.
@@ -1762,7 +1837,7 @@ pub struct PrepareWorkData {
     pub host_actions: Vec<HostAction>,
     /// Dispatch result when a worktree handoff was prepared.
     pub dispatch: Option<DispatchReadyWorkData>,
-    /// Queue inspection result when no dispatch was performed.
+    /// Queue inspection result when the caller requested a full queue snapshot.
     pub queue: Option<WorkQueueData>,
 }
 
@@ -1787,6 +1862,29 @@ pub struct FinishWorkData {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
+pub struct CompleteBacklogItemData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Backlog item identifier.
+    pub item_id: String,
+    /// Human-readable summary of the record or result.
+    pub summary: String,
+    /// Files changed by the direct host work, relative to the manager workspace.
+    pub changed_files: Vec<String>,
+    /// Evidence records returned or created by this operation.
+    pub evidence: Vec<EvidenceRecord>,
+    /// Project event recorded for the direct completion.
+    pub event: Option<EventRecord>,
+    /// Git commit hash when complete_backlog_item created a closure commit.
+    pub commit: Option<String>,
+    /// Whether this item is now considered closed by runtime completion state
+    /// or Git trailer policy.
+    pub closed: bool,
+    /// High-level action for the MCP host or human operator.
+    pub host_action: HostAction,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct PingData {
     /// Echoed message value.
     pub echo: String,
@@ -1806,34 +1904,10 @@ pub struct ProjectStatusData {
     pub backlog_items: usize,
     /// Number of backlog items currently runnable.
     pub runnable_backlog_items: usize,
-    /// Number of configured agent profiles.
-    pub agent_profiles: usize,
-    /// Whether a ready manager profile is configured.
-    pub manager_ready: bool,
-    /// Whether at least one ready worker profile is configured.
-    pub worker_ready: bool,
-    /// Number of ready worker profiles.
-    pub ready_worker_profiles: usize,
-    /// Warnings that should be resolved before dispatching work.
-    pub agent_profile_warnings: Vec<String>,
     /// Whether durable task state is supported by the configured backend.
     pub tasks_supported: bool,
     /// Whether durable finding state is supported by the configured backend.
     pub findings_supported: bool,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct NextSafeActionData {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: String,
-    /// Recommended Platypus MCP tool to call next.
-    pub recommended_tool: String,
-    /// Human-readable summary of the record or result.
-    pub summary: String,
-    /// Human-readable reason for the decision or result.
-    pub reason: String,
-    /// Suggested parameters for the recommended tool call.
-    pub params: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -1846,16 +1920,22 @@ pub struct WorkQueueData {
     pub ready_count: usize,
     /// Number of queue items blocked before dispatch.
     pub blocked_count: usize,
-    /// Number of backlog items omitted from ready dispatch because active tasks already exist.
+    /// Number of returned backlog items that already have active task lifecycle
+    /// state or completed task results awaiting integration.
     pub active_count: usize,
-    /// Backlog item identifiers that already have active task lifecycle state.
+    /// Returned backlog item identifiers that already have active task
+    /// lifecycle state or completed task results awaiting integration.
     pub active_item_ids: Vec<String>,
+    /// Active or pending task identifiers that block dispatch for returned
+    /// backlog items.
+    pub active_task_ids: Vec<String>,
+    /// Whole-backlog inventory summary for queue context, including items that
+    /// are not returned as runnable queue candidates.
+    pub inventory: WorkQueueInventorySummary,
     /// Warnings that should be resolved before dispatching work.
     pub preflight_warnings: Vec<String>,
-    /// Whether at least one ready worker profile is configured.
-    pub worker_ready: bool,
-    /// Number of ready worker profiles.
-    pub ready_worker_profiles: usize,
+    /// Compatibility warnings for deprecated queue inputs or policy overrides.
+    pub policy_warnings: Vec<String>,
     /// Recommended Platypus MCP tool to call next.
     pub recommended_tool: String,
     /// Human-readable summary of the record or result.
@@ -1868,7 +1948,7 @@ pub struct WorkQueueData {
     pub items: Vec<WorkQueueItem>,
 }
 
-#[derive(Debug, Serialize, JsonSchema)]
+#[derive(Debug, Serialize, JsonSchema, Clone)]
 pub struct WorkQueueItem {
     /// One-based position in the returned queue.
     pub position: usize,
@@ -1880,11 +1960,48 @@ pub struct WorkQueueItem {
     pub plan: WorkQueuePlanState,
     /// Planning approval state when queue inspection requires planning approval.
     pub planning_approval: Option<PlanningApprovalState>,
+    /// Durable execution policy resolved from backlog item frontmatter and
+    /// workflow.execution defaults.
+    pub effective_policy: EffectiveExecutionPolicy,
+    /// Queue state for this item. Values include ready, direct_ready,
+    /// planning_blocked, approval_blocked, dependency_blocked, config_blocked,
+    /// workspace_blocked, active, and completed_pending_integration.
+    #[schemars(with = "WorkQueueStateSchema")]
+    pub queue_state: String,
+    /// Execution path implied by the current queue state.
+    #[schemars(with = "WorkExecutionPathSchema")]
+    pub execution_path: String,
+    /// Tool that closes this item once implementation work is done, when known.
+    pub completion_tool: Option<String>,
+    /// Whether a task plan is required before this item can use a worktree
+    /// worker handoff path.
+    pub task_plan_required_for_worktree: bool,
+    /// Human-readable explanation of why direct or planned work applies.
+    pub execution_guidance: String,
+    /// Active or pending lifecycle task id for this backlog item, when one
+    /// currently blocks new dispatch.
+    pub task_id: Option<String>,
+    /// Active worker assignment id for this backlog item, when one exists.
+    pub assignment_id: Option<String>,
     /// Whether this item can be dispatched now.
     pub ready_to_dispatch: bool,
     /// Recommended Platypus MCP tool to call next.
     pub recommended_tool: String,
     /// Human-readable reason for the decision or result.
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Clone, JsonSchema)]
+pub struct EffectiveExecutionPolicy {
+    /// Effective execution path for this item.
+    #[schemars(with = "BacklogExecutionPathSchema")]
+    pub execution_path: String,
+    /// Effective planning gate for this item.
+    #[schemars(with = "PlanningGateSchema")]
+    pub planning_gate: String,
+    /// Source of this effective policy.
+    pub source: String,
+    /// Human-readable reason for the policy resolution.
     pub reason: String,
 }
 
@@ -1904,7 +2021,7 @@ pub struct PlanningApprovalState {
     pub reason: String,
 }
 
-#[derive(Debug, Serialize, JsonSchema)]
+#[derive(Debug, Serialize, JsonSchema, Clone)]
 pub struct WorkQueuePlanState {
     /// Lifecycle or result status for this record.
     pub status: String,
@@ -1924,104 +2041,90 @@ pub struct WorkQueuePlanState {
 pub struct PlanningClassification {
     /// Backlog item identifier.
     pub item_id: String,
-    /// Planning mode required before this item can be dispatched.
+    /// Deterministic planning requirement for this queue view.
     pub required_mode: String,
-    /// Required planning artifact path, if one is needed.
+    /// Required planning artifact path, if the caller requested one.
     pub required_artifact: Option<String>,
-    /// Human-readable reasons behind this decision.
+    /// Human-readable reasons derived from explicit caller policy or state.
     pub reasons: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct PlanningClassificationData {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: String,
-    /// Planning classifications returned by this request.
-    pub classifications: Vec<PlanningClassification>,
-    /// Number of records returned.
-    pub returned: usize,
+pub struct WorkQueueInventorySummary {
+    /// Total number of backlog items before queue filtering.
+    pub total_count: usize,
+    /// Backlog items that are open and have all dependencies closed.
+    pub runnable_count: usize,
+    /// Backlog items blocked by open dependencies.
+    pub dependency_blocked_count: usize,
+    /// Backlog items closed by Git trailers or recorded direct completion.
+    pub closed_count: usize,
+    /// Backlog items with active task lifecycle state.
+    pub active_lifecycle_count: usize,
+    /// Backlog items with completed task results waiting for integration.
+    pub pending_integration_count: usize,
+    /// Dependency-blocked backlog items returned for visibility.
+    pub dependency_blocked_items: Vec<BacklogInventoryItem>,
+    /// Closed backlog items returned for visibility.
+    pub closed_items: Vec<BacklogInventoryItem>,
+    /// Item IDs with active task lifecycle state.
+    pub active_lifecycle_item_ids: Vec<String>,
+    /// Task IDs with completed results awaiting integration.
+    pub pending_integration_task_ids: Vec<String>,
+    /// Whether any inventory lists were truncated by the queue limit.
+    pub truncated: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct WorkflowFitData {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: String,
-    /// Recommended workflow mode for the current goal.
-    pub recommended_mode: String,
-    /// Human-readable summary of the record or result.
-    pub summary: String,
-    /// Human-readable reasons behind this decision.
-    pub reasons: Vec<String>,
-    /// Suggested next action.
-    pub next_action: String,
-    /// Number of local backlog items discovered.
-    pub backlog_items: usize,
-    /// Number of backlog items currently runnable.
-    pub runnable_backlog_items: usize,
+pub struct BacklogItemMarkdownState {
+    /// Filesystem path for the backlog item markdown file.
+    pub path: String,
+    /// Markdown section headings discovered in the backlog item body.
+    pub sections: Vec<String>,
+    /// External references tied to this record.
+    pub external_refs: Vec<ExternalRef>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct PlanGoalWorkData {
+pub struct InspectItemData {
     /// Project root that bounds all file, Git, and state operations.
     pub root: String,
-    /// Recommended workflow mode for the current goal.
-    pub recommended_mode: String,
-    /// Selected planning intent after applying explicit input or auto inference.
-    pub selected_intent: String,
-    /// Human-readable summary of the record or result.
-    pub summary: String,
-    /// Human-readable reasons behind this decision.
-    pub reasons: Vec<String>,
-    /// Whether a lightweight Platypus tracking item is useful for this goal.
-    pub tracking_recommended: bool,
-    /// Recommended Platypus MCP tool to call next.
+    /// Backlog inventory state for this item.
+    pub item: BacklogInventoryItem,
+    /// Markdown file state and section headings for this item.
+    pub markdown: BacklogItemMarkdownState,
+    /// Queue view for this item when it is currently runnable or in an active
+    /// task lifecycle.
+    pub queue: Option<WorkQueueItem>,
+    /// Task plan state or file for this item.
+    pub plan: WorkQueuePlanState,
+    /// Planning classification for this backlog item.
+    pub planning: PlanningClassification,
+    /// Planning approval state when requested by this inspection.
+    pub planning_approval: Option<PlanningApprovalState>,
+    /// Current queue or lifecycle state for this item.
+    pub queue_state: String,
+    /// Active or pending lifecycle task id for this backlog item, when one
+    /// currently exists.
+    pub task_id: Option<String>,
+    /// Active worker assignment id for this backlog item, when one exists.
+    pub assignment_id: Option<String>,
+    /// Whether this item can be dispatched or prepared now.
+    pub ready_to_dispatch: bool,
+    /// Recommended Platypus MCP tool to call next for this item.
     pub recommended_tool: String,
-    /// Concrete JSON arguments suitable for the recommended tool.
-    pub recommended_arguments: BTreeMap<String, Value>,
-    /// Suggested next action.
-    pub next_action: String,
-    /// Number of local backlog items discovered.
-    pub backlog_items: usize,
-    /// Number of backlog items currently runnable.
-    pub runnable_backlog_items: usize,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct StartGoalWorkData {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: String,
-    /// Recommended workflow mode for the current goal.
-    pub recommended_mode: String,
-    /// Human-readable summary of the record or result.
-    pub summary: String,
-    /// Backlog items created by this operation.
-    pub created_items: Vec<CreatedBacklogItemData>,
-    /// Primary backlog item created by this operation, if one was created.
-    pub created_item_id: Option<String>,
-    /// Task plans created by this operation.
-    pub created_plans: Vec<TaskPlanWriteData>,
-    /// Tasks dispatched by this operation.
-    pub dispatched_tasks: Vec<DispatchReadyWorkItem>,
-    /// Worker assignment identifiers created by dispatch in this operation.
-    pub dispatched_assignment_ids: Vec<String>,
-    /// Items that could not be advanced and why.
-    pub blocked_items: Vec<GoalWorkBlockedItem>,
-    /// Non-fatal warnings produced by this operation.
-    pub warnings: Vec<String>,
-    /// Suggested next action.
-    pub next_action: String,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct GoalWorkBlockedItem {
-    /// Backlog item identifier.
-    pub item_id: String,
-    /// Human-readable title or short label.
-    pub title: String,
-    /// Recommended Platypus MCP tool to call next.
-    pub recommended_tool: String,
-    /// Human-readable reason for the decision or result.
+    /// Human-readable reason for the recommendation.
     pub reason: String,
+    /// Suggested parameters for the recommended tool call.
+    pub params: BTreeMap<String, Value>,
+    /// Finding records attached to this backlog item.
+    pub findings: Vec<FindingRecord>,
+    /// Evidence records attached to this backlog item.
+    pub evidence: Vec<EvidenceRecord>,
+    /// Number of finding records returned.
+    pub finding_count: usize,
+    /// Number of evidence records returned.
+    pub evidence_count: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2032,6 +2135,33 @@ pub struct DoctorSnapshotData {
     pub ok: bool,
     /// Diagnostic checks included in this result.
     pub checks: Vec<DoctorCheck>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct InspectSessionData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Whether inspected setup and queue state are ready for normal workflow
+    /// continuation.
+    pub ok: bool,
+    /// Project setup diagnostics, when inspection could collect them.
+    pub doctor: Option<DoctorSnapshotData>,
+    /// Project and backlog status, when inspection could collect it.
+    pub status: Option<ProjectStatusData>,
+    /// Effective workflow configuration, when inspection could collect it.
+    pub workflow: Option<WorkflowConfigData>,
+    /// Current work queue snapshot, when inspection could collect it.
+    pub queue: Option<WorkQueueData>,
+    /// Non-fatal errors encountered while collecting the session snapshot.
+    pub errors: Vec<String>,
+    /// Recommended Platypus MCP tool to call next.
+    pub recommended_tool: String,
+    /// Human-readable summary of the session snapshot.
+    pub summary: String,
+    /// Human-readable reason for the recommendation.
+    pub reason: String,
+    /// Suggested parameters for the recommended tool call.
+    pub params: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2099,8 +2229,6 @@ pub struct BacklogCandidate {
     pub item_type: String,
     /// Primary area or surface for this item.
     pub area: String,
-    /// Suggested worker name for this item.
-    pub suggested_worker: Option<String>,
     /// Owned code or documentation surfaces for this item.
     pub owned_surfaces: Vec<String>,
     /// External references tied to this record.
@@ -2135,7 +2263,7 @@ pub struct BacklogInventoryData {
     pub blocked: usize,
 }
 
-#[derive(Debug, Serialize, JsonSchema)]
+#[derive(Debug, Serialize, JsonSchema, Clone)]
 pub struct BacklogInventoryItem {
     /// Backlog item identifier.
     pub item_id: String,
@@ -2148,8 +2276,6 @@ pub struct BacklogInventoryItem {
     pub item_type: String,
     /// Primary area or surface for this item.
     pub area: String,
-    /// Suggested worker name for this item.
-    pub suggested_worker: Option<String>,
     /// Owned code or documentation surfaces for this item.
     pub owned_surfaces: Vec<String>,
     /// Dependencies that must be satisfied first.
@@ -2220,8 +2346,6 @@ pub struct BacklogDependencyNode {
     pub item_type: String,
     /// Primary area or surface for this item.
     pub area: String,
-    /// Suggested worker name for this item.
-    pub suggested_worker: Option<String>,
     /// Dependencies declared by this backlog item.
     pub depends_on: Vec<String>,
     /// Backlog item IDs that depend on this item.
@@ -2266,12 +2390,6 @@ pub struct BacklogValidationData {
     pub errors: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct DraftBacklogData {
-    /// Draft backlog items produced by this operation.
-    pub drafts: Vec<DraftBacklogItem>,
-}
-
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ExternalBacklogDraftData {
     /// Project root that bounds all file, Git, and state operations.
@@ -2303,8 +2421,6 @@ pub struct ExternalBacklogDraft {
     pub area: String,
     /// Owned code or documentation surfaces for this item.
     pub owned_surfaces: Vec<String>,
-    /// Suggested worker name for this item.
-    pub suggested_worker: Option<String>,
     /// Verification command to run or record for this item.
     pub verification_command: Vec<String>,
     /// External reference mapped into the local backlog candidate.
@@ -2407,27 +2523,6 @@ pub struct GitHubIssueSkipRecord {
     pub reason: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
-pub struct DraftBacklogItem {
-    /// Candidate identifier.
-    pub candidate_id: String,
-    /// Human-readable title or short label.
-    pub title: String,
-    /// Objective for this candidate or record.
-    pub objective: String,
-    #[serde(rename = "type")]
-    /// Backlog item type.
-    pub item_type: String,
-    /// Primary area or surface for this item.
-    pub area: String,
-    /// Owned code or documentation surfaces for this item.
-    pub owned_surfaces: Vec<String>,
-    /// Suggested worker name for this item.
-    pub suggested_worker: Option<String>,
-    /// Verification command to run or record for this item.
-    pub verification_command: Vec<String>,
-}
-
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct CreatedBacklogItemData {
     /// Backlog item identifier.
@@ -2464,6 +2559,22 @@ pub struct CreatedBacklogBatchItem {
     pub depends_on: Vec<String>,
     /// Whether this tool call created the file, record, or workspace.
     pub created: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct UpdatedBacklogItemData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Backlog item identifier.
+    pub item_id: String,
+    /// Filesystem path for the local file or workspace.
+    pub path: String,
+    /// Whether this item was already closed when the update was requested.
+    pub closed: bool,
+    /// Fields changed by this update.
+    pub changed_fields: Vec<String>,
+    /// Validation result after the planning write completed.
+    pub validation: BacklogValidationData,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2602,8 +2713,6 @@ pub struct PlannedTask {
     #[serde(default)]
     /// Owned code or documentation surfaces for this item.
     pub owned_surfaces: Vec<String>,
-    /// Suggested worker name for this item.
-    pub suggested_worker: Option<String>,
     #[serde(default)]
     /// Verification commands or evidence expected for this planned task.
     pub verification: Vec<String>,
@@ -2636,7 +2745,7 @@ pub struct FindingValidationData {
     pub root: String,
     /// Whether the operation succeeded.
     pub ok: bool,
-    /// Number of required findings still unresolved.
+    /// Number of required findings still open without an accepted disposition.
     pub unresolved_required_count: usize,
     /// Required findings that still need disposition.
     pub unresolved_required: Vec<FindingRecord>,
@@ -2664,7 +2773,7 @@ pub struct FindingRecord {
     pub status: String,
     /// Severity level.
     pub severity: Option<String>,
-    /// Whether this finding or item must be resolved before completion.
+    /// Whether this finding or item must receive an explicit disposition before completion.
     pub required: bool,
     /// Human-readable summary of the record or result.
     pub summary: String,
@@ -2763,10 +2872,6 @@ pub struct DispatchReadyWorkData {
     pub execution_mode: String,
     /// Warnings that should be resolved before dispatching work.
     pub preflight_warnings: Vec<String>,
-    /// Whether at least one ready worker profile is configured.
-    pub worker_ready: bool,
-    /// Number of ready worker profiles.
-    pub ready_worker_profiles: usize,
     /// Items or records in this response.
     pub items: Vec<DispatchReadyWorkItem>,
 }
@@ -2917,6 +3022,38 @@ pub struct WorkerResultIntegrationData {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
+pub struct IntegrationGate {
+    /// Stable gate name for clients that want to group or style results.
+    pub name: String,
+    /// Gate status: ready, blocked, warning, or unknown.
+    pub status: String,
+    /// Whether this gate currently blocks integration.
+    pub blocking: bool,
+    /// Human-readable summary of the gate result.
+    pub summary: String,
+    /// Recommended MCP tool to call next for this gate, if any.
+    pub recommended_tool: Option<String>,
+    /// Suggested next action for this gate.
+    pub next_action: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct IntegrationGateData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Task identifier.
+    pub task_id: String,
+    /// Source backlog item identifier, if the task exists.
+    pub source_item_id: Option<String>,
+    /// Whether all blocking integration gates are ready.
+    pub ok: bool,
+    /// Integration gates enforced or reported by integrate_worker_result.
+    pub gates: Vec<IntegrationGate>,
+    /// Suggested next action.
+    pub next_action: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct TaskBundleData {
     /// Project root that bounds all file, Git, and state operations.
     pub root: String,
@@ -2942,7 +3079,7 @@ pub struct WorkerCompletionContract {
 
 pub fn default_worker_completion_contract() -> WorkerCompletionContract {
     WorkerCompletionContract {
-        summary: "Finish through `finish_work` or `complete_worker_task`; include summary, changed files, verification status, and findings disposition.".to_string(),
+        summary: "Prefer `finish_work` for host-managed work; use `complete_worker_task` only for the lower-level assignment lifecycle. Include summary, changed files, verification status, and findings disposition.".to_string(),
         required_fields: vec![
             "status".to_string(),
             "summary".to_string(),
@@ -3081,38 +3218,6 @@ pub struct TaskVerificationRunData {
     pub stderr_truncated: bool,
     /// Whether this run exceeded the timeout and was terminated.
     pub timed_out: bool,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct RunnerReportData {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: String,
-    /// Number of tasks requested for processing.
-    pub requested: usize,
-    /// Number of queued tasks claimed.
-    pub claimed: usize,
-    /// Number of worker handoffs prepared.
-    pub prepared: usize,
-    /// Reason the batch stopped.
-    pub stopped_reason: String,
-    /// Planned implementation tasks.
-    pub tasks: Vec<RunnerTaskSummary>,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct RunnerTaskSummary {
-    /// Worker assignment identifier.
-    pub assignment_id: Option<String>,
-    /// Task identifier.
-    pub task_id: String,
-    /// Backlog item identifier.
-    pub item_id: String,
-    /// Lifecycle or result status for this record.
-    pub status: String,
-    /// Path to the worker workspace.
-    pub workspace_path: Option<String>,
-    /// Whether a worker bundle was generated for this task.
-    pub bundle_generated: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]
@@ -3342,40 +3447,31 @@ pub struct ReconciliationGap {
     pub next_action: String,
 }
 
-#[derive(Debug, Serialize, JsonSchema, Clone)]
-pub struct AgentProfile {
-    /// Name of this check, profile, or record.
-    pub name: String,
-    /// Role name for this agent profile.
-    pub role: String,
-    /// Harness name for this agent profile.
-    pub harness: String,
-    /// Executable path or command for this profile.
-    pub executable: String,
-    /// Capability names advertised by this profile.
-    pub capabilities: Vec<String>,
-    /// Free-form metadata attached to this record.
-    pub metadata: BTreeMap<String, Value>,
-    /// Whether this profile or workspace is ready for use.
-    pub ready: bool,
-    /// Issue records supplied by the host client.
-    pub issues: Vec<String>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
 
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct AgentProfilesData {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: String,
-    /// Agent profiles returned by this request.
-    pub profiles: Vec<AgentProfile>,
-    /// Number of records returned.
-    pub returned: usize,
-}
+    #[test]
+    fn action_result_separates_continuation_from_recovery() {
+        let completed = ActionResult::completed(
+            "ping",
+            "ok",
+            PingData {
+                echo: "pong".to_string(),
+            },
+        );
+        let failed = ActionResult::<PingData>::failed("ping", "failed", "boom");
 
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct AgentProfileData {
-    /// Project root that bounds all file, Git, and state operations.
-    pub root: String,
-    /// Agent profile returned or updated by this operation.
-    pub profile: AgentProfile,
+        assert_eq!(completed.next_action, None);
+        assert_eq!(completed.recovery_action, None);
+        assert_eq!(
+            serde_json::to_value(&failed).expect("failed json")["recovery_action"],
+            json!("Inspect the request and project setup.")
+        );
+        assert_eq!(
+            serde_json::to_value(&failed).expect("failed json")["next_action"],
+            json!("Inspect the request and project setup.")
+        );
+    }
 }

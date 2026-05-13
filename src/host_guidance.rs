@@ -23,37 +23,27 @@ const WORKFLOW_TEXT: &str = r#"# Platypus Host Workflow
 Use Platypus MCP tools for deterministic project state. The MCP host owns chat,
 model turns, and external worker execution.
 
-1. Inspect setup with `doctor_snapshot`, `inspect_status`, and
-   `inspect_workflow_config`.
-   If the host supports deferred schema preloading, first read
-   `platypus://guidance/tool-preload` or the `platypus-tool-preload` prompt
-   and load the planning startup group.
-2. For broad user goals, call `plan_goal_work` when you need read-only
-   guidance. Use `intent=planning_only` for planning, design, or backlog
-   shaping conversations. Use `intent=ready_to_execute` only when the user has
-   approved creating tracking and optionally dispatching tasks.
-3. Shape advanced/manual work by using the host model to call
-   `create_backlog_item` directly, then `validate_backlog`, `list_backlog`,
-   and `inspect_backlog_inventory`. Use `draft_backlog_items` only when the MCP
-   client supports sampling.
-4. Use `inspect_work_queue` or `classify_planning_needs` to choose executable
-   backlog work and understand direct, standard, or full planning needs.
-5. For non-trivial work, create a committed executable plan with
-   `write_task_plan`, `validate_task_plan`, `inspect_task_plan`, and
-   `list_task_plans`. Use `draft_task_plan` only when MCP sampling is
-   available; otherwise the host model should write the plan directly.
-6. Ask `next_safe_action` before advancing lifecycle state.
-7. Prepare execution with `prepare_work`. It returns a host action:
-   `direct_edit` for lightweight manager-workspace edits, or `run_in_worktree`
-   with an assignment bundle and worktree for host-run worker execution.
-   `dispatch_ready_work`, `dispatch_next_work`, and `prepare_worker_handoff`
-   remain low-level lifecycle controls.
-8. Start and track active workers with `start_worker_task` and
-   `record_worker_progress` when useful. Finish with `finish_work` so worker
-   completion, changed files, verification evidence, findings, integration
-   guidance, and reconciliation stay connected.
-   Follow its `host_action` to call `integrate_worker_result`,
-   `reconcile_project`, verification, or recovery tools as needed.
+If the host supports deferred schema preloading, first read
+`platypus://guidance/tool-preload` or the `platypus-tool-preload` prompt and
+load the planning startup group.
+
+## Exact Decision Table
+
+Read this table top to bottom. The first matching state wins. Do not skip the
+detecting tool and do not infer hidden state from chat history.
+
+| State | Detect with | Match condition | Required next action | Exit condition |
+| --- | --- | --- | --- | --- |
+| `unknown` | session start | state was not freshly inspected | call `inspect_session` | setup, project status, workflow config, and queue facts are known |
+| `needs_scaffold` | `doctor_snapshot` | scaffold files are missing | call `init_project`, then `doctor_snapshot` | scaffold blockers are gone |
+| `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `validate_backlog` | backlog validates and queue is inspected again |
+| `dependency_blocked` | `inspect_work_queue` | `inventory.dependency_blocked_count > 0` and no runnable item is selected | call `inspect_item` on the first blocked item; close or create required dependencies | blocked dependencies are resolved |
+| `plan_missing` | `inspect_work_queue` | an item recommends `write_task_plan` | host model writes an explicit plan with `write_task_plan`, then calls `validate_task_plan` | task plan validates cleanly |
+| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | call `prepare_work`, edit the manager workspace, then call `complete_backlog_item` | direct completion evidence or closure commit exists |
+| `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` for one item or `dispatch_ready_work` for a batch | `run_in_worktree` handoff exists |
+| `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree; call `finish_work` | `finish_work.host_action` is returned |
+| `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` | work is integrated or a specific blocker is reported |
+| `failed_or_unclear` | any tool result | `status == "failed"` or `recovery_action` is present | follow `recovery_action`; if still unclear call `inspect_session` | a known state above matches |
 
 Safety gates: keep runtime state in `.platy/platypus.sqlite3`, keep backlog
 markdown declarative, operate workers in task worktrees, and do not bypass
@@ -66,34 +56,28 @@ Platypus should make structured development the easy path for any MCP-enabled
 coding host. When the user gives a goal such as "build a web app", do not jump
 straight to broad edits. Convert the goal into a controlled loop:
 
-1. Inspect the project with `doctor_snapshot`, `inspect_status`, and
-   `next_safe_action`.
-2. Use `plan_goal_work` for broad user goals when you need read-only guidance.
-   It wraps `classify_workflow_fit` and returns concrete next-tool arguments
-   without changing project state. Pass `intent=planning_only` when the user is
-   still shaping backlog or design, and `intent=ready_to_execute` only when
-   execution should be prepared.
-3. If it recommends `direct_scaffold`, prefer the recommended
-   `start_goal_work` arguments with `dispatch=true` so tracking and the first
-   task worktree are prepared in one mutating call. Use `dispatch=false` only
-   when direct manager-workspace edits are intentional. No Platypus scaffold
-   tool is involved: use the host's native file edits or scaffold command,
-   commit the baseline, then return to Platypus for follow-up backlog work.
-4. For manual control, create a small concrete backlog set with
-   `create_backlog_item`. Keep items independently reviewable and executable.
-5. Use `draft_backlog_items` only as optional sampling-assisted drafting; if it
-   returns skipped, create the items directly. Run `validate_backlog` after
-   backlog writes.
-6. Use `inspect_work_queue` and `classify_planning_needs` to determine whether
-   the next item is direct, standard, or full.
-7. For standard or full items, create a strict task plan with `write_task_plan`
-   and `validate_task_plan`; use `draft_task_plan` only as optional
-   sampling-assisted help.
+1. Inspect the project with `inspect_session`.
+2. Decide the workflow strategy with model judgment and user intent. The MCP
+   server supplies facts, schemas, validation, and state transitions; it does
+   not classify broad goals.
+3. For tiny scaffolds, the host may edit directly after user approval. No
+   Platypus scaffold tool is involved: use the host's native file edits or
+   scaffold command, commit the baseline, then return to Platypus for follow-up
+   backlog work when tracking is useful.
+4. For tracked control, create a small concrete backlog set with
+   `create_backlog_item` or `create_backlog_items`. Keep items independently
+   reviewable and executable.
+5. Run `validate_backlog` after backlog writes.
+6. Use `inspect_work_queue` to inspect readiness, task-plan state, active work,
+   and setup blockers.
+7. When planning is required by the user or team, create a strict task plan
+   with `write_task_plan` and `validate_task_plan`.
 8. Prepare execution with `prepare_work`. Direct items may return a
-   `direct_edit` host action. Standard/full items return a `run_in_worktree`
+   `direct_edit` host action; complete those with `complete_backlog_item`.
+   Standard/full items return a `run_in_worktree`
    action with a worker assignment bundle; the MCP server does not launch the
    external worker.
-9. Record progress when useful, then finish with `finish_work`. Workers should
+9. Record progress when useful, then finish worker assignments with `finish_work`. Workers should
    report changed files, verification status, acceptance coverage, and findings
    or explicitly set `findings_reviewed=true`.
 10. Follow the `finish_work.host_action`: verify, record/resolve findings,
@@ -111,22 +95,17 @@ const PROJECT_STATUS_TEXT: &str = r#"# Project Status Guidance
 
 Use status tools before making assumptions about the repository or task queue.
 
+- `inspect_session` is the preferred startup tool. It combines setup checks,
+  project status, workflow config, and queue state in one read-only snapshot.
 - `doctor_snapshot` checks scaffold files, Git metadata, backlog directories,
-  agent profiles, and recovery guidance.
+  and recovery guidance.
 - `inspect_status` summarizes project shape, backlog counts, and runnable work.
 - `inspect_workflow_config` reports integration policy such as merge style and
   verification gates.
-- `list_agent_profiles` shows manager and worker roles.
 - `inspect_work_queue` combines runnable backlog candidates with active task
-  counts, planning mode, and task-plan readiness.
-- `classify_planning_needs` explains whether runnable items need direct,
-  standard, or full planning.
-- `classify_workflow_fit` decides whether a broad goal should use direct
-  scaffolding first, full Platypus workflow, or a hybrid flow.
-- `plan_goal_work` converts a broad goal into read-only next-tool guidance and
-  respects planning intent so planning-only chats do not recommend dispatch.
-- `next_safe_action` converts the current lifecycle state into the next safe
-  tool call.
+  counts, explicit task-plan requirements, and task-plan readiness.
+- `inspect_work_queue` returns the current queue shape, direct/worktree
+  execution path, and the recommended next tool call.
 
 Report setup blockers directly from structured tool output. Do not invent
 missing state from chat context.
@@ -140,8 +119,8 @@ that support one should load the common groups below to reduce planning and
 execution round trips.
 
 Preloading is optional and host-specific. If the host cannot preload schemas,
-continue normally and call the tools as needed. Do not depend on sampling or
-hidden client context for core state transitions.
+continue normally and call the tools as needed. Do not depend on hidden client
+context for core state transitions.
 
 ## Planning Startup Group
 
@@ -151,17 +130,14 @@ sessions:
 - `doctor_snapshot`
 - `inspect_status`
 - `inspect_workflow_config`
-- `next_safe_action`
-- `plan_goal_work`
-- `classify_workflow_fit`
+- `inspect_session`
 - `create_backlog_item`
 - `create_backlog_items`
 - `create_epic`
 - `validate_backlog`
 - `list_backlog`
-- `inspect_backlog_inventory`
 - `inspect_work_queue`
-- `classify_planning_needs`
+- `inspect_item`
 - `write_task_plan`
 - `validate_task_plan`
 - `inspect_task_plan`
@@ -174,8 +150,10 @@ Load this group before dispatch, worker handoff, verification, integration, or
 recovery sessions:
 
 - `inspect_work_queue`
+- `inspect_session`
 - `prepare_work`
 - `dispatch_ready_work`
+- `commit_planning_artifacts`
 - `generate_task_bundle`
 - `inspect_task_events`
 - `events_replay`
@@ -186,10 +164,12 @@ recovery sessions:
 - `record_worker_progress`
 - `complete_worker_task`
 - `finish_work`
+- `complete_backlog_item`
 - `run_task_verification`
 - `record_verification_evidence`
 - `record_finding`
 - `validate_findings`
+- `inspect_integration_gates`
 - `integrate_worker_result`
 - `worktree_cleanup`
 - `reconcile_project`
@@ -201,19 +181,19 @@ these two groups cover the normal long-term product development loop.
 const BACKLOG_AUTHORING_TEXT: &str = r#"# Backlog Authoring Guidance
 
 Create concise, agent-readable backlog items with `create_backlog_item` for one
-item or `create_backlog_items` for an atomic related set.
-`draft_backlog_items` is optional and requires MCP client sampling support;
-when it returns skipped, use the host model's own judgment and call
-`create_backlog_item` or `create_backlog_items` directly. Validate with
-`validate_backlog`, inspect runnable work with `list_backlog`, and use
-`inspect_backlog_inventory` when the host needs to explain closed or blocked
-items.
+item or `create_backlog_items` for an atomic related set. Use the host model's
+own judgment to choose item boundaries and call the write tools directly.
+Validate with `validate_backlog`, inspect queue shape with `inspect_work_queue`,
+and use `inspect_item` when the host needs the full state for one closed,
+blocked, active, or runnable item. `inspect_backlog_inventory` remains a
+compatibility tool; normal flows should not need it.
 
 Backlog markdown should contain goal, implementation contract, acceptance
 criteria, dependencies, suggested worker, and owned surfaces. It should not
 contain runtime status, assignment attempts, task IDs, PR metadata, closure
 state, or blocked/done fields. Closure is derived from Git trailers such as
-`Platypus-Closes` and `Platypus-Verification`.
+`Platypus-Closes` and `Platypus-Verification`, or from recorded direct
+completion events created by `complete_backlog_item`.
 
 Backlog schema quick reference:
 
@@ -225,9 +205,10 @@ Backlog schema quick reference:
   complex or the defaults would be too broad.
 - Priorities: `P0` critical/next, `P1` normal important work, `P2` refinement.
 - Types: `foundation`, `feature`, `safety`, `ux`, `test`, `docs`.
-- Defaults: priority `P1`, type `feature`, epic `general`, worker `coder`.
-- `suggested_worker` is a Platypus worker profile name, not necessarily a
-  host-specific subagent type.
+- Defaults: priority `P1`, type `feature`, epic `general`.
+- Worker selection is runtime state. The manager or MCP host chooses the
+  executor when preparing execution; Platypus does not create or configure
+  agents.
 - For related items, prefer `create_backlog_items`. Give each item a
   `client_key` and use `depends_on_keys` to reference other items in the same
   batch before their IDs are known. The batch is all-or-nothing.
@@ -236,15 +217,18 @@ Backlog schema quick reference:
   explicitly asks for manual file edits.
 
 There is no manual `backlog/index.md`; hosts should compute queue state through
-`list_backlog`, `inspect_work_queue`, `inspect_status`, and `next_safe_action`.
+`list_backlog`, `inspect_work_queue`, and `inspect_status`.
 
-For non-trivial items, use `draft_task_plan` and `write_task_plan` to create
-`backlog/plans/<ITEM>.yaml` only when sampling is available. Otherwise use the
-host model to write a concrete plan directly with `write_task_plan`. Plan YAML
-is strict and reviewable, but still not runtime state.
+For non-trivial items, use the host model to write a concrete plan directly
+with `write_task_plan`. Plan YAML is strict and reviewable, but still not
+runtime state.
 
-Planning policy is deterministic: direct items can be dispatched from the
-backlog contract; standard and full items require a valid task plan first.
+Execution policy is deterministic and durable. Use `workflow.execution` for
+project defaults and backlog item frontmatter `execution_path` plus
+`planning_gate` for item overrides. `direct_edit` items finish through
+`complete_backlog_item`. `worker_handoff` items use `prepare_work` or
+`dispatch_ready_work` after their `none`, `task_plan`, or
+`approved_task_plan` gate is satisfied.
 "#;
 
 const WORKER_HANDOFF_TEXT: &str = r#"# Worker Handoff Guidance
@@ -253,12 +237,12 @@ Workers run outside the MCP server. Platypus prepares and records their
 execution state.
 
 1. Prefer `prepare_work` for normal host-run execution. It inspects the queue,
-   returns direct-edit guidance for direct items, and prepares assignment
-   bundles plus worktrees for standard/full worker work.
+   returns direct-edit guidance for `execution_path=direct_edit`, and prepares
+   assignment bundles plus worktrees for `execution_path=worker_handoff`.
 2. Use `dispatch_ready_work` only when the host needs lower-level batch
-   dispatch control. Pass `execution_mode=manual_handoff` when the MCP host or
-   a human-managed worker will execute the assignment outside a configured
-   Platypus worker profile.
+   dispatch control for worker-handoff items. `manual_handoff` means the MCP
+   host or a human-managed worker will execute the returned assignment;
+   Platypus does not launch or configure that worker.
 3. For the lowest-level control, use `dispatch_next_work` followed immediately by
    `prepare_worker_handoff`; do not run an external worker from a task id
    without an assignment.
@@ -268,13 +252,17 @@ execution state.
    transition with `start_worker_task` when you need an explicit running state.
    This tool does not launch a worker.
 6. Persist safe progress with `record_worker_progress`.
-7. Finish with `finish_work` so completion, changed files, verification
-   evidence, findings, and integration guidance remain one connected result.
+7. Finish direct-edit host actions with `complete_backlog_item`. Finish
+   worker assignments with `finish_work` so completion, changed files,
+   verification evidence, findings, and integration guidance remain one
+   connected result.
    Use `complete_worker_task` only when you need low-level completion control.
 
 For same-session host-driven edits, `finish_work` can finish a prepared
 assignment directly; it auto-starts prepared assignments by default. Set
 `auto_start_if_prepared=false` when strict running-only completion is required.
+For direct manager-workspace edits returned by `prepare_work`, do not call
+`finish_work`; call `complete_backlog_item`.
 
 Do not run worker edits in the manager workspace. Use `send_worker_guidance`
 for steering active work.
@@ -301,11 +289,13 @@ const RECOVERY_TEXT: &str = r#"# Recovery Guidance
 When the host is unsure what happened, prefer inspection before mutation.
 
 - `doctor_snapshot` reports setup issues and recovery guidance.
-- `next_safe_action` recommends the next safe lifecycle tool.
+- `inspect_work_queue` recommends the next queue or lifecycle tool.
 - `events_replay` and `inspect_task_events` replay durable activity.
 - `approval_list` and `approval_respond` handle durable approvals.
 - `list_findings`, `validate_findings`, and `update_finding_disposition` show
-  unresolved follow-up obligations.
+  open follow-up obligations and explicit dispositions.
+- `inspect_integration_gates` explains why a completed task is or is not ready
+  for `integrate_worker_result`.
 - `reconcile_project` reports missing verification, integration, findings, and
   closure evidence.
 

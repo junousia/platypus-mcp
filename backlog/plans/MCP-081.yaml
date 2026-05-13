@@ -1,0 +1,74 @@
+item_id: MCP-081
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Direct prepare behavior is explicit about whether state is persisted.
+- id: R2
+  text: Follow-up inspection does not mislead hosts after direct prepare.
+- id: R3
+  text: Worker handoff preparation behavior is unchanged.
+design:
+  summary: Make direct prepare semantics a deliberate contract. Either persist a lightweight direct preparation marker or clearly make the response local-only and adjust inspection and docs accordingly.
+  owned_surfaces:
+  - src/host_lifecycle.rs
+  - src/guidance.rs
+  - src/models.rs
+  - src/project/init.rs
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  notes: Choose the smallest durable behavior that reduces confusion without turning direct work into a full task lifecycle.
+tasks:
+- id: MCP-081-T001
+  title: Decide direct prepare persistence contract
+  goal: Review current prepare_work output and queue inspection and select persisted marker versus explicit local-only guidance.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/host_lifecycle.rs
+  - src/guidance.rs
+  - src/models.rs
+  verification:
+  - cargo test host_lifecycle::tests
+  acceptance:
+  - The selected contract is represented in typed response fields.
+  - Direct prepare output has no ambiguous prepared_state wording.
+  notes:
+  - Avoid creating fake active tasks for direct work.
+- id: MCP-081-T002
+  title: Align inspection after direct prepare
+  goal: Ensure inspect_work_queue or inspect_item either reports the direct preparation marker or explains no durable direct preparation exists.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-081-T001
+  owned_surfaces:
+  - src/guidance.rs
+  - src/models.rs
+  - tests
+  verification:
+  - cargo test guidance::tests
+  acceptance:
+  - Follow-up queue inspection does not make a direct-prepared item look accidentally ignored.
+  - Direct items remain completable with complete_backlog_item.
+  notes: null
+- id: MCP-081-T003
+  title: Update generated host guidance
+  goal: Document the direct prepare contract in generated AGENTS/CLAUDE files and workflow docs.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on:
+  - MCP-081-T002
+  owned_surfaces:
+  - src/project/init.rs
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  verification:
+  - make check
+  acceptance:
+  - Host guidance shows prepare_work followed by direct edit and complete_backlog_item.
+  - Worker handoff docs remain separate and unchanged.
+  notes: null

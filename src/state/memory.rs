@@ -149,12 +149,6 @@ impl ProjectState for MemoryProjectState {
         let item_id = command
             .source_item_id
             .clone()
-            .or_else(|| {
-                command
-                    .preferred_worker
-                    .as_deref()
-                    .map(|worker| format!("MEM-{worker}"))
-            })
             .unwrap_or_else(|| "MEM-001".to_string());
         if inner.tasks.values().any(|task| {
             task.source_item_id == item_id
@@ -172,9 +166,7 @@ impl ProjectState for MemoryProjectState {
         let now = inner.now();
         let task_id = inner.next_task_id();
         let title = format!("Memory task {item_id}");
-        let worker = command
-            .preferred_worker
-            .or_else(|| Some("coder".to_string()));
+        let worker = command.preferred_worker;
         let task = TaskSnapshot {
             id: task_id.clone(),
             source_item_id: item_id.clone(),
@@ -209,7 +201,6 @@ impl ProjectState for MemoryProjectState {
                 priority: "P1".to_string(),
                 area: "test".to_string(),
                 item_type: "test".to_string(),
-                suggested_worker: worker,
                 owned_surfaces: Vec::new(),
                 external_refs: Vec::<ExternalRef>::new(),
             },
@@ -588,31 +579,6 @@ impl ProjectState for MemoryProjectState {
         Ok(task.clone())
     }
 
-    fn next_safe_action(&self, _query: NextSafeActionQuery) -> StateResult<SafeActionSnapshot> {
-        let inner = self.lock()?;
-        let summary = if let Some(assignment) = inner
-            .assignments
-            .values()
-            .find(|assignment| matches!(assignment.state, AssignmentLifecycleState::Running))
-        {
-            format!("Worker assignment `{}` is running.", assignment.id)
-        } else if let Some(task) = inner
-            .tasks
-            .values()
-            .find(|task| matches!(task.state, TaskLifecycleState::Queued))
-        {
-            format!("Task `{}` is queued.", task.id)
-        } else {
-            "No memory-backed task needs action.".to_string()
-        };
-        Ok(SafeActionSnapshot {
-            recommended_tool: "inspect_work_queue".to_string(),
-            summary,
-            reason: "Memory backend safe-action inspection is test scoped.".to_string(),
-            params: BTreeMap::new(),
-        })
-    }
-
     fn inspect_task(&self, query: TaskQuery) -> StateResult<TaskSnapshot> {
         self.lock()?
             .tasks
@@ -777,7 +743,7 @@ impl ProjectState for MemoryProjectState {
                 finding.required
                     && !matches!(
                         finding.status.as_str(),
-                        "resolved" | "rejected" | "duplicate"
+                        "accepted" | "deferred" | "resolved" | "rejected" | "duplicate"
                     )
                     && query
                         .source_item_id
@@ -895,7 +861,7 @@ impl ProjectState for MemoryProjectState {
                 finding.required
                     && !matches!(
                         finding.status.as_str(),
-                        "resolved" | "rejected" | "duplicate"
+                        "accepted" | "deferred" | "resolved" | "rejected" | "duplicate"
                     )
             })
             .count();

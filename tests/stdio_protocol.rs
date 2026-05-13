@@ -1,18 +1,15 @@
 use rmcp::{
     model::{
-        CallToolRequestParams, ClientCapabilities, ClientInfo, CreateMessageRequestParams,
-        CreateMessageResult, GetPromptRequestParams, JsonObject, PromptMessageContent,
-        ReadResourceRequestParams, ResourceContents, SamplingMessage,
+        CallToolRequestParams, GetPromptRequestParams, JsonObject, PromptMessageContent,
+        ReadResourceRequestParams, ResourceContents,
     },
-    service::RequestContext,
     transport::TokioChildProcess,
-    ClientHandler, ErrorData as McpError, RoleClient, ServiceExt,
+    ClientHandler, ServiceExt,
 };
 use serde_json::{json, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -29,16 +26,20 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"inspect_status"));
     assert!(tool_names.contains(&"create_backlog_item"));
     assert!(tool_names.contains(&"create_backlog_items"));
+    assert!(tool_names.contains(&"update_backlog_item"));
     assert!(tool_names.contains(&"create_epic"));
     assert!(tool_names.contains(&"list_epics"));
     assert!(tool_names.contains(&"doctor_snapshot"));
     assert!(tool_names.contains(&"init_project"));
-    assert!(tool_names.contains(&"next_safe_action"));
+    assert!(!tool_names.contains(&"next_safe_action"));
+    assert!(tool_names.contains(&"inspect_session"));
     assert!(tool_names.contains(&"inspect_work_queue"));
-    assert!(tool_names.contains(&"classify_planning_needs"));
-    assert!(tool_names.contains(&"classify_workflow_fit"));
-    assert!(tool_names.contains(&"plan_goal_work"));
-    assert!(tool_names.contains(&"start_goal_work"));
+    assert!(tool_names.contains(&"inspect_item"));
+    assert!(!tool_names.contains(&"classify_planning_needs"));
+    assert!(!tool_names.contains(&"classify_workflow_fit"));
+    assert!(!tool_names.contains(&"classify_goal_workflow"));
+    assert!(!tool_names.contains(&"plan_goal_work"));
+    assert!(!tool_names.contains(&"start_goal_work"));
     assert!(tool_names.contains(&"record_finding"));
     assert!(tool_names.contains(&"inspect_dependency_graph"));
     assert!(tool_names.contains(&"draft_external_backlog_items"));
@@ -47,7 +48,8 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"request_external_report_approval"));
     assert!(tool_names.contains(&"request_planning_approval"));
     assert!(tool_names.contains(&"record_external_report_dispatch"));
-    assert!(tool_names.contains(&"draft_task_plan"));
+    assert!(!tool_names.contains(&"draft_backlog_items"));
+    assert!(!tool_names.contains(&"draft_task_plan"));
     assert!(tool_names.contains(&"inspect_task_plan"));
     assert!(tool_names.contains(&"list_task_plans"));
     assert!(tool_names.contains(&"validate_task_plan"));
@@ -61,6 +63,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"inspect_worktree_changes"));
     assert!(tool_names.contains(&"worktree_cleanup"));
     assert!(tool_names.contains(&"integrate_worker_result"));
+    assert!(tool_names.contains(&"inspect_integration_gates"));
     assert!(tool_names.contains(&"generate_task_bundle"));
     assert!(tool_names.contains(&"prepare_worker_assignment"));
     assert!(tool_names.contains(&"prepare_worker_handoff"));
@@ -72,8 +75,8 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"complete_worker_execution"));
     assert!(tool_names.contains(&"complete_worker_task"));
     assert!(tool_names.contains(&"finish_work"));
+    assert!(tool_names.contains(&"complete_backlog_item"));
     assert!(tool_names.contains(&"run_task_verification"));
-    assert!(tool_names.contains(&"runner_prepare_next"));
     assert!(tool_names.contains(&"approval_list"));
     assert!(tool_names.contains(&"approval_respond"));
     assert!(tool_names.contains(&"acquire_lease"));
@@ -86,8 +89,6 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"record_verification_evidence"));
     assert!(tool_names.contains(&"list_evidence"));
     assert!(tool_names.contains(&"reconcile_project"));
-    assert!(tool_names.contains(&"list_agent_profiles"));
-    assert!(tool_names.contains(&"configure_agent_profile"));
     assert!(tool_names.contains(&"inspect_workflow_config"));
     assert!(tool_names.contains(&"send_worker_guidance"));
 
@@ -125,6 +126,33 @@ async fn stdio_server_creates_and_lists_epics() -> anyhow::Result<()> {
     assert_stage_status("list_epics", &listed, "completed");
     assert_eq!(listed["data"]["returned"], 2);
     assert_eq!(listed["data"]["epics"][1]["id"], "webapp");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_inspects_session_snapshot() -> anyhow::Result<()> {
+    let project = assignment_project_fixture();
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let session = call_tool_json(
+        &client,
+        "inspect_session",
+        json!({ "limit": 5, "require_task_plan": false }),
+    )
+    .await?;
+
+    assert_stage_status("inspect_session", &session, "completed");
+    assert_eq!(session["data"]["ok"], true);
+    assert_eq!(session["data"]["recommended_tool"], "write_task_plan");
+    assert!(session["data"]["doctor"]["ok"].as_bool().unwrap_or(false));
+    assert_eq!(session["data"]["status"]["backlog_items"], 1);
+    assert_eq!(
+        session["data"]["queue"]["items"][0]["execution_path"],
+        "blocked"
+    );
+    assert!(session["data"]["workflow"]["integration"]["merge_style"].is_string());
 
     client.cancel().await?;
     Ok(())
@@ -203,6 +231,89 @@ async fn stdio_server_creates_backlog_items_atomically() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn stdio_server_updates_backlog_item_with_validation() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+    let initialized = call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "Update Smoke" }),
+    )
+    .await?;
+    assert_stage_status("init_project", &initialized, "completed");
+
+    let created = call_tool_json(
+        &client,
+        "create_backlog_item",
+        json!({
+            "id": "PROJ-001",
+            "title": "Original item",
+            "type": "feature",
+            "goal": "Original goal.",
+            "implementation_contract": "Original contract.",
+            "acceptance": ["Original acceptance."]
+        }),
+    )
+    .await?;
+    assert_stage_status("create_backlog_item", &created, "completed");
+
+    let updated = call_tool_json(
+        &client,
+        "update_backlog_item",
+        json!({
+            "item_id": "PROJ-001",
+            "title": "Updated item",
+            "priority": "P0",
+            "type": "docs",
+            "owned_surfaces": ["README.md"],
+            "execution_path": "worker_handoff",
+            "planning_gate": "task_plan",
+            "goal": "Updated goal.",
+            "implementation_contract": "Updated contract.",
+            "acceptance": ["Updated acceptance."]
+        }),
+    )
+    .await?;
+    assert_stage_status("update_backlog_item", &updated, "completed");
+    assert_eq!(updated["data"]["item_id"], "PROJ-001");
+    assert!(updated["data"]["changed_fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|field| field == "title"));
+
+    let text = fs::read_to_string(project.path().join("backlog/items/PROJ-001.md"))?;
+    assert!(text.contains("title: Updated item"));
+    assert!(text.contains("priority: P0"));
+    assert!(text.contains("type: docs"));
+    assert!(text.contains("execution_path: worker_handoff"));
+    assert!(text.contains("- Updated acceptance."));
+
+    let before = text;
+    let failed = call_tool_json(
+        &client,
+        "update_backlog_item",
+        json!({
+            "item_id": "PROJ-001",
+            "depends_on": ["PROJ-999"]
+        }),
+    )
+    .await?;
+    assert_stage_status("update_backlog_item", &failed, "failed");
+    assert!(failed["error"]
+        .as_str()
+        .unwrap_or("")
+        .contains("unknown dependency `PROJ-999`"));
+    assert_eq!(
+        fs::read_to_string(project.path().join("backlog/items/PROJ-001.md"))?,
+        before
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_calls_structured_ping_tool() -> anyhow::Result<()> {
     let client = start_client(None).await?;
 
@@ -219,66 +330,6 @@ async fn stdio_server_calls_structured_ping_tool() -> anyhow::Result<()> {
     assert_eq!(response["action"], "ping");
     assert_eq!(response["status"], "completed");
     assert_eq!(response["data"]["echo"], "hello");
-
-    client.cancel().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn stdio_server_skips_backlog_drafting_without_sampling() -> anyhow::Result<()> {
-    let client = start_client(None).await?;
-
-    let drafted = call_tool_json(
-        &client,
-        "draft_backlog_items",
-        json!({ "goal": "Build a FastAPI and React app with authentication" }),
-    )
-    .await?;
-
-    assert_stage_status("draft_backlog_items", &drafted, "skipped");
-    assert_eq!(drafted["data"]["drafts"].as_array().unwrap().len(), 0);
-    assert!(drafted["next_action"]
-        .as_str()
-        .unwrap_or("")
-        .contains("create_backlog_item"));
-
-    client.cancel().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn stdio_server_samples_backlog_drafts_when_client_supports_sampling() -> anyhow::Result<()> {
-    let client = start_sampling_client(
-        None,
-        r#"{
-          "drafts": [
-            {
-              "candidate_id": "draft-1",
-              "title": "Scaffold FastAPI authentication backend",
-              "objective": "Create a concrete backend auth foundation.",
-              "type": "foundation",
-              "area": "backend",
-              "owned_surfaces": ["backend/"],
-              "suggested_worker": "coder",
-              "verification_command": ["make check"]
-            }
-          ]
-        }"#,
-    )
-    .await?;
-
-    let drafted = call_tool_json(
-        &client,
-        "draft_backlog_items",
-        json!({ "goal": "Build a FastAPI and React app with authentication" }),
-    )
-    .await?;
-
-    assert_stage_status("draft_backlog_items", &drafted, "completed");
-    assert_eq!(
-        drafted["data"]["drafts"][0]["title"],
-        "Scaffold FastAPI authentication backend"
-    );
 
     client.cancel().await?;
     Ok(())
@@ -387,8 +438,12 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
         .await?;
     let text = resource_text(&workflow.contents[0]);
 
-    assert!(text.contains("next_safe_action"));
-    assert!(text.contains("prepare_worker_handoff"));
+    assert!(text.contains("inspect_work_queue"));
+    assert!(text.contains("Exact Decision Table"));
+    assert!(text.contains("The first matching state wins"));
+    assert!(text.contains("queue_state == \"direct_ready\""));
+    assert!(text.contains("completed_pending_integration"));
+    assert!(text.contains("prepare_work"));
     assert!(text.contains("integrate_worker_result"));
     assert!(text.contains("reconcile_project"));
     assert!(text.contains("verification evidence"));
@@ -401,7 +456,7 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
         .await?;
     let text = resource_text(&spec.contents[0]);
     assert!(text.contains("coding host"));
-    assert!(text.contains("draft_backlog_items"));
+    assert!(text.contains("create_backlog_items"));
     assert!(text.contains("write_task_plan"));
 
     let preload = client
@@ -491,17 +546,9 @@ async fn stdio_server_calls_project_doctor_with_configured_root() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn stdio_server_skips_draft_then_writes_and_validates_task_plan() -> anyhow::Result<()> {
+async fn stdio_server_writes_and_validates_task_plan() -> anyhow::Result<()> {
     let project = assignment_project_fixture();
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
-
-    let drafted =
-        call_tool_json(&client, "draft_task_plan", json!({ "item_id": "PROJ-001" })).await?;
-    assert_stage_status("draft_task_plan", &drafted, "completed");
-    assert!(drafted["next_action"]
-        .as_str()
-        .unwrap_or("")
-        .contains("write_task_plan"));
 
     let written = call_tool_json(
         &client,
@@ -544,39 +591,13 @@ async fn stdio_server_skips_draft_then_writes_and_validates_task_plan() -> anyho
 }
 
 #[tokio::test]
-async fn stdio_server_samples_task_plan_when_client_supports_sampling() -> anyhow::Result<()> {
-    let project = assignment_project_fixture();
-    let sampled = json!({ "plan": task_plan_json() }).to_string();
-    let client =
-        start_sampling_client(Some(project.path().to_string_lossy().as_ref()), &sampled).await?;
-
-    let drafted =
-        call_tool_json(&client, "draft_task_plan", json!({ "item_id": "PROJ-001" })).await?;
-
-    assert_stage_status("draft_task_plan", &drafted, "completed");
-    assert_eq!(drafted["data"]["plan"]["item_id"], "PROJ-001");
-    assert_eq!(
-        drafted["data"]["plan"]["tasks"][0]["verification"][0],
-        "make check"
-    );
-
-    client.cancel().await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn stdio_server_inspects_work_queue_with_task_plan_state() -> anyhow::Result<()> {
     let project = assignment_project_fixture();
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
 
-    let missing = call_tool_json(
-        &client,
-        "inspect_work_queue",
-        json!({ "limit": 5, "require_task_plan": true }),
-    )
-    .await?;
+    let missing = call_tool_json(&client, "inspect_work_queue", json!({ "limit": 5 })).await?;
     assert_stage_status("inspect_work_queue missing plan", &missing, "completed");
-    assert_eq!(missing["data"]["recommended_tool"], "draft_task_plan");
+    assert_eq!(missing["data"]["recommended_tool"], "write_task_plan");
     assert_eq!(
         missing["data"]["items"][0]["candidate"]["item_id"],
         "PROJ-001"
@@ -595,121 +616,16 @@ async fn stdio_server_inspects_work_queue_with_task_plan_state() -> anyhow::Resu
     .await?;
     assert_stage_status("write_task_plan", &written, "completed");
 
-    let ready = call_tool_json(
-        &client,
-        "inspect_work_queue",
-        json!({ "limit": 5, "require_task_plan": true }),
-    )
-    .await?;
+    let ready = call_tool_json(&client, "inspect_work_queue", json!({ "limit": 5 })).await?;
     assert_stage_status("inspect_work_queue ready", &ready, "completed");
     assert_eq!(ready["data"]["recommended_tool"], "dispatch_ready_work");
     assert_eq!(ready["data"]["items"][0]["plan"]["status"], "valid");
     assert_eq!(
         ready["data"]["items"][0]["planning"]["required_mode"],
-        "standard"
+        "task_plan"
     );
     assert_eq!(ready["data"]["items"][0]["plan"]["task_count"], 1);
     assert_eq!(ready["data"]["items"][0]["ready_to_dispatch"], true);
-
-    client.cancel().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn stdio_server_classifies_planning_needs() -> anyhow::Result<()> {
-    let project = assignment_project_fixture();
-    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
-
-    let classified = call_tool_json(
-        &client,
-        "classify_planning_needs",
-        json!({ "item_id": "PROJ-001", "limit": 5 }),
-    )
-    .await?;
-    assert_stage_status("classify_planning_needs", &classified, "completed");
-    assert_eq!(classified["data"]["returned"], 1);
-    assert_eq!(
-        classified["data"]["classifications"][0]["required_mode"],
-        "standard"
-    );
-    assert_eq!(
-        classified["data"]["classifications"][0]["required_artifact"],
-        "backlog/plans/PROJ-001.yaml"
-    );
-
-    client.cancel().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn stdio_server_plans_goal_work_without_mutating_project() -> anyhow::Result<()> {
-    let project = TempDir::new()?;
-    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
-
-    let result = call_tool_json(
-        &client,
-        "plan_goal_work",
-        json!({ "goal": "create a simple web app" }),
-    )
-    .await?;
-
-    assert_stage_status("plan_goal_work", &result, "completed");
-    assert_eq!(result["data"]["recommended_mode"], "direct_scaffold");
-    assert_eq!(result["data"]["recommended_tool"], "start_goal_work");
-    assert_eq!(
-        result["data"]["recommended_arguments"]["dispatch"],
-        serde_json::Value::Bool(true)
-    );
-    assert!(!project.path().join("platy.yaml").exists());
-
-    client.cancel().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn stdio_server_starts_goal_work_with_direct_scaffold_guidance() -> anyhow::Result<()> {
-    let project = TempDir::new()?;
-    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
-
-    let result = call_tool_json(
-        &client,
-        "start_goal_work",
-        json!({ "goal": "create a simple web app" }),
-    )
-    .await?;
-
-    assert_stage_status("start_goal_work", &result, "completed");
-    assert_eq!(result["data"]["recommended_mode"], "direct_scaffold");
-    assert_eq!(result["data"]["created_items"].as_array().unwrap().len(), 1);
-    assert_eq!(result["data"]["created_item_id"], "PROJ-001");
-    assert!(result["data"]["next_action"]
-        .as_str()
-        .expect("next action")
-        .to_ascii_lowercase()
-        .contains("scaffold"));
-
-    client.cancel().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn stdio_server_rejects_removed_scaffold_in_place_flag() -> anyhow::Result<()> {
-    let project = TempDir::new()?;
-    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
-
-    let result = call_tool_json(
-        &client,
-        "start_goal_work",
-        json!({ "goal": "create a simple web app", "scaffold_in_place": true }),
-    )
-    .await?;
-
-    assert_stage_status("start_goal_work", &result, "failed");
-    assert!(result["error"]
-        .as_str()
-        .expect("error")
-        .contains("plan_goal_work"));
-    assert!(!project.path().join("platy.yaml").exists());
 
     client.cancel().await?;
     Ok(())
@@ -822,6 +738,21 @@ area: general
         .expect("blocked item");
     assert_eq!(blocked["open_dependencies"][0], "PROJ-002");
 
+    let item = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "inspect_item".into(),
+            arguments: Some(json_args(json!({ "item_id": "PROJ-003" }))),
+            task: None,
+        })
+        .await?;
+    let item = item.structured_content.expect("item content");
+    assert_eq!(item["action"], "inspect_item");
+    assert_eq!(item["status"], "completed");
+    assert_eq!(item["data"]["queue_state"], "dependency_blocked");
+    assert_eq!(item["data"]["item"]["open_dependencies"][0], "PROJ-002");
+    assert_eq!(item["data"]["recommended_tool"], "inspect_item");
+
     client.cancel().await?;
     Ok(())
 }
@@ -922,7 +853,7 @@ async fn stdio_server_initializes_project_scaffold() -> anyhow::Result<()> {
     assert!(project.path().join("backlog/epics/general.md").is_file());
     let claude = fs::read_to_string(project.path().join("CLAUDE.md"))?;
     assert!(claude.contains("spec-driven development"));
-    assert!(claude.contains("draft_task_plan"));
+    assert!(claude.contains("write_task_plan"));
 
     client.cancel().await?;
     Ok(())
@@ -1146,7 +1077,6 @@ async fn stdio_server_drafts_external_backlog_items_and_dedupes_refs() -> anyhow
             "type": "feature",
             "area": "integrations",
             "epic": "general",
-            "suggested_worker": "coder",
             "owned_surfaces": ["src"],
             "external_refs": [{
                 "provider": "github",
@@ -1552,6 +1482,25 @@ async fn stdio_server_dispatches_ready_work_with_handoffs() -> anyhow::Result<()
 #[tokio::test]
 async fn stdio_server_requests_planning_approval_before_dispatch() -> anyhow::Result<()> {
     let project = dispatch_project_fixture();
+    mark_backlog_item_policy(
+        project.path(),
+        "PROJ-001",
+        "worker_handoff",
+        "approved_task_plan",
+    )?;
+    write_task_plan_yaml(project.path(), "PROJ-001")?;
+    git(
+        project.path(),
+        &[
+            "add",
+            "backlog/items/PROJ-001.md",
+            "backlog/plans/PROJ-001.yaml",
+        ],
+    );
+    git(
+        project.path(),
+        &["commit", "-m", "Require planning approval"],
+    );
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
 
     let blocked = call_tool_json(
@@ -1561,16 +1510,12 @@ async fn stdio_server_requests_planning_approval_before_dispatch() -> anyhow::Re
             "item_id": "PROJ-001",
             "max_tasks": 1,
             "worker": "coder",
-            "prepare_handoffs": false,
-            "require_planning_approval": true
+            "prepare_handoffs": false
         }),
     )
     .await?;
     assert_stage_status("dispatch_ready_work planning blocked", &blocked, "failed");
-    assert_eq!(
-        blocked["data"]["stopped_reason"],
-        "planning_approval_required"
-    );
+    assert_eq!(blocked["data"]["stopped_reason"], "policy_blocked");
 
     let approval = call_tool_json(
         &client,
@@ -1603,8 +1548,7 @@ async fn stdio_server_requests_planning_approval_before_dispatch() -> anyhow::Re
             "item_id": "PROJ-001",
             "max_tasks": 1,
             "worker": "coder",
-            "prepare_handoffs": false,
-            "require_planning_approval": true
+            "prepare_handoffs": false
         }),
     )
     .await?;
@@ -1620,11 +1564,9 @@ async fn stdio_server_requests_planning_approval_before_dispatch() -> anyhow::Re
 }
 
 #[tokio::test]
-async fn stdio_server_dispatches_manual_handoff_without_worker_profile() -> anyhow::Result<()> {
+async fn stdio_server_dispatches_manual_handoff_without_local_worker_config() -> anyhow::Result<()>
+{
     let project = dispatch_project_fixture();
-    fs::write(project.path().join("platy.yaml"), "project: test\n")?;
-    git(project.path(), &["add", "platy.yaml"]);
-    git(project.path(), &["commit", "-m", "Remove worker profile"]);
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
 
     let result = call_tool_json(
@@ -1642,7 +1584,6 @@ async fn stdio_server_dispatches_manual_handoff_without_worker_profile() -> anyh
 
     assert_stage_status("dispatch_ready_work", &result, "completed");
     assert_eq!(result["data"]["execution_mode"], "manual_handoff");
-    assert_eq!(result["data"]["worker_ready"], false);
     let item = &result["data"]["items"][0];
     assert_eq!(item["status"], "prepared");
     assert_eq!(item["assignment"]["execution_mode"], "manual_handoff");
@@ -1994,8 +1935,8 @@ async fn stdio_server_recovers_after_failed_worker_handoff() -> anyhow::Result<(
         .collect::<Vec<_>>();
     assert!(event_types.contains(&"worker_assignment_failed"));
 
-    let guidance = call_tool_json(&client, "next_safe_action", json!({})).await?;
-    assert_stage_status("next_safe_action", &guidance, "completed");
+    let guidance = call_tool_json(&client, "inspect_work_queue", json!({})).await?;
+    assert_stage_status("inspect_work_queue", &guidance, "completed");
     assert_eq!(
         guidance["data"]["recommended_tool"],
         "prepare_worker_handoff"
@@ -2021,7 +1962,7 @@ async fn stdio_server_recovers_after_failed_worker_handoff() -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn stdio_server_runner_prepare_next_persists_worker_assignment() -> anyhow::Result<()> {
+async fn stdio_server_prepare_worker_handoff_persists_worker_assignment() -> anyhow::Result<()> {
     let project = assignment_project_fixture();
     let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
 
@@ -2031,20 +1972,17 @@ async fn stdio_server_runner_prepare_next_persists_worker_assignment() -> anyhow
 
     let prepared = call_tool_json(
         &client,
-        "runner_prepare_next",
+        "prepare_worker_handoff",
         json!({
+            "task_id": task_id,
             "worker": "coder",
             "claimant": "runner-stdio",
-            "max_tasks": 1,
             "verification_command": ["make", "check"]
         }),
     )
     .await?;
-    assert_stage_status("runner_prepare_next", &prepared, "completed");
-    let assignment_id = prepared["data"]["tasks"][0]["assignment_id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("assignment id missing: {prepared:#}"))
-        .to_string();
+    assert_stage_status("prepare_worker_handoff", &prepared, "completed");
+    let assignment_id = string_at(&prepared, &["data", "assignment", "id"], "assignment id");
 
     let inspected = call_tool_json(
         &client,
@@ -2068,13 +2006,13 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
     let initial = client
         .call_tool(CallToolRequestParams {
             meta: None,
-            name: "next_safe_action".into(),
+            name: "inspect_work_queue".into(),
             arguments: Some(JsonObject::new()),
             task: None,
         })
         .await?;
     let initial = initial.structured_content.expect("initial guidance");
-    assert_eq!(initial["data"]["recommended_tool"], "dispatch_ready_work");
+    assert_eq!(initial["data"]["recommended_tool"], "write_task_plan");
 
     let dispatched = client
         .call_tool(CallToolRequestParams {
@@ -2093,7 +2031,7 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
     let queued = client
         .call_tool(CallToolRequestParams {
             meta: None,
-            name: "next_safe_action".into(),
+            name: "inspect_work_queue".into(),
             arguments: Some(JsonObject::new()),
             task: None,
         })
@@ -2133,7 +2071,7 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
     let prepared_guidance = client
         .call_tool(CallToolRequestParams {
             meta: None,
-            name: "next_safe_action".into(),
+            name: "inspect_work_queue".into(),
             arguments: Some(JsonObject::new()),
             task: None,
         })
@@ -2169,7 +2107,7 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
     let running_guidance = client
         .call_tool(CallToolRequestParams {
             meta: None,
-            name: "next_safe_action".into(),
+            name: "inspect_work_queue".into(),
             arguments: Some(JsonObject::new()),
             task: None,
         })
@@ -2251,7 +2189,7 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
     let integration_guidance = client
         .call_tool(CallToolRequestParams {
             meta: None,
-            name: "next_safe_action".into(),
+            name: "inspect_work_queue".into(),
             arguments: Some(JsonObject::new()),
             task: None,
         })
@@ -2290,7 +2228,7 @@ async fn stdio_server_guides_friendly_worker_assignment_lifecycle() -> anyhow::R
     let integration_guidance = client
         .call_tool(CallToolRequestParams {
             meta: None,
-            name: "next_safe_action".into(),
+            name: "inspect_work_queue".into(),
             arguments: Some(JsonObject::new()),
             task: None,
         })
@@ -2339,23 +2277,6 @@ async fn stdio_server_runs_full_lifecycle_smoke_with_fake_worker() -> anyhow::Re
     assert_stage_status("init_project", &initialized, "completed");
     assert!(project.path().join("backlog/items").is_dir());
 
-    let configured_worker = call_tool_json(
-        &client,
-        "configure_agent_profile",
-        json!({
-            "name": "coder",
-            "role": "worker",
-            "harness": "fake",
-            "executable": "git"
-        }),
-    )
-    .await?;
-    assert_stage_status(
-        "configure_agent_profile worker",
-        &configured_worker,
-        "completed",
-    );
-
     git(project.path(), &["init"]);
     git(project.path(), &["config", "user.name", "Platypus Test"]);
     git(
@@ -2373,7 +2294,6 @@ async fn stdio_server_runs_full_lifecycle_smoke_with_fake_worker() -> anyhow::Re
             "type": "feature",
             "area": "verification",
             "epic": "general",
-            "suggested_worker": "coder",
             "owned_surfaces": ["README.md"],
             "goal": "Create a visible smoke-test output file.",
             "implementation_contract": "Only write README.md in the assigned worktree.",
@@ -2389,10 +2309,10 @@ async fn stdio_server_runs_full_lifecycle_smoke_with_fake_worker() -> anyhow::Re
         &["commit", "-m", "Initialize smoke project"],
     );
 
-    let initial = call_tool_json(&client, "next_safe_action", json!({})).await?;
+    let initial = call_tool_json(&client, "inspect_work_queue", json!({})).await?;
     assert_eq!(
-        initial["data"]["recommended_tool"], "dispatch_ready_work",
-        "stage next_safe_action before dispatch: {initial:#}"
+        initial["data"]["recommended_tool"], "prepare_work",
+        "stage inspect_work_queue before dispatch: {initial:#}"
     );
 
     let dispatched = call_tool_json(&client, "dispatch_next_work", json!({})).await?;
@@ -2482,10 +2402,10 @@ async fn stdio_server_runs_full_lifecycle_smoke_with_fake_worker() -> anyhow::Re
     .await?;
     assert_stage_status("record_verification_evidence", &verification, "completed");
 
-    let integration_guidance = call_tool_json(&client, "next_safe_action", json!({})).await?;
+    let integration_guidance = call_tool_json(&client, "inspect_work_queue", json!({})).await?;
     assert_eq!(
         integration_guidance["data"]["recommended_tool"], "integrate_worker_result",
-        "stage next_safe_action before integration: {integration_guidance:#}"
+        "stage inspect_work_queue before integration: {integration_guidance:#}"
     );
 
     let integrated = call_tool_json(
@@ -2588,8 +2508,9 @@ async fn stdio_server_prepares_and_finishes_host_run_work() -> anyhow::Result<()
             "type": "feature",
             "area": "workflow",
             "epic": "general",
-            "suggested_worker": "coder",
             "owned_surfaces": ["src/lib.rs"],
+            "execution_path": "worker_handoff",
+            "planning_gate": "task_plan",
             "goal": "Implement one small workflow feature.",
             "implementation_contract": "Only edit src/lib.rs in the assignment worktree.",
             "acceptance": ["src/lib.rs exposes the new answer."]
@@ -2597,6 +2518,16 @@ async fn stdio_server_prepares_and_finishes_host_run_work() -> anyhow::Result<()
     )
     .await?;
     assert_stage_status("create_backlog_item", &created, "completed");
+    let plan = call_tool_json(
+        &client,
+        "write_task_plan",
+        json!({
+            "item_id": "PROJ-001",
+            "plan": task_plan_json()
+        }),
+    )
+    .await?;
+    assert_stage_status("write_task_plan", &plan, "completed");
 
     git(project.path(), &["add", "--all"]);
     git(
@@ -2611,7 +2542,7 @@ async fn stdio_server_prepares_and_finishes_host_run_work() -> anyhow::Result<()
             "item_id": "PROJ-001",
             "worker": "coder",
             "claimant": "stdio-host",
-            "require_task_plan": false
+            "require_task_plan": true
         }),
     )
     .await?;
@@ -2687,6 +2618,93 @@ async fn stdio_server_prepares_and_finishes_host_run_work() -> anyhow::Result<()
 }
 
 #[tokio::test]
+async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let initialized = call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "Direct Lifecycle Smoke" }),
+    )
+    .await?;
+    assert_stage_status("init_project", &initialized, "completed");
+
+    git(project.path(), &["init"]);
+    git(project.path(), &["config", "user.name", "Platypus Test"]);
+    git(
+        project.path(),
+        &["config", "user.email", "platypus@example.invalid"],
+    );
+
+    let created = call_tool_json(
+        &client,
+        "create_backlog_item",
+        json!({
+            "id": "PROJ-001",
+            "title": "Write direct feedback file",
+            "priority": "P1",
+            "type": "docs",
+            "area": "feedback",
+            "epic": "general",
+            "owned_surfaces": ["FEEDBACK.md"],
+            "goal": "Create one direct feedback file.",
+            "implementation_contract": "Only edit FEEDBACK.md.",
+            "acceptance": ["FEEDBACK.md exists."]
+        }),
+    )
+    .await?;
+    assert_stage_status("create_backlog_item", &created, "completed");
+    git(project.path(), &["add", "--all"]);
+    git(project.path(), &["commit", "-m", "Initialize direct work"]);
+
+    let prepared = call_tool_json(
+        &client,
+        "prepare_work",
+        json!({ "item_id": "PROJ-001", "require_task_plan": false }),
+    )
+    .await?;
+    assert_stage_status("prepare_work", &prepared, "completed");
+    assert_eq!(prepared["data"]["host_actions"][0]["kind"], "direct_edit");
+    assert!(prepared["data"]["host_actions"][0]["next_tools"]
+        .as_array()
+        .expect("next tools")
+        .iter()
+        .any(|tool| tool == "complete_backlog_item"));
+
+    fs::write(project.path().join("FEEDBACK.md"), "# Feedback\n")?;
+    let completed = call_tool_json(
+        &client,
+        "complete_backlog_item",
+        json!({
+            "item_id": "PROJ-001",
+            "summary": "Created direct feedback file.",
+            "changed_files": ["FEEDBACK.md"],
+            "verification_status": "skipped",
+            "verification_summary": "Manual smoke covered the file.",
+            "verification_refs": ["manual:stdio-direct"]
+        }),
+    )
+    .await?;
+    assert_stage_status("complete_backlog_item", &completed, "completed");
+    assert_eq!(completed["data"]["closed"], true);
+
+    let queue = call_tool_json(
+        &client,
+        "inspect_work_queue",
+        json!({ "require_task_plan": false }),
+    )
+    .await?;
+    assert_stage_status("inspect_work_queue", &queue, "completed");
+    assert_eq!(queue["data"]["items"].as_array().expect("items").len(), 0);
+    assert_eq!(queue["data"]["inventory"]["total_count"], 1);
+    assert_eq!(queue["data"]["inventory"]["closed_count"], 1);
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_skips_dispatch_when_backlog_has_no_runnable_items() -> anyhow::Result<()> {
     let project = TempDir::new()?;
     fs::write(project.path().join("platy.yaml"), "project: test\n")?;
@@ -2729,46 +2747,6 @@ async fn start_client(
     Ok(().serve(transport).await?)
 }
 
-#[derive(Clone)]
-struct SamplingClient {
-    response: Arc<String>,
-}
-
-impl ClientHandler for SamplingClient {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
-        info.capabilities = ClientCapabilities::builder().enable_sampling().build();
-        info
-    }
-
-    async fn create_message(
-        &self,
-        _params: CreateMessageRequestParams,
-        _context: RequestContext<RoleClient>,
-    ) -> Result<CreateMessageResult, McpError> {
-        Ok(CreateMessageResult {
-            message: SamplingMessage::assistant_text(self.response.as_ref().clone()),
-            model: "test-sampling-model".to_string(),
-            stop_reason: Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()),
-        })
-    }
-}
-
-async fn start_sampling_client(
-    project_root: Option<&str>,
-    response: &str,
-) -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleClient, SamplingClient>> {
-    let mut command = Command::new(server_binary());
-    if let Some(root) = project_root {
-        command.env("PLATYPUS_MCP_ROOT", root);
-    }
-    let transport = TokioChildProcess::new(command)?;
-    let handler = SamplingClient {
-        response: Arc::new(response.to_string()),
-    };
-    Ok(handler.serve(transport).await?)
-}
-
 fn server_binary() -> PathBuf {
     let mut path = std::env::current_exe().expect("current test executable");
     path.pop();
@@ -2804,7 +2782,6 @@ fn task_plan_json() -> Value {
                 "requirement_refs": ["R1"],
                 "depends_on": [],
                 "owned_surfaces": ["src/lib.rs"],
-                "suggested_worker": "coder",
                 "verification": ["make check"],
                 "acceptance": ["Backlog item acceptance is satisfied."],
                 "notes": null
@@ -2865,7 +2842,7 @@ fn prompt_text(message: &rmcp::model::PromptMessage) -> &str {
 
 fn project_fixture() -> TempDir {
     let temp = TempDir::new().expect("temp dir");
-    fs::write(temp.path().join("platy.yaml"), ready_profiles_yaml()).expect("config");
+    fs::write(temp.path().join("platy.yaml"), ready_config_yaml()).expect("config");
     git(temp.path(), &["init"]);
     git(temp.path(), &["config", "user.name", "Platypus Test"]);
     git(
@@ -2910,7 +2887,6 @@ type: feature
 area: general
 epic: general
 depends_on: {depends}
-suggested_worker: coder
 owned_surfaces: []
 ---
 
@@ -2935,7 +2911,11 @@ Contract.
 
 fn dispatch_project_fixture() -> TempDir {
     let temp = TempDir::new().expect("temp dir");
-    fs::write(temp.path().join("platy.yaml"), ready_profiles_yaml()).expect("config");
+    fs::write(
+        temp.path().join("platy.yaml"),
+        "project: test\nworkflow:\n  execution:\n    default_path: worker_handoff\n    worker_planning_gate: none\n",
+    )
+    .expect("config");
     fs::create_dir_all(temp.path().join("backlog/items")).expect("items dir");
     fs::create_dir_all(temp.path().join("backlog/epics")).expect("epics dir");
     fs::write(
@@ -2962,7 +2942,6 @@ type: foundation
 area: general
 epic: general
 depends_on: []
-suggested_worker: coder
 owned_surfaces: []
 ---
 
@@ -3005,7 +2984,7 @@ fn assignment_project_fixture() -> TempDir {
     fs::write(temp.path().join("README.md"), "# Test\n").expect("readme");
     git(temp.path(), &["add", "README.md"]);
     git(temp.path(), &["commit", "-m", "Initial commit"]);
-    fs::write(temp.path().join("platy.yaml"), ready_profiles_yaml()).expect("config");
+    fs::write(temp.path().join("platy.yaml"), ready_config_yaml()).expect("config");
     fs::create_dir_all(temp.path().join("backlog/items")).expect("items dir");
     fs::create_dir_all(temp.path().join("backlog/epics")).expect("epics dir");
     fs::write(
@@ -3032,9 +3011,10 @@ type: foundation
 area: general
 epic: general
 depends_on: []
-suggested_worker: coder
 owned_surfaces:
 - README.md
+execution_path: worker_handoff
+planning_gate: task_plan
 ---
 
 # PROJ-001 First assignment work
@@ -3058,19 +3038,60 @@ Keep changes in README.md.
     temp
 }
 
-fn ready_profiles_yaml() -> &'static str {
-    r#"project: test
-agents:
-  profiles:
-    manager:
-      role: manager
-      harness: codex
-      executable: git
-    coder:
-      role: worker
-      harness: codex
-      executable: git
+fn ready_config_yaml() -> &'static str {
+    "project: test\n"
+}
+
+fn mark_backlog_item_policy(
+    root: &Path,
+    item_id: &str,
+    execution_path: &str,
+    planning_gate: &str,
+) -> anyhow::Result<()> {
+    let path = root.join(format!("backlog/items/{item_id}.md"));
+    let text = fs::read_to_string(&path)?;
+    let text = text.replace(
+        "\n---\n\n#",
+        &format!("\nexecution_path: {execution_path}\nplanning_gate: {planning_gate}\n---\n\n#"),
+    );
+    fs::write(path, text)?;
+    Ok(())
+}
+
+fn write_task_plan_yaml(root: &Path, item_id: &str) -> anyhow::Result<()> {
+    fs::create_dir_all(root.join("backlog/plans"))?;
+    fs::write(
+        root.join(format!("backlog/plans/{item_id}.yaml")),
+        format!(
+            r#"item_id: {item_id}
+version: 1
+mode: standard
+requirements:
+  - id: R1
+    text: Do the work.
+design:
+  summary: Focused implementation.
+  owned_surfaces:
+    - README.md
+  notes: null
+tasks:
+  - id: {item_id}-T001
+    title: Implement item
+    goal: Complete the item.
+    requirement_refs:
+      - R1
+    depends_on: []
+    owned_surfaces:
+      - README.md
+    verification:
+      - make check
+    acceptance:
+      - The item is implemented and verified.
+    notes: null
 "#
+        ),
+    )?;
+    Ok(())
 }
 
 fn git(root: &std::path::Path, args: &[&str]) {

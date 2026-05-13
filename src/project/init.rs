@@ -217,7 +217,7 @@ fn gitignore_has_rule(content: &str, rule: &str) -> bool {
 
 fn project_config(project_name: &str) -> String {
     format!(
-        "project:\n  name: {}\nbacklog:\n  id_prefix: PROJ\n  items: backlog/items\n  epics: backlog/epics\nworkflow:\n  integration:\n    merge_style: merge_commit\n    require_clean_manager_workspace: true\n    require_verification_evidence: false\n  dispatch:\n    auto_commit_artifacts_default: false\n",
+        "project:\n  name: {}\nbacklog:\n  id_prefix: PROJ\n  items: backlog/items\n  epics: backlog/epics\nworkflow:\n  integration:\n    merge_style: merge_commit\n    require_clean_manager_workspace: true\n    require_verification_evidence: false\n  dispatch:\n    auto_commit_artifacts_default: false\n  execution:\n    default_path: direct_edit\n    direct_planning_gate: none\n    worker_planning_gate: task_plan\n",
         yaml_string(project_name)
     )
 }
@@ -232,25 +232,22 @@ worktrees before integration.
 
 ## Operating Loop
 
-1. Inspect setup with `doctor_snapshot`, `inspect_status`, and
-   `next_safe_action`.
-2. For broad goals, call `plan_goal_work` with `intent=planning_only` while
-   shaping backlog or design, or `intent=ready_to_execute` after execution is
-   approved.
-3. Turn goals into declarative backlog items with the host model and
-   `create_backlog_item` or `create_backlog_items`, then `validate_backlog`.
-   Use `draft_backlog_items` only when the MCP client supports sampling.
-4. Inspect the queue with `inspect_work_queue` and
-   `classify_planning_needs`.
-5. For standard or full work, create a strict task plan with `write_task_plan`
-   and `validate_task_plan`; use `draft_task_plan` only when MCP sampling is
-   available.
-6. Dispatch and prepare work with `dispatch_next_work` and
-   `prepare_worker_handoff`.
-7. Run implementation in the assigned worktree, not in the manager workspace.
-8. Record progress, verification evidence, findings, and final result before
-   integrating.
-9. Use `integrate_worker_result` and `reconcile_project` to close the loop.
+Use the table below as the exact workflow. Read it top to bottom. The first
+matching state wins. Do not skip the detecting tool and do not infer hidden
+state from chat history.
+
+| State | Detect with | Match condition | Required next action | Exit condition |
+| --- | --- | --- | --- | --- |
+| `unknown` | session start | state was not freshly inspected | call `inspect_session` | setup, project status, workflow config, and queue facts are known |
+| `needs_scaffold` | `doctor_snapshot` | scaffold files are missing | call `init_project`, then `doctor_snapshot` | scaffold blockers are gone |
+| `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `validate_backlog` | backlog validates and queue is inspected again |
+| `dependency_blocked` | `inspect_work_queue` | `inventory.dependency_blocked_count > 0` and no runnable item is selected | call `inspect_item` on the first blocked item; close or create required dependencies | blocked dependencies are resolved |
+| `plan_missing` | `inspect_work_queue` | an item recommends `write_task_plan` | host model writes an explicit plan with `write_task_plan`, then calls `validate_task_plan` | task plan validates cleanly |
+| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | call `prepare_work`, edit the manager workspace, then call `complete_backlog_item` | direct completion evidence or closure commit exists |
+| `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` for one item or `dispatch_ready_work` for a batch | `run_in_worktree` handoff exists |
+| `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree; call `finish_work` | `finish_work.host_action` is returned |
+| `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` | work is integrated or a specific blocker is reported |
+| `failed_or_unclear` | any tool result | `status == "failed"` or `recovery_action` is present | follow `recovery_action`; if still unclear call `inspect_session` | a known state above matches |
 
 ## State Rules
 
@@ -278,9 +275,12 @@ Use the Platypus MCP tools to keep planning reproducible:
   `depends_on_keys`.
 - `validate_backlog` checks item and epic schema.
 - `inspect_work_queue` shows runnable items and task-plan requirements.
-- `write_task_plan` and `validate_task_plan` make non-trivial work executable;
-  `draft_task_plan` is optional sampling-assisted help.
-- `next_safe_action` computes the next lifecycle step from current state.
+- `write_task_plan` and `validate_task_plan` make non-trivial work executable.
+- `prepare_work` returns either direct manager-workspace guidance or a
+  worker/worktree handoff.
+- `complete_backlog_item` closes direct manager-workspace work.
+- `finish_work` closes worker assignments and returns integration guidance.
+- `inspect_work_queue` computes queue state and the recommended next tool.
 
 Do not manually maintain queue indexes or runtime status in markdown. Queue
 state is computed from backlog metadata, task-plan readiness, Platypus runtime
@@ -307,42 +307,46 @@ file edits or informal task tracking.
 
 ## Default Flow
 
-1. Inspect first: `doctor_snapshot`, `inspect_status`, and `next_safe_action`.
-2. Convert user goals into concrete backlog items with the host model and
-   `create_backlog_item` or `create_backlog_items`.
-3. Validate persisted work with `validate_backlog`.
-4. Use `inspect_work_queue` and `classify_planning_needs` before dispatch.
-5. For standard or full work, create and validate `backlog/plans/<ITEM>.yaml`
-   with `write_task_plan` and `validate_task_plan`; use `draft_task_plan` only
-   when MCP sampling is available.
-6. Prepare execution with `prepare_work`. Direct items may be handled in the
-   manager workspace; worker items return an assignment bundle and worktree.
-7. Implement inside the assigned worktree, record progress when useful, and
-   finish with `finish_work` so verification, findings, and integration
-   guidance stay connected.
+Use this exact workflow table. Read it top to bottom. The first matching state
+wins. Do not skip the detecting tool and do not infer hidden state from chat
+history.
+
+| State | Detect with | Match condition | Required next action |
+| --- | --- | --- | --- |
+| `unknown` | session start | state was not freshly inspected | call `inspect_session` |
+| `needs_scaffold` | `doctor_snapshot` | scaffold files are missing | call `init_project`, then `doctor_snapshot` |
+| `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `validate_backlog` |
+| `dependency_blocked` | `inspect_work_queue` | `inventory.dependency_blocked_count > 0` and no runnable item is selected | call `inspect_item`; close or create required dependencies |
+| `plan_missing` | `inspect_work_queue` | an item recommends `write_task_plan` | call `write_task_plan`, then `validate_task_plan` |
+| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | call `prepare_work`, edit manager workspace, then `complete_backlog_item` |
+| `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` or `dispatch_ready_work` |
+| `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree, then `finish_work` |
+| `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` |
+| `failed_or_unclear` | any tool result | `status == "failed"` or `recovery_action` is present | follow `recovery_action`; if still unclear call `inspect_session` |
 
 ## Tool Preload
 
 If your MCP host supports tool discovery or schema preloading, load the common
 planning group at session start:
 
-`doctor_snapshot`, `inspect_status`, `inspect_workflow_config`,
-`next_safe_action`, `plan_goal_work`, `classify_workflow_fit`,
+`inspect_session`, `doctor_snapshot`, `inspect_status`, `inspect_workflow_config`,
 `create_backlog_item`, `create_backlog_items`, `create_epic`,
 `validate_backlog`, `list_backlog`, `inspect_backlog_inventory`,
-`inspect_work_queue`, `classify_planning_needs`, `write_task_plan`,
-`validate_task_plan`, `inspect_task_plan`, `request_planning_approval`,
-`approval_respond`.
+`inspect_work_queue`, `write_task_plan`, `validate_task_plan`,
+`inspect_task_plan`, `request_planning_approval`, `approval_respond`.
 
 Before dispatch, handoff, verification, or integration work, load the execution
 group:
 
-`inspect_work_queue`, `prepare_work`, `dispatch_ready_work`, `generate_task_bundle`,
+`inspect_work_queue`, `prepare_work`, `dispatch_ready_work`,
+`commit_planning_artifacts`, `generate_task_bundle`,
 `inspect_task_events`, `events_replay`, `worktree_status`,
 `inspect_worktree_changes`, `send_worker_guidance`, `start_worker_task`,
-`record_worker_progress`, `complete_worker_task`, `finish_work`, `run_task_verification`,
-`record_verification_evidence`, `record_finding`, `validate_findings`,
-`integrate_worker_result`, `worktree_cleanup`, `reconcile_project`.
+`record_worker_progress`, `complete_worker_task`, `complete_backlog_item`,
+`finish_work`, `run_task_verification`, `record_verification_evidence`,
+`record_finding`, `validate_findings`,
+`inspect_integration_gates`, `integrate_worker_result`, `worktree_cleanup`,
+`reconcile_project`.
 
 Preloading is optional and host-specific. If the host cannot preload tool
 schemas, continue normally and call tools as needed.
@@ -365,11 +369,11 @@ fn general_epic() -> String {
 }
 
 fn item_template() -> String {
-    "---\nid: PROJ-000\ntitle: Item title\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nsuggested_worker: coder\nowned_surfaces: []\n---\n\n# PROJ-000 Item title\n\n## Goal\n\nDescribe the goal.\n\n## Implementation Contract\n\nDescribe the expected implementation boundaries.\n\n## Acceptance\n\n- Describe a verifiable acceptance criterion.\n".to_string()
+    "---\nid: PROJ-000\ntitle: Item title\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nowned_surfaces: []\n---\n\n# PROJ-000 Item title\n\n## Goal\n\nDescribe the goal.\n\n## Implementation Contract\n\nDescribe the expected implementation boundaries.\n\n## Acceptance\n\n- Describe a verifiable acceptance criterion.\n".to_string()
 }
 
 fn plan_template() -> String {
-    "item_id: PROJ-000\nversion: 1\nmode: standard\nrequirements:\n  - id: R1\n    text: Describe a required outcome.\ndesign:\n  summary: Describe the implementation approach.\n  owned_surfaces:\n    - src/example.rs\n  notes: null\ntasks:\n  - id: PROJ-000-T001\n    title: Implement the first task\n    goal: Deliver one executable implementation slice.\n    requirement_refs:\n      - R1\n    depends_on: []\n    owned_surfaces:\n      - src/example.rs\n    suggested_worker: coder\n    verification:\n      - make check\n    acceptance:\n      - The task is complete and verified.\n    notes: null\n".to_string()
+    "item_id: PROJ-000\nversion: 1\nmode: standard\nrequirements:\n  - id: R1\n    text: Describe a required outcome.\ndesign:\n  summary: Describe the implementation approach.\n  owned_surfaces:\n    - src/example.rs\n  notes: null\ntasks:\n  - id: PROJ-000-T001\n    title: Implement the first task\n    goal: Deliver one executable implementation slice.\n    requirement_refs:\n      - R1\n    depends_on: []\n    owned_surfaces:\n      - src/example.rs\n    verification:\n      - make check\n    acceptance:\n      - The task is complete and verified.\n    notes: null\n".to_string()
 }
 
 fn epic_template() -> String {
@@ -419,37 +423,52 @@ mod tests {
         assert!(config.contains("merge_style: merge_commit"));
         let agents = fs::read_to_string(temp.path().join("AGENTS.md")).expect("agents");
         assert!(agents.contains("spec-driven development"));
-        assert!(agents.contains("next_safe_action"));
-        assert!(agents.contains("draft_task_plan"));
+        assert!(agents.contains("inspect_work_queue"));
+        assert!(agents.contains("first matching state"));
+        assert!(agents.contains("queue_state == \"direct_ready\""));
+        assert!(agents.contains("completed_pending_integration"));
+        assert!(agents.contains("write_task_plan"));
+        assert!(!agents.contains("draft_task_plan"));
         assert!(agents.contains("Tool Preload"));
         assert!(agents.contains("planning group"));
         assert!(agents.contains("execution"));
         assert!(agents.contains("request_planning_approval"));
         assert!(agents.contains("prepare_work"));
         assert!(agents.contains("dispatch_ready_work"));
+        assert!(agents.contains("complete_backlog_item"));
         assert!(agents.contains("finish_work"));
         let claude = fs::read_to_string(temp.path().join("CLAUDE.md")).expect("claude");
         assert!(claude.contains("spec-driven development"));
-        assert!(claude.contains("next_safe_action"));
-        assert!(claude.contains("draft_task_plan"));
+        assert!(claude.contains("inspect_work_queue"));
+        assert!(claude.contains("first matching state"));
+        assert!(claude.contains("queue_state == \"direct_ready\""));
+        assert!(claude.contains("completed_pending_integration"));
+        assert!(claude.contains("write_task_plan"));
+        assert!(!claude.contains("draft_task_plan"));
         assert!(claude.contains("Tool Preload"));
         assert!(claude.contains("planning group"));
         assert!(claude.contains("execution"));
         assert!(claude.contains("request_planning_approval"));
         assert!(claude.contains("prepare_work"));
         assert!(claude.contains("dispatch_ready_work"));
+        assert!(claude.contains("complete_backlog_item"));
         assert!(claude.contains("finish_work"));
         assert_eq!(
             agents.replace("Agent Instructions", "Shared Instructions"),
             claude.replace("Claude Instructions", "Shared Instructions")
         );
         let workflow = fs::read_to_string(temp.path().join("WORKFLOW.md")).expect("workflow");
+        assert!(workflow.contains("matching state wins"));
+        assert!(workflow.contains("queue_state == \"direct_ready\""));
+        assert!(workflow.contains("completed_pending_integration"));
         assert!(workflow.contains("spec-driven development"));
-        assert!(workflow.contains("dispatch_next_work"));
+        assert!(workflow.contains("dispatch_ready_work"));
+        assert!(workflow.contains("complete_backlog_item"));
         let backlog_readme =
             fs::read_to_string(temp.path().join("backlog/README.md")).expect("backlog readme");
         assert!(backlog_readme.contains("inspect_work_queue"));
         assert!(backlog_readme.contains("task-plan requirements"));
+        assert!(backlog_readme.contains("complete_backlog_item"));
         assert!(temp.path().join("backlog/items").is_dir());
         assert!(temp.path().join("backlog/plans").is_dir());
         assert!(!temp.path().join("backlog/index.md").exists());

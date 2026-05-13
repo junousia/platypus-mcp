@@ -12,8 +12,8 @@ ARGS ?=
 	help \
 	check ci lint fmt-check fmt format test test-lib test-stdio test-one \
 	build doc clean package publish-dry-run publish \
-	run run-root runner smoke smoke-queue smoke-storage \
-	opencode-feedback \
+	run run-root smoke smoke-queue smoke-storage \
+	feedback opencode-feedback claude-feedback codex-feedback \
 	metadata version
 
 help: ## Show categorized developer commands.
@@ -42,10 +42,12 @@ help: ## Show categorized developer commands.
 	@printf '  \033[36mclean\033[0m       Remove Cargo build output\n\n'
 	@printf '\033[1mRun\033[0m\n'
 	@printf '  \033[36mrun\033[0m         Run stdio MCP server in the current directory\n'
-	@printf '  \033[36mrun-root\033[0m    Run stdio MCP server with ROOT=/path/to/project\n'
-	@printf '  \033[36mrunner\033[0m      Run local preparation runner with MAX_TASKS=1 by default\n\n'
+	@printf '  \033[36mrun-root\033[0m    Run stdio MCP server with ROOT=/path/to/project\n\n'
 	@printf '\033[1mHost Exercises\033[0m\n'
-	@printf '  \033[36mopencode-feedback\033[0m Create a temp OpenCode project and ask for workflow feedback\n\n'
+	@printf '  \033[36mfeedback\033[0m         Alias for opencode-feedback\n'
+	@printf '  \033[36mopencode-feedback\033[0m Create a temp OpenCode project and ask for workflow feedback\n'
+	@printf '  \033[36mclaude-feedback\033[0m   Create a temp Claude Code project and ask for workflow feedback\n'
+	@printf '  \033[36mcodex-feedback\033[0m    Create a temp Codex project and ask for workflow feedback\n\n'
 	@printf '\033[1mInspect\033[0m\n'
 	@printf '  \033[36msmoke\033[0m       Invoke inspect_status through the stdio tool helper\n'
 	@printf '  \033[36msmoke-queue\033[0m Invoke inspect_work_queue through the stdio tool helper\n'
@@ -57,13 +59,23 @@ help: ## Show categorized developer commands.
 	@printf '  MAX_TASKS=%s\n' '$(MAX_TASKS)'
 	@printf '  TEST=%s\n' '$(TEST)'
 	@printf '  ARGS=%s\n' '$(ARGS)'
-	@printf '  PROJECT_ROOT=/path/to/new/temp/project for opencode-feedback\n'
+	@printf '  PROJECT_ROOT=/path/to/new/temp/project for *-feedback\n'
+	@printf '  FEEDBACK_DRY_RUN=1 to bootstrap and smoke-check without invoking the host\n'
+	@printf '  FEEDBACK_TIMEOUT_SECONDS=600 to control host run timeout budget\n'
+	@printf '  FEEDBACK_DANGEROUS=1 to enable each host dangerous auto-approval mode\n'
+	@printf '  FEEDBACK_MODEL=<model> for all feedback targets\n'
 	@printf '  OPENCODE_MODEL=<model> OPENCODE_AGENT=<agent> for opencode-feedback\n'
 	@printf '  OPENCODE_DANGEROUS=1 to auto-approve OpenCode permissions in the temp project\n'
 	@printf '  OPENCODE_TIMEOUT_SECONDS=600 to control OpenCode run timeout budget\n'
 	@printf '  OPENCODE_ISOLATE_DATA=1 to run OpenCode with an isolated copied profile (default 0)\n'
 	@printf '  OPENCODE_DRY_RUN=1 to bootstrap and smoke-check without invoking OpenCode\n'
 	@printf '  OPENCODE_PRINT_LOGS=1 to include OpenCode diagnostic logs in the exercise\n'
+	@printf '  CLAUDE_MODEL=<model> CLAUDE_AGENT=<agent> for claude-feedback\n'
+	@printf '  CLAUDE_DANGEROUS=1 to auto-approve Claude permissions in the temp project\n'
+	@printf '  CLAUDE_DRY_RUN=1 to bootstrap and smoke-check without invoking Claude\n'
+	@printf '  CODEX_MODEL=<model> CODEX_PROFILE=<profile> for codex-feedback\n'
+	@printf '  CODEX_DANGEROUS=1 to bypass Codex approvals and sandboxing in the temp project\n'
+	@printf '  CODEX_DRY_RUN=1 to bootstrap and smoke-check without invoking Codex\n'
 
 check: lint test ## Format check, build-check, and run all tests.
 
@@ -120,11 +132,16 @@ run: ## Run stdio MCP server in the current directory.
 run-root: ## Run stdio MCP server with ROOT=/path/to/project.
 	PLATYPUS_MCP_ROOT="$(ROOT)" $(CARGO) run -- $(ARGS)
 
-runner: ## Run local preparation runner with MAX_TASKS=1 by default.
-	$(CARGO) run -- runner --max-tasks "$(MAX_TASKS)" $(ARGS)
+feedback: opencode-feedback ## Alias for opencode-feedback.
 
 opencode-feedback: ## Create a temp OpenCode project and ask for workflow feedback.
 	CARGO="$(CARGO)" scripts/dev/opencode-feedback.sh
+
+claude-feedback: ## Create a temp Claude Code project and ask for workflow feedback.
+	CARGO="$(CARGO)" scripts/dev/claude-feedback.sh
+
+codex-feedback: ## Create a temp Codex project and ask for workflow feedback.
+	CARGO="$(CARGO)" scripts/dev/codex-feedback.sh
 
 smoke: ## Invoke inspect_status through the stdio tool helper.
 	$(CARGO) run -- tool --root "$(ROOT)" inspect_status '{"limit":5}'

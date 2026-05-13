@@ -31,7 +31,6 @@ tasks:
   owned_surfaces:
   - src/backlog
   - src/models.rs
-  suggested_worker: coder
   verification:
   - cargo test backlog::graph::tests
   acceptance:
@@ -52,7 +51,6 @@ tasks:
   - src/server.rs
   - docs/tools.md
   - tests/stdio_protocol.rs
-  suggested_worker: coder
   verification:
   - cargo test --test stdio_protocol
   acceptance:
