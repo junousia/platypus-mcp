@@ -25,6 +25,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
 
     assert!(tool_names.contains(&"inspect_status"));
     assert!(tool_names.contains(&"create_backlog_item"));
+    assert!(tool_names.contains(&"quick_create_backlog_item"));
     assert!(tool_names.contains(&"create_backlog_items"));
     assert!(tool_names.contains(&"update_backlog_item"));
     assert!(tool_names.contains(&"create_epic"));
@@ -176,6 +177,45 @@ async fn stdio_server_creates_backlog_items_atomically() -> anyhow::Result<()> {
         "create_backlog_items",
         json!({
             "id_prefix": "WEB",
+            "preview": true,
+            "items": [
+                {
+                    "client_key": "shape",
+                    "title": "Shape web app",
+                    "type": "feature",
+                    "goal": "Shape the web app.",
+                    "implementation_contract": "Define the initial web app structure.",
+                    "acceptance": ["The web app shape is documented."]
+                },
+                {
+                    "client_key": "implement",
+                    "depends_on_keys": ["shape"],
+                    "title": "Implement web app",
+                    "type": "feature",
+                    "goal": "Implement the web app.",
+                    "implementation_contract": "Create the initial web app.",
+                    "acceptance": ["The web app implementation validates."]
+                }
+            ]
+        }),
+    )
+    .await?;
+    assert_stage_status("create_backlog_items preview", &created, "completed");
+    assert!(created["data"]["preview"].as_bool().unwrap_or(false));
+    assert_eq!(created["data"]["created"], 0);
+    assert_eq!(created["data"]["items"][0]["item_id"], "WEB-001");
+    assert_eq!(created["data"]["items"][0]["created"], false);
+    assert!(created["data"]["items"][0]["preview"]["markdown"]
+        .as_str()
+        .unwrap_or("")
+        .contains("# WEB-001 Shape web app"));
+    assert!(!project.path().join("backlog/items/WEB-001.md").exists());
+
+    let created = call_tool_json(
+        &client,
+        "create_backlog_items",
+        json!({
+            "id_prefix": "WEB",
             "items": [
                 {
                     "client_key": "shape",
@@ -200,6 +240,7 @@ async fn stdio_server_creates_backlog_items_atomically() -> anyhow::Result<()> {
     .await?;
     assert_stage_status("create_backlog_items", &created, "completed");
     assert_eq!(created["data"]["created"], 2);
+    assert_eq!(created["data"]["preview"], false);
     assert_eq!(created["data"]["items"][0]["item_id"], "WEB-001");
     assert_eq!(created["data"]["items"][1]["item_id"], "WEB-002");
     assert_eq!(created["data"]["items"][1]["depends_on"][0], "WEB-001");
@@ -226,6 +267,44 @@ async fn stdio_server_creates_backlog_items_atomically() -> anyhow::Result<()> {
     .await?;
     assert_stage_status("create_backlog_items", &failed, "failed");
     assert!(!project.path().join("backlog/items/PROJ-001.md").exists());
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_quick_creates_backlog_item() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+    let initialized = call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "Quick Create Smoke" }),
+    )
+    .await?;
+    assert_stage_status("init_project", &initialized, "completed");
+
+    let created = call_tool_json(
+        &client,
+        "quick_create_backlog_item",
+        json!({
+            "id": "PROJ-001",
+            "title": "Document quick path",
+            "goal": "Document the quick backlog path.",
+            "priority": "P2",
+            "type": "docs",
+            "area": "docs",
+            "owned_surfaces": ["docs/tools.md"],
+            "acceptance": ["The quick path is documented."]
+        }),
+    )
+    .await?;
+    assert_stage_status("quick_create_backlog_item", &created, "completed");
+    assert_eq!(created["data"]["item_id"], "PROJ-001");
+    let text = fs::read_to_string(project.path().join("backlog/items/PROJ-001.md"))?;
+    assert!(text.contains("priority: P2"));
+    assert!(text.contains("type: docs"));
+    assert!(text.contains("- docs/tools.md"));
 
     client.cancel().await?;
     Ok(())

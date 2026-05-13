@@ -22,20 +22,20 @@ use crate::{
         LeaseListData, LeaseRecordData, LimitParams, ListEpicsData, ListEvidenceParams,
         ListFindingsParams, ListLeasesParams, PingData, PingParams, PrepareWorkData,
         PrepareWorkParams, PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData,
-        QueueStatusData, ReconcileParams, ReconciliationData, RecordEvidenceParams,
-        RecordExternalReportDispatchParams, RecordFindingParams, RecordVerificationEvidenceParams,
-        RecordWorkerEventParams, ReleaseLeaseParams, RenewLeaseParams,
-        RequestExternalReportApprovalParams, RequestPlanningApprovalParams, RootParams,
-        RunTaskVerificationParams, SendWorkerGuidanceParams, StartWorkerExecutionParams,
-        StorageCapabilityProbeData, StorageCapabilityProbeParams, TaskBundleData,
-        TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams,
-        TaskPlanValidationData, TaskPlanWriteData, TaskRecordData, TaskVerificationRunData,
-        UpdateBacklogItemParams, UpdateFindingDispositionParams, UpdatedBacklogItemData,
-        ValidateBacklogParams, ValidateFindingsParams, WorkQueueData, WorkerAssignmentData,
-        WorkerAssignmentEventData, WorkerGuidanceData, WorkerResultIntegrationData,
-        WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData, WorktreeCleanupParams,
-        WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffParams,
-        WorktreeStatusParams, WriteTaskPlanParams,
+        QueueStatusData, QuickCreateBacklogItemParams, ReconcileParams, ReconciliationData,
+        RecordEvidenceParams, RecordExternalReportDispatchParams, RecordFindingParams,
+        RecordVerificationEvidenceParams, RecordWorkerEventParams, ReleaseLeaseParams,
+        RenewLeaseParams, RequestExternalReportApprovalParams, RequestPlanningApprovalParams,
+        RootParams, RunTaskVerificationParams, SendWorkerGuidanceParams,
+        StartWorkerExecutionParams, StorageCapabilityProbeData, StorageCapabilityProbeParams,
+        TaskBundleData, TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData,
+        TaskPlanQueryParams, TaskPlanValidationData, TaskPlanWriteData, TaskRecordData,
+        TaskVerificationRunData, UpdateBacklogItemParams, UpdateFindingDispositionParams,
+        UpdatedBacklogItemData, ValidateBacklogParams, ValidateFindingsParams, WorkQueueData,
+        WorkerAssignmentData, WorkerAssignmentEventData, WorkerGuidanceData,
+        WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData,
+        WorktreeCleanupParams, WorktreeCreateParams, WorktreeData, WorktreeDiffData,
+        WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
     },
     project, reconcile, storage, tasks, workspace,
 };
@@ -654,6 +654,28 @@ impl PlatypusMcp {
         Parameters(params): Parameters<CreateBacklogItemParams>,
     ) -> Json<ActionResult<CreatedBacklogItemData>> {
         Json(backlog::create_backlog_item(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Quick Create Backlog Item",
+        description = "Create one backlog item from compact common fields, expanding to the canonical strict backlog item model.",
+        annotations(
+            title = "Quick Create Backlog Item",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn quick_create_backlog_item(
+        &self,
+        Parameters(params): Parameters<QuickCreateBacklogItemParams>,
+    ) -> Json<ActionResult<CreatedBacklogItemData>> {
+        Json(backlog::quick_create_backlog_item(
+            &self.default_root,
+            params,
+        ))
     }
 
     #[tool(
@@ -1744,6 +1766,7 @@ mod tests {
             "request_planning_approval",
             "record_external_report_dispatch",
             "create_backlog_item",
+            "quick_create_backlog_item",
             "create_backlog_items",
             "update_backlog_item",
             "create_epic",
@@ -1811,6 +1834,7 @@ mod tests {
         let mutating_tools = BTreeSet::from([
             "init_project",
             "create_backlog_item",
+            "quick_create_backlog_item",
             "create_backlog_items",
             "update_backlog_item",
             "create_epic",
@@ -1985,6 +2009,16 @@ mod tests {
             &["foundation", "feature", "safety", "ux", "test", "docs"],
         );
         assert_property_enum_values(
+            &input_schema(&tools, "quick_create_backlog_item"),
+            "priority",
+            &["P0", "P1", "P2"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "quick_create_backlog_item"),
+            "type",
+            &["foundation", "feature", "safety", "ux", "test", "docs"],
+        );
+        assert_property_enum_values(
             &input_schema(&tools, "create_epic"),
             "status",
             &["active", "archived"],
@@ -2130,6 +2164,17 @@ mod tests {
 
         let create_backlog_items = input_schema(&tools, "create_backlog_items");
         assert_property_pattern(&create_backlog_items, "id_prefix", r"^[A-Z]+$");
+
+        let quick_create_backlog_item = input_schema(&tools, "quick_create_backlog_item");
+        assert_property_has_example(&quick_create_backlog_item, "title");
+        assert_property_has_example(&quick_create_backlog_item, "goal");
+        assert_property_pattern(&quick_create_backlog_item, "id", r"^[A-Z]+-[0-9]{3}$");
+        assert_property_pattern(&quick_create_backlog_item, "id_prefix", r"^[A-Z]+$");
+        assert_array_item_pattern(
+            &quick_create_backlog_item,
+            "depends_on",
+            r"^[A-Z]+-[0-9]{3}$",
+        );
 
         let update_backlog_item = input_schema(&tools, "update_backlog_item");
         assert_property_has_example(&update_backlog_item, "item_id");

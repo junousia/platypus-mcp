@@ -136,8 +136,14 @@ make smoke-storage
   dispatch result, including safe evidence and redacted metadata.
 - `request_planning_approval`: create a durable planning approval for a task
   plan or backlog tranche before non-direct work is dispatched.
-- `create_backlog_item`: write one structured backlog item.
+- `create_backlog_item`: write one structured backlog item with the full
+  authoring schema.
+- `quick_create_backlog_item`: write one structured backlog item from compact
+  common fields. It expands to the same canonical creation path as
+  `create_backlog_item`.
 - `create_backlog_items`: atomically write related backlog items in one call.
+  Pass `preview=true` to allocate the same would-be IDs, validate the batch,
+  and return exact paths plus generated markdown without writing files.
 - `update_backlog_item`: update one existing backlog item through a typed
   patch. It validates before keeping the write, rolls back failed updates, and
   protects closed items unless `force_closed=true` is supplied intentionally.
@@ -173,9 +179,17 @@ Backlog schema quick reference:
 - Rich `create_backlog_item` input: provide explicit `title`, `goal`,
   `implementation_contract` or `contract`, and `acceptance` when the work is
   complex or the generated defaults would be too broad.
+- Compact `quick_create_backlog_item` input: provide the common fields
+  `title`, `goal`, `priority`, `type`, `area`, `owned_surfaces`, and
+  `acceptance`. The tool omits advanced fields such as external refs, notes,
+  and explicit execution policy, then expands to the canonical item model.
 - Use `create_backlog_items` for related items that should land together. It
   accepts per-item `client_key` values and resolves `depends_on_keys` to the
   created item IDs; if any item fails validation, no batch files are written.
+- Use `create_backlog_items` with `preview=true` before writing a larger batch
+  or when the host wants to show the user the exact target files and generated
+  markdown first. Preview is non-mutating and returns `created: 0` with
+  per-item `created: false`.
 - Use `update_backlog_item` to correct or refine an existing item. Supported
   updates include title, priority, type, area, epic, dependencies, owned
   surfaces, external refs, execution path, planning gate, goal, implementation

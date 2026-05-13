@@ -10,7 +10,7 @@ mod types;
 mod update;
 mod validate;
 
-pub use create::{create_backlog_item, create_backlog_items};
+pub use create::{create_backlog_item, create_backlog_items, quick_create_backlog_item};
 pub use epic::{create_epic, list_epics};
 pub use graph::inspect_dependency_graph;
 pub use plan::{inspect_task_plan, list_task_plans, validate_task_plan, write_task_plan};
@@ -110,9 +110,9 @@ mod tests {
     use super::*;
     use crate::models::{
         ActionStatus, ApprovalRespondParams, CreateBacklogItemParams, CreateBacklogItemsEntry,
-        CreateBacklogItemsParams, CreateEpicParams, PlannedTask, RequestPlanningApprovalParams,
-        RootParams, TaskPlanDesign, TaskPlanFile, TaskPlanQueryParams, TaskPlanRequirement,
-        UpdateBacklogItemParams, WriteTaskPlanParams,
+        CreateBacklogItemsParams, CreateEpicParams, PlannedTask, QuickCreateBacklogItemParams,
+        RequestPlanningApprovalParams, RootParams, TaskPlanDesign, TaskPlanFile,
+        TaskPlanQueryParams, TaskPlanRequirement, UpdateBacklogItemParams, WriteTaskPlanParams,
     };
     use std::{fs, path::Path, process::Command};
     use tempfile::TempDir;
@@ -1097,6 +1097,7 @@ mod tests {
             CreateBacklogItemsParams {
                 root: Some(root_arg(temp.path())),
                 id_prefix: Some("WEB".to_string()),
+                preview: false,
                 items: vec![
                     batch_entry("foundation", None, "Shape web foundation", vec![]),
                     batch_entry(
@@ -1126,6 +1127,79 @@ mod tests {
     }
 
     #[test]
+    fn create_backlog_items_previews_without_writes() {
+        let temp = project_fixture();
+
+        let result = create_backlog_items(
+            temp.path(),
+            CreateBacklogItemsParams {
+                root: Some(root_arg(temp.path())),
+                id_prefix: Some("WEB".to_string()),
+                preview: true,
+                items: vec![
+                    batch_entry("shape", None, "Shape web foundation", vec![]),
+                    batch_entry(
+                        "build",
+                        None,
+                        "Build web foundation",
+                        vec!["shape".to_string()],
+                    ),
+                ],
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let data = result.data.expect("preview data");
+        assert!(data.preview);
+        assert_eq!(data.created, 0);
+        assert_eq!(data.validation.item_count, 0);
+        assert_eq!(data.items[0].item_id, "WEB-001");
+        assert_eq!(data.items[1].item_id, "WEB-002");
+        assert_eq!(data.items[1].depends_on, vec!["WEB-001"]);
+        assert!(!data.items[0].created);
+        assert_eq!(data.items[0].preview.title, "Shape web foundation");
+        assert!(data.items[0]
+            .preview
+            .markdown
+            .contains("# WEB-001 Shape web foundation"));
+        assert!(!temp.path().join("backlog/items/WEB-001.md").exists());
+        assert!(!temp.path().join("backlog/items/WEB-002.md").exists());
+    }
+
+    #[test]
+    fn quick_create_backlog_item_expands_to_canonical_create_path() {
+        let temp = project_fixture();
+
+        let result = quick_create_backlog_item(
+            temp.path(),
+            QuickCreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-001".to_string()),
+                id_prefix: None,
+                title: "Add quick item".to_string(),
+                goal: "Add a quick backlog item.".to_string(),
+                priority: Some("P2".to_string()),
+                item_type: Some("docs".to_string()),
+                area: Some("backlog".to_string()),
+                epic: Some("general".to_string()),
+                depends_on: Vec::new(),
+                owned_surfaces: vec!["docs/tools.md".to_string()],
+                acceptance: vec!["The quick item is written.".to_string()],
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let data = result.data.expect("quick create data");
+        assert_eq!(data.item_id, "PROJ-001");
+        let text = fs::read_to_string(temp.path().join("backlog/items/PROJ-001.md"))
+            .expect("created item");
+        assert!(text.contains("priority: P2"));
+        assert!(text.contains("type: docs"));
+        assert!(text.contains("- docs/tools.md"));
+        assert!(text.contains("- The quick item is written."));
+    }
+
+    #[test]
     fn create_backlog_items_blocks_invalid_existing_backlog_without_writes() {
         let temp = project_fixture();
         write_item(temp.path(), "PROJ-001", "Existing", "P1", &[]);
@@ -1139,6 +1213,7 @@ mod tests {
             CreateBacklogItemsParams {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
+                preview: false,
                 items: vec![batch_entry("new", Some("PROJ-002"), "New item", vec![])],
             },
         );
@@ -1162,6 +1237,7 @@ mod tests {
             CreateBacklogItemsParams {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
+                preview: false,
                 items: vec![
                     batch_entry("explicit", Some("PROJ-010"), "Explicit item", vec![]),
                     batch_entry("auto", None, "Auto item", vec!["explicit".to_string()]),
@@ -1185,6 +1261,7 @@ mod tests {
             CreateBacklogItemsParams {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
+                preview: false,
                 items: vec![
                     batch_entry("ok", None, "Would be valid", vec![]),
                     CreateBacklogItemsEntry {
@@ -1212,6 +1289,7 @@ mod tests {
             CreateBacklogItemsParams {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
+                preview: false,
                 items: vec![
                     batch_entry("ok", Some("PROJ-002"), "Would be valid", vec![]),
                     batch_entry("duplicate", Some("PROJ-001"), "Duplicate", vec![]),
@@ -1237,6 +1315,7 @@ mod tests {
             CreateBacklogItemsParams {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
+                preview: false,
                 items: vec![batch_entry(
                     "implementation",
                     None,
@@ -1264,6 +1343,7 @@ mod tests {
             CreateBacklogItemsParams {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
+                preview: false,
                 items: vec![
                     batch_entry(
                         "shape",
@@ -1305,6 +1385,7 @@ mod tests {
             CreateBacklogItemsParams {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
+                preview: false,
                 items: vec![first, second],
             },
         );
