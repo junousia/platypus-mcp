@@ -35,7 +35,6 @@ tasks:
   - src/models.rs
   - src/server.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test approvals::tests
   acceptance:
@@ -56,7 +55,6 @@ tasks:
   - src/dispatch.rs
   - src/models.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test guidance::tests
   - cargo test dispatch::tests
@@ -77,7 +75,6 @@ tasks:
   - src/reconcile.rs
   - src/state/sqlite/mod.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test reconcile::tests
   acceptance:
@@ -99,7 +96,6 @@ tasks:
   - docs/workflow.md
   - docs/tools.md
   - tests/stdio_protocol.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

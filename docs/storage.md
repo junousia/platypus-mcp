@@ -23,7 +23,6 @@ should call operations such as:
 - `start_worker_execution`
 - `record_worker_event`
 - `complete_worker_execution`
-- `next_safe_action`
 - `record_verification_evidence`
 - `record_finding`
 - `reconcile_project`
@@ -97,9 +96,9 @@ transactions internally, but callers see one all-or-nothing operation.
 - **Integrate result:** update integration evidence and task/project audit state
   consistently with the Git operation.
 
-Read operations such as `next_safe_action`, task or assignment inspection,
-event replay, findings validation, and reconciliation should return domain
-snapshots rather than backend rows.
+Read operations such as queue, task, or assignment inspection, event replay,
+findings validation, and reconciliation should return domain snapshots rather
+than backend rows.
 
 The initial Rust boundary lives in `src/state/`. It defines `ProjectState` as a
 compile-time contract only; existing tools still use the current SQLite-backed
@@ -119,7 +118,6 @@ Current `ProjectState` atomic methods:
 Current `ProjectState` read methods:
 
 - `describe_backend`
-- `next_safe_action`
 - `inspect_task`
 - `inspect_assignment`
 - `replay_events`

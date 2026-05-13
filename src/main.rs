@@ -4,7 +4,6 @@ use clap::{Parser, Subcommand};
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Some(Command::Runner(command)) => platypus_mcp::runner::run_command(command),
         Some(Command::Bootstrap { command }) => {
             let code = platypus_mcp::bootstrap::run_command(command)?;
             std::process::exit(code);
@@ -37,6 +36,4 @@ enum Command {
     },
     /// Invoke one MCP tool through the stdio contract.
     Tool(platypus_mcp::cli::ToolCli),
-    /// Prepare queued work with the local runner.
-    Runner(platypus_mcp::runner::RunnerCli),
 }

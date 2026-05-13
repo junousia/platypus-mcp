@@ -23,7 +23,6 @@ tasks:
   owned_surfaces:
   - docs/roadmap.md
   - README.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

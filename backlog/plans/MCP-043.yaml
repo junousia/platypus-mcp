@@ -29,7 +29,6 @@ tasks:
   - src/state
   - src/lib.rs
   - src/models.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -45,7 +44,6 @@ tasks:
   - MCP-043-T01
   owned_surfaces:
   - docs/storage.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

@@ -1,53 +1,52 @@
 use crate::{
-    approvals, assignments, backlog, bundle, config, dispatch, events, evidence, findings, goal,
+    approvals, assignments, backlog, bundle, config, dispatch, events, evidence, findings,
     guidance, host_guidance, host_lifecycle, integrations, leases,
     models::{
-        AcquireLeaseParams, ActionResult, AgentProfileData, AgentProfilesData, AgentProfilesParams,
-        ApprovalListData, ApprovalListParams, ApprovalRespondParams, ApprovalResponseData,
-        ClaimNextTaskParams, ClassifyPlanningNeedsParams, ClassifyWorkflowFitParams,
-        CompleteWorkerExecutionParams, ConfigureAgentProfileParams, CreateBacklogItemParams,
+        AcquireLeaseParams, ActionResult, ApprovalListData, ApprovalListParams,
+        ApprovalRespondParams, ApprovalResponseData, ClaimNextTaskParams,
+        CommitPlanningArtifactsData, CommitPlanningArtifactsParams, CompleteBacklogItemData,
+        CompleteBacklogItemParams, CompleteWorkerExecutionParams, CreateBacklogItemParams,
         CreateBacklogItemsParams, CreateEpicParams, CreatedBacklogItemData,
         CreatedBacklogItemsData, CreatedEpicData, DispatchNextWorkData, DispatchReadyWorkData,
-        DispatchReadyWorkParams, DoctorSnapshotData, DraftBacklogData, DraftBacklogItemsParams,
-        DraftExternalBacklogItemsParams, DraftExternalReportParams, DraftTaskPlanParams,
-        EventsReplayData, EventsReplayParams, EvidenceListData, EvidenceRecordData,
-        ExternalBacklogDraftData, ExternalReportApprovalData, ExternalReportDispatchData,
-        ExternalReportDraftData, FindingDispositionData, FindingListData, FindingRecordData,
-        FindingValidationData, FinishWorkData, FinishWorkParams, GenerateTaskBundleParams,
-        GitHubIssueImportData, ImportGitHubIssuesParams, InitProjectParams,
-        InspectDependencyGraphParams, InspectTaskEventsParams, InspectTaskParams,
-        InspectWorkQueueParams, InspectWorkerAssignmentParams, IntegrateWorkerResultParams,
+        DispatchReadyWorkParams, DoctorSnapshotData, DraftExternalBacklogItemsParams,
+        DraftExternalReportParams, EventsReplayData, EventsReplayParams, EvidenceListData,
+        EvidenceRecordData, ExternalBacklogDraftData, ExternalReportApprovalData,
+        ExternalReportDispatchData, ExternalReportDraftData, FindingDispositionData,
+        FindingListData, FindingRecordData, FindingValidationData, FinishWorkData,
+        FinishWorkParams, GenerateTaskBundleParams, GitHubIssueImportData,
+        ImportGitHubIssuesParams, InitProjectParams, InspectDependencyGraphParams,
+        InspectIntegrationGatesParams, InspectItemData, InspectItemParams, InspectSessionData,
+        InspectSessionParams, InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
+        InspectWorkerAssignmentParams, IntegrateWorkerResultParams, IntegrationGateData,
         LeaseListData, LeaseRecordData, LimitParams, ListEpicsData, ListEvidenceParams,
-        ListFindingsParams, ListLeasesParams, NextSafeActionData, NextSafeActionParams, PingData,
-        PingParams, PlanGoalWorkData, PlanGoalWorkParams, PlanningClassificationData,
-        PrepareWorkData, PrepareWorkParams, PrepareWorkerAssignmentParams, ProjectScaffoldData,
-        ProjectStatusData, ReconcileParams, ReconciliationData, RecordEvidenceParams,
+        ListFindingsParams, ListLeasesParams, PingData, PingParams, PrepareWorkData,
+        PrepareWorkParams, PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData,
+        ReconcileParams, ReconciliationData, RecordEvidenceParams,
         RecordExternalReportDispatchParams, RecordFindingParams, RecordVerificationEvidenceParams,
         RecordWorkerEventParams, ReleaseLeaseParams, RenewLeaseParams,
         RequestExternalReportApprovalParams, RequestPlanningApprovalParams, RootParams,
-        RunTaskVerificationParams, RunnerPrepareParams, RunnerReportData, SendWorkerGuidanceParams,
-        StartGoalWorkData, StartGoalWorkParams, StartWorkerExecutionParams,
+        RunTaskVerificationParams, SendWorkerGuidanceParams, StartWorkerExecutionParams,
         StorageCapabilityProbeData, StorageCapabilityProbeParams, TaskBundleData,
         TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams,
         TaskPlanValidationData, TaskPlanWriteData, TaskRecordData, TaskVerificationRunData,
         UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
         WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData, WorkerGuidanceData,
-        WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams, WorkflowFitData,
-        WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams, WorktreeData,
-        WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
+        WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData,
+        WorktreeCleanupParams, WorktreeCreateParams, WorktreeData, WorktreeDiffData,
+        WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
     },
-    project, reconcile, runner, storage, tasks, workspace,
+    project, reconcile, storage, tasks, workspace,
 };
 use anyhow::Result as AnyhowResult;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
-        ContextInclusion, CreateMessageRequestParams, GetPromptRequestParams, GetPromptResult,
-        ListPromptsResult, ListResourcesResult, PaginatedRequestParams, ReadResourceRequestParams,
-        ReadResourceResult, ResourceContents, SamplingMessage, ServerCapabilities, ServerInfo,
+        GetPromptRequestParams, GetPromptResult, ListPromptsResult, ListResourcesResult,
+        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
+        ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
-    tool, tool_handler, tool_router, ErrorData as McpError, Json, Peer, RoleServer, ServerHandler,
+    tool, tool_handler, tool_router, ErrorData as McpError, Json, RoleServer, ServerHandler,
     ServiceExt,
 };
 use serde_json::{Map, Value};
@@ -297,25 +296,6 @@ impl PlatypusMcp {
     }
 
     #[tool(
-        title = "Next Safe Action",
-        description = "Recommend the next safe Platypus tool call for the current project state.",
-        annotations(
-            title = "Next Safe Action",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        ),
-        execution(task_support = "forbidden")
-    )]
-    pub async fn next_safe_action(
-        &self,
-        Parameters(params): Parameters<NextSafeActionParams>,
-    ) -> Json<ActionResult<NextSafeActionData>> {
-        Json(guidance::next_safe_action(&self.default_root, params))
-    }
-
-    #[tool(
         title = "Inspect Work Queue",
         description = "Inspect runnable backlog work with task-plan status and recommended next tool.",
         annotations(
@@ -335,10 +315,10 @@ impl PlatypusMcp {
     }
 
     #[tool(
-        title = "Classify Planning Needs",
-        description = "Classify runnable backlog items as direct, standard, or full planning mode.",
+        title = "Inspect Session",
+        description = "Inspect setup, project status, workflow config, and work queue in one read-only startup snapshot.",
         annotations(
-            title = "Classify Planning Needs",
+            title = "Inspect Session",
             read_only_hint = true,
             destructive_hint = false,
             idempotent_hint = true,
@@ -346,21 +326,18 @@ impl PlatypusMcp {
         ),
         execution(task_support = "forbidden")
     )]
-    pub async fn classify_planning_needs(
+    pub async fn inspect_session(
         &self,
-        Parameters(params): Parameters<ClassifyPlanningNeedsParams>,
-    ) -> Json<ActionResult<PlanningClassificationData>> {
-        Json(guidance::classify_planning_needs(
-            &self.default_root,
-            params,
-        ))
+        Parameters(params): Parameters<InspectSessionParams>,
+    ) -> Json<ActionResult<InspectSessionData>> {
+        Json(guidance::inspect_session(&self.default_root, params))
     }
 
     #[tool(
-        title = "Classify Workflow Fit",
-        description = "Classify whether a user goal should use direct scaffolding, full Platypus workflow, or a hybrid flow.",
+        title = "Inspect Item",
+        description = "Inspect one backlog item with dependency, queue, task-plan, findings, evidence, and recommended next-tool state.",
         annotations(
-            title = "Classify Workflow Fit",
+            title = "Inspect Item",
             read_only_hint = true,
             destructive_hint = false,
             idempotent_hint = true,
@@ -368,49 +345,11 @@ impl PlatypusMcp {
         ),
         execution(task_support = "forbidden")
     )]
-    pub async fn classify_workflow_fit(
+    pub async fn inspect_item(
         &self,
-        Parameters(params): Parameters<ClassifyWorkflowFitParams>,
-    ) -> Json<ActionResult<WorkflowFitData>> {
-        Json(guidance::classify_workflow_fit(&self.default_root, params))
-    }
-
-    #[tool(
-        title = "Plan Goal Work",
-        description = "Plan a user goal without mutating project state and return the concrete next Platypus tool call.",
-        annotations(
-            title = "Plan Goal Work",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        ),
-        execution(task_support = "forbidden")
-    )]
-    pub async fn plan_goal_work(
-        &self,
-        Parameters(params): Parameters<PlanGoalWorkParams>,
-    ) -> Json<ActionResult<PlanGoalWorkData>> {
-        Json(goal::plan_goal_work(&self.default_root, params))
-    }
-
-    #[tool(
-        title = "Start Goal Work",
-        description = "Start goal-oriented workflow in one call: classify mode, create or reuse tracking, and optionally dispatch prepared work.",
-        annotations(
-            title = "Start Goal Work",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        ),
-        execution(task_support = "forbidden")
-    )]
-    pub async fn start_goal_work(
-        &self,
-        Parameters(params): Parameters<StartGoalWorkParams>,
-    ) -> Json<ActionResult<StartGoalWorkData>> {
-        Json(goal::start_goal_work(&self.default_root, params))
+        Parameters(params): Parameters<InspectItemParams>,
+    ) -> Json<ActionResult<InspectItemData>> {
+        Json(guidance::inspect_item(&self.default_root, params))
     }
 
     #[tool(
@@ -543,49 +482,6 @@ impl PlatypusMcp {
         Parameters(params): Parameters<InitProjectParams>,
     ) -> Json<ActionResult<ProjectScaffoldData>> {
         Json(project::init_project(&self.default_root, params))
-    }
-
-    #[tool(
-        title = "Draft Backlog Items",
-        description = "Optionally draft typed backlog candidates from a product goal using MCP client sampling; skips when sampling is unavailable.",
-        annotations(
-            title = "Draft Backlog Items",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        ),
-        execution(task_support = "forbidden")
-    )]
-    pub async fn draft_backlog_items(
-        &self,
-        peer: Peer<RoleServer>,
-        Parameters(params): Parameters<DraftBacklogItemsParams>,
-    ) -> Json<ActionResult<DraftBacklogData>> {
-        if !client_supports_sampling(&peer) {
-            return Json(backlog::draft_backlog_items(params));
-        }
-        let prompt = match backlog::draft_backlog_items_sampling_prompt(&params) {
-            Ok(prompt) => prompt,
-            Err(error) => {
-                return Json(ActionResult::failed(
-                    "draft_backlog_items",
-                    "Could not draft backlog items.",
-                    error,
-                ))
-            }
-        };
-        let text = match sample_text(&peer, "Backlog drafting assistant.", prompt, 4_000).await {
-            Ok(text) => text,
-            Err(error) => {
-                return Json(ActionResult::failed(
-                    "draft_backlog_items",
-                    "Could not draft backlog items.",
-                    error,
-                ))
-            }
-        };
-        Json(backlog::draft_backlog_items_from_sample(&params, &text))
     }
 
     #[tool(
@@ -797,53 +693,6 @@ impl PlatypusMcp {
     }
 
     #[tool(
-        title = "Draft Task Plan",
-        description = "Optionally draft a strict task plan using MCP client sampling; skips when sampling is unavailable.",
-        annotations(
-            title = "Draft Task Plan",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        ),
-        execution(task_support = "forbidden")
-    )]
-    pub async fn draft_task_plan(
-        &self,
-        peer: Peer<RoleServer>,
-        Parameters(params): Parameters<DraftTaskPlanParams>,
-    ) -> Json<ActionResult<TaskPlanData>> {
-        if !client_supports_sampling(&peer) {
-            return Json(backlog::draft_task_plan(&self.default_root, params));
-        }
-        let prompt = match backlog::draft_task_plan_sampling_prompt(&self.default_root, &params) {
-            Ok(prompt) => prompt,
-            Err(error) => {
-                return Json(ActionResult::failed(
-                    "draft_task_plan",
-                    "Could not draft task plan.",
-                    error,
-                ))
-            }
-        };
-        let text = match sample_text(&peer, "Task planning assistant.", prompt, 6_000).await {
-            Ok(text) => text,
-            Err(error) => {
-                return Json(ActionResult::failed(
-                    "draft_task_plan",
-                    "Could not draft task plan.",
-                    error,
-                ))
-            }
-        };
-        Json(backlog::draft_task_plan_from_sample(
-            &self.default_root,
-            &params,
-            &text,
-        ))
-    }
-
-    #[tool(
         title = "Inspect Task Plan",
         description = "Read one committed task plan from backlog/plans.",
         annotations(
@@ -955,6 +804,28 @@ impl PlatypusMcp {
         Parameters(params): Parameters<DispatchReadyWorkParams>,
     ) -> Json<ActionResult<DispatchReadyWorkData>> {
         Json(dispatch::dispatch_ready_work(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Commit Planning Artifacts",
+        description = "Commit only Platypus-owned backlog, task-plan, epic, or optional scaffold artifacts before worker handoff.",
+        annotations(
+            title = "Commit Planning Artifacts",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn commit_planning_artifacts(
+        &self,
+        Parameters(params): Parameters<CommitPlanningArtifactsParams>,
+    ) -> Json<ActionResult<CommitPlanningArtifactsData>> {
+        Json(dispatch::commit_planning_artifacts(
+            &self.default_root,
+            params,
+        ))
     }
 
     #[tool(
@@ -1128,6 +999,28 @@ impl PlatypusMcp {
         Parameters(params): Parameters<IntegrateWorkerResultParams>,
     ) -> Json<ActionResult<WorkerResultIntegrationData>> {
         Json(workspace::integrate_worker_result(
+            &self.default_root,
+            params,
+        ))
+    }
+
+    #[tool(
+        title = "Inspect Integration Gates",
+        description = "Read-only integration preflight for one task. Reports lifecycle, worktree, verification, finding, Git, and branch gates enforced by integration.",
+        annotations(
+            title = "Inspect Integration Gates",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn inspect_integration_gates(
+        &self,
+        Parameters(params): Parameters<InspectIntegrationGatesParams>,
+    ) -> Json<ActionResult<IntegrationGateData>> {
+        Json(workspace::inspect_integration_gates(
             &self.default_root,
             params,
         ))
@@ -1363,6 +1256,28 @@ impl PlatypusMcp {
     }
 
     #[tool(
+        title = "Complete Backlog Item",
+        description = "Complete a direct host-work backlog item without a worker task. Records direct completion state, evidence, and optionally a closure commit.",
+        annotations(
+            title = "Complete Backlog Item",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn complete_backlog_item(
+        &self,
+        Parameters(params): Parameters<CompleteBacklogItemParams>,
+    ) -> Json<ActionResult<CompleteBacklogItemData>> {
+        Json(host_lifecycle::complete_backlog_item(
+            &self.default_root,
+            params,
+        ))
+    }
+
+    #[tool(
         title = "Run Task Verification",
         description = "Run the assignment verification command in the task worktree and persist a verification run event. Requires assignment_id or task_id.",
         annotations(
@@ -1382,25 +1297,6 @@ impl PlatypusMcp {
             &self.default_root,
             params,
         ))
-    }
-
-    #[tool(
-        title = "Runner Prepare Next",
-        description = "Claim queued tasks and prepare worktrees and bundles without executing workers.",
-        annotations(
-            title = "Runner Prepare Next",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        ),
-        execution(task_support = "forbidden")
-    )]
-    pub async fn runner_prepare_next(
-        &self,
-        Parameters(params): Parameters<RunnerPrepareParams>,
-    ) -> Json<ActionResult<RunnerReportData>> {
-        Json(runner::prepare_next(&self.default_root, params))
     }
 
     #[tool(
@@ -1654,44 +1550,6 @@ impl PlatypusMcp {
     }
 
     #[tool(
-        title = "List Agent Profiles",
-        description = "List configured manager and worker agent profiles.",
-        annotations(
-            title = "List Agent Profiles",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        ),
-        execution(task_support = "forbidden")
-    )]
-    pub async fn list_agent_profiles(
-        &self,
-        Parameters(params): Parameters<AgentProfilesParams>,
-    ) -> Json<ActionResult<AgentProfilesData>> {
-        Json(config::list_agent_profiles(&self.default_root, params))
-    }
-
-    #[tool(
-        title = "Configure Agent Profile",
-        description = "Create or update one manager or worker agent profile.",
-        annotations(
-            title = "Configure Agent Profile",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        ),
-        execution(task_support = "forbidden")
-    )]
-    pub async fn configure_agent_profile(
-        &self,
-        Parameters(params): Parameters<ConfigureAgentProfileParams>,
-    ) -> Json<ActionResult<AgentProfileData>> {
-        Json(config::configure_agent_profile(&self.default_root, params))
-    }
-
-    #[tool(
         title = "Inspect Workflow Config",
         description = "Inspect effective workflow integration configuration for the project.",
         annotations(
@@ -1815,41 +1673,6 @@ pub async fn serve_stdio() -> AnyhowResult<()> {
     Ok(())
 }
 
-fn client_supports_sampling(peer: &Peer<RoleServer>) -> bool {
-    peer.peer_info()
-        .map(|info| info.capabilities.sampling.is_some())
-        .unwrap_or(false)
-}
-
-async fn sample_text(
-    peer: &Peer<RoleServer>,
-    system_prompt: &str,
-    prompt: String,
-    max_tokens: u32,
-) -> Result<String, String> {
-    let result = peer
-        .create_message(CreateMessageRequestParams {
-            meta: None,
-            task: None,
-            messages: vec![SamplingMessage::user_text(prompt)],
-            model_preferences: None,
-            system_prompt: Some(system_prompt.to_string()),
-            include_context: Some(ContextInclusion::ThisServer),
-            temperature: Some(0.2),
-            max_tokens,
-            stop_sequences: None,
-            metadata: None,
-            tools: None,
-            tool_choice: None,
-        })
-        .await
-        .map_err(|error| format!("client sampling failed: {error}"))?;
-    result
-        .validate()
-        .map_err(|error| format!("client sampling response was invalid: {error}"))?;
-    crate::sampling::message_text(&result.message)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1864,19 +1687,15 @@ mod tests {
             "ping",
             "inspect_status",
             "project_status",
-            "next_safe_action",
+            "inspect_session",
             "inspect_work_queue",
-            "classify_planning_needs",
-            "classify_workflow_fit",
-            "plan_goal_work",
-            "start_goal_work",
+            "inspect_item",
             "list_backlog",
             "inspect_backlog_inventory",
             "inspect_dependency_graph",
             "validate_backlog",
             "doctor_snapshot",
             "init_project",
-            "draft_backlog_items",
             "draft_external_backlog_items",
             "import_github_issues",
             "draft_external_report",
@@ -1887,13 +1706,13 @@ mod tests {
             "create_backlog_items",
             "create_epic",
             "list_epics",
-            "draft_task_plan",
             "inspect_task_plan",
             "list_task_plans",
             "validate_task_plan",
             "write_task_plan",
             "dispatch_next_work",
             "dispatch_ready_work",
+            "commit_planning_artifacts",
             "prepare_work",
             "inspect_task",
             "claim_next_task",
@@ -1903,6 +1722,7 @@ mod tests {
             "inspect_worktree_changes",
             "worktree_cleanup",
             "integrate_worker_result",
+            "inspect_integration_gates",
             "generate_task_bundle",
             "prepare_worker_assignment",
             "prepare_worker_handoff",
@@ -1914,8 +1734,8 @@ mod tests {
             "complete_worker_execution",
             "complete_worker_task",
             "finish_work",
+            "complete_backlog_item",
             "run_task_verification",
-            "runner_prepare_next",
             "inspect_task_events",
             "approval_list",
             "approval_respond",
@@ -1929,8 +1749,6 @@ mod tests {
             "record_verification_evidence",
             "list_evidence",
             "reconcile_project",
-            "list_agent_profiles",
-            "configure_agent_profile",
             "inspect_workflow_config",
             "send_worker_guidance",
             "record_finding",
@@ -1940,6 +1758,8 @@ mod tests {
         ] {
             assert!(names.contains(expected), "missing tool {expected}");
         }
+        assert!(!names.contains("draft_backlog_items"));
+        assert!(!names.contains("draft_task_plan"));
     }
 
     #[test]
@@ -1956,9 +1776,9 @@ mod tests {
             "request_external_report_approval",
             "request_planning_approval",
             "record_external_report_dispatch",
-            "start_goal_work",
             "dispatch_next_work",
             "dispatch_ready_work",
+            "commit_planning_artifacts",
             "prepare_work",
             "claim_next_task",
             "worktree_create",
@@ -1973,15 +1793,14 @@ mod tests {
             "complete_worker_execution",
             "complete_worker_task",
             "finish_work",
+            "complete_backlog_item",
             "run_task_verification",
-            "runner_prepare_next",
             "approval_respond",
             "acquire_lease",
             "renew_lease",
             "release_lease",
             "record_evidence",
             "record_verification_evidence",
-            "configure_agent_profile",
             "send_worker_guidance",
             "record_finding",
             "update_finding_disposition",
@@ -2133,21 +1952,6 @@ mod tests {
             &["P0", "P1", "P2"],
         );
         assert_property_enum_values(
-            &input_schema(&tools, "start_goal_work"),
-            "mode",
-            &["auto", "direct_scaffold", "hybrid", "platypus_workflow"],
-        );
-        assert_property_enum_values(
-            &input_schema(&tools, "plan_goal_work"),
-            "mode",
-            &["auto", "direct_scaffold", "hybrid", "platypus_workflow"],
-        );
-        assert_property_enum_values(
-            &input_schema(&tools, "plan_goal_work"),
-            "intent",
-            &["auto", "planning_only", "ready_to_execute"],
-        );
-        assert_property_enum_values(
             &input_schema(&tools, "approval_respond"),
             "decision",
             &["approve", "deny"],
@@ -2171,16 +1975,6 @@ mod tests {
                 "squash",
                 "apply_changed_files",
             ],
-        );
-        assert_property_enum_values(
-            &input_schema(&tools, "configure_agent_profile"),
-            "role",
-            &["manager", "worker"],
-        );
-        assert_property_enum_values(
-            &input_schema(&tools, "configure_agent_profile"),
-            "harness",
-            &["codex", "claude", "fake", "custom"],
         );
         assert_property_enum_values(
             &input_schema(&tools, "record_evidence"),
@@ -2216,7 +2010,7 @@ mod tests {
         assert_property_enum_values(
             &input_schema(&tools, "prepare_work"),
             "execution_mode",
-            &["auto", "profiled_worker", "manual_handoff"],
+            &["auto", "manual_handoff"],
         );
         assert_property_numeric_bounds(&input_schema(&tools, "prepare_work"), "max_tasks", 1, 10);
         assert_property_enum_values(
@@ -2226,6 +2020,11 @@ mod tests {
         );
         assert_property_enum_values(
             &input_schema(&tools, "finish_work"),
+            "verification_status",
+            &["passed", "failed", "skipped", "not_run"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "complete_backlog_item"),
             "verification_status",
             &["passed", "failed", "skipped", "not_run"],
         );
@@ -2273,22 +2072,8 @@ mod tests {
         assert_property_has_example(&create_epic, "id");
         assert_property_pattern(&create_epic, "id", r"^[A-Za-z0-9_-]+$");
 
-        let start_goal_work = input_schema(&tools, "start_goal_work");
-        assert_property_has_example(&start_goal_work, "goal");
-        assert_property_has_example(&start_goal_work, "owned_surfaces");
-        assert_property_has_example(&start_goal_work, "verification_command");
-        assert!(
-            start_goal_work
-                .get("properties")
-                .and_then(Value::as_object)
-                .map(|properties| !properties.contains_key("scaffold_in_place"))
-                .unwrap_or(true),
-            "start_goal_work schema must not advertise removed scaffold_in_place flag"
-        );
-
-        let plan_goal_work = input_schema(&tools, "plan_goal_work");
-        assert_property_has_example(&plan_goal_work, "goal");
-        assert_property_has_example(&plan_goal_work, "owned_surfaces");
+        let inspect_integration_gates = input_schema(&tools, "inspect_integration_gates");
+        assert_property_has_example(&inspect_integration_gates, "task_id");
 
         let record_worker_event = input_schema(&tools, "record_worker_event");
         assert_property_has_example(&record_worker_event, "assignment_id");
@@ -2309,9 +2094,14 @@ mod tests {
         assert_property_has_example(&prepare_work, "verification_command");
 
         let finish_work = input_schema(&tools, "finish_work");
+        assert_property_has_example(&finish_work, "item_id");
         assert_property_has_example(&finish_work, "assignment_id");
         assert_property_has_example(&finish_work, "task_id");
         assert_property_has_example(&finish_work, "summary");
+
+        let complete_backlog_item = input_schema(&tools, "complete_backlog_item");
+        assert_property_has_example(&complete_backlog_item, "item_id");
+        assert_property_has_example(&complete_backlog_item, "summary");
     }
 
     fn assert_array_items_are_objects(

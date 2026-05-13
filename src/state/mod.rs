@@ -69,9 +69,6 @@ pub trait ProjectState {
     /// Remove worker workspace metadata from a task.
     fn clear_workspace(&self, command: ClearWorkspaceCommand) -> StateResult<TaskSnapshot>;
 
-    /// Inspect the next safe domain operation for the current project state.
-    fn next_safe_action(&self, query: NextSafeActionQuery) -> StateResult<SafeActionSnapshot>;
-
     /// Inspect one task snapshot.
     fn inspect_task(&self, query: TaskQuery) -> StateResult<TaskSnapshot>;
 

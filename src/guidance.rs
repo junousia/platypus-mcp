@@ -1,150 +1,169 @@
 use crate::{
-    approvals, backlog, config,
+    approvals, backlog, config, execution_policy,
     git_readiness::{inspect_git_readiness, GitReadinessStatus},
     models::{
-        ActionResult, ActionStatus, BacklogCandidate, BacklogListData, ClassifyPlanningNeedsParams,
-        ClassifyWorkflowFitParams, InspectWorkQueueParams, NextSafeActionData,
-        NextSafeActionParams, PlanningApprovalState, PlanningClassification,
-        PlanningClassificationData, TaskPlanQueryParams, WorkQueueData, WorkQueueItem,
-        WorkQueuePlanState, WorkflowFitData,
+        ActionResult, ActionStatus, BacklogCandidate, BacklogInventoryData, BacklogInventoryItem,
+        BacklogItemMarkdownState, BacklogListData, EffectiveExecutionPolicy, EvidenceRecord,
+        FindingRecord, InspectItemData, InspectItemParams, InspectSessionData,
+        InspectSessionParams, InspectWorkQueueParams, PlanningApprovalState,
+        PlanningClassification, TaskPlanQueryParams, WorkQueueData, WorkQueueInventorySummary,
+        WorkQueueItem, WorkQueuePlanState, WorkflowConfigParams, WorkflowExecutionConfig,
     },
-    state::{sqlite::SqliteProjectState, NextSafeActionQuery, ProjectState},
+    project,
 };
 use serde_json::Value;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    path::Path,
-    process::Command,
-};
+use std::{collections::BTreeMap, path::Path, process::Command};
 
-pub fn next_safe_action(
+pub fn inspect_session(
     default_root: &Path,
-    params: NextSafeActionParams,
-) -> ActionResult<NextSafeActionData> {
-    let action = "next_safe_action";
-    let state = match SqliteProjectState::open(default_root, params.root.as_deref()) {
-        Ok(state) => state,
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not inspect next safe action.",
-                error.to_string(),
-            )
-        }
-    };
-    let readiness = inspect_git_readiness(state.root(), false);
-    if !readiness.ready() {
-        let reason = readiness
-            .next_action
-            .clone()
-            .unwrap_or_else(|| "Inspect Git setup before dispatching work.".to_string());
-        return ActionResult::completed(
-            action,
-            readiness.summary.clone(),
-            NextSafeActionData {
-                root: state.root().display().to_string(),
-                recommended_tool: "doctor_snapshot".to_string(),
-                summary: readiness.summary,
-                reason,
-                params: BTreeMap::from([(
-                    "root".to_string(),
-                    Value::String(state.root().display().to_string()),
-                )]),
-            },
-        );
-    }
-    if let Some(reason) = missing_worker_profile_reason(default_root, state.root()) {
-        let root_string = state.root().to_string_lossy().to_string();
-        return ActionResult::completed(
-            action,
-            "Runnable backlog work needs a ready worker profile.",
-            NextSafeActionData {
-                root: root_string.clone(),
-                recommended_tool: "configure_agent_profile".to_string(),
-                summary: "Runnable backlog work exists, but no ready worker profile is configured."
-                    .to_string(),
-                reason,
-                params: worker_profile_params(&root_string),
-            },
-        );
-    }
-    match state.next_safe_action(NextSafeActionQuery::default()) {
-        Ok(snapshot) => {
-            let snapshot = verification_policy_adjusted_snapshot(state.root(), snapshot);
-            ActionResult::completed(
-                action,
-                snapshot.summary.clone(),
-                NextSafeActionData {
-                    root: state.root().display().to_string(),
-                    recommended_tool: snapshot.recommended_tool,
-                    summary: snapshot.summary,
-                    reason: snapshot.reason,
-                    params: snapshot.params,
-                },
-            )
-        }
-        Err(error) => ActionResult::failed(
-            action,
-            "Could not inspect next safe action.",
-            error.to_string(),
-        ),
-    }
-}
+    params: InspectSessionParams,
+) -> ActionResult<InspectSessionData> {
+    let action = "inspect_session";
+    let root_arg = params.root.clone();
+    let mut root = root_arg.clone().unwrap_or_else(|| {
+        default_root
+            .canonicalize()
+            .unwrap_or_else(|_| default_root.to_path_buf())
+            .display()
+            .to_string()
+    });
+    let mut errors = Vec::new();
 
-fn missing_worker_profile_reason(default_root: &Path, root: &Path) -> Option<String> {
-    let readiness = config::inspect_agent_profile_readiness(root).ok()?;
-    if readiness.worker_ready() {
-        return None;
-    }
-    let listed =
-        backlog::list_backlog(default_root, Some(root.to_string_lossy().as_ref()), Some(1));
-    let has_runnable = matches!(
-        listed,
+    let doctor_result = project::doctor_snapshot(default_root, root_arg.as_deref());
+    let doctor = match doctor_result {
         ActionResult {
-            status: ActionStatus::Completed,
-            data: Some(BacklogListData { candidates, .. }),
-            ..
-        } if !candidates.is_empty()
-    );
-    has_runnable.then(|| {
-        format!(
-            "{} Manual handoff remains possible: call dispatch_ready_work with prepare_handoffs=true and have an MCP host or external agent execute the returned assignment.",
-            config::worker_profile_setup_guidance()
-        )
-    })
-}
+            data: Some(data), ..
+        } => {
+            root = data.root.clone();
+            Some(data)
+        }
+        ActionResult { summary, error, .. } => {
+            errors.push(error.unwrap_or(summary));
+            None
+        }
+    };
 
-fn verification_policy_adjusted_snapshot(
-    root: &Path,
-    mut snapshot: crate::state::SafeActionSnapshot,
-) -> crate::state::SafeActionSnapshot {
-    if snapshot.recommended_tool != "record_verification_evidence" {
-        return snapshot;
-    }
-    let Ok(config) = crate::config::effective_workflow_config(root) else {
-        return snapshot;
+    let status_result = backlog::inspect_status(default_root, root_arg.as_deref(), params.limit);
+    let status = match status_result {
+        ActionResult {
+            data: Some(data), ..
+        } => Some(data),
+        ActionResult { summary, error, .. } => {
+            errors.push(error.unwrap_or(summary));
+            None
+        }
     };
-    if config.require_verification_evidence {
-        return snapshot;
-    }
-    let Some(task_id) = snapshot
-        .params
-        .get("source_task_id")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-    else {
-        return snapshot;
+
+    let workflow_result = config::inspect_workflow_config(
+        default_root,
+        WorkflowConfigParams {
+            root: root_arg.clone(),
+        },
+    );
+    let workflow = match workflow_result {
+        ActionResult {
+            data: Some(data), ..
+        } => Some(data),
+        ActionResult { summary, error, .. } => {
+            errors.push(error.unwrap_or(summary));
+            None
+        }
     };
-    snapshot.recommended_tool = "integrate_worker_result".to_string();
-    snapshot.summary = format!("Completed task `{task_id}` can be integrated.");
-    snapshot.reason = "Workflow policy does not require separate verification evidence; integrate now or record verification evidence first if useful.".to_string();
-    let root_string = root.to_string_lossy().to_string();
-    snapshot.params = map_params([("root", root_string.as_str()), ("task_id", &task_id)]);
-    snapshot
-        .params
-        .insert("allow_unverified".to_string(), Value::Bool(true));
-    snapshot
+
+    let queue_result = inspect_work_queue(
+        default_root,
+        InspectWorkQueueParams {
+            root: root_arg,
+            limit: params.limit,
+            require_task_plan: params.require_task_plan,
+            require_planning_approval: params.require_planning_approval,
+        },
+    );
+    let queue = match queue_result {
+        ActionResult {
+            data: Some(data), ..
+        } => Some(data),
+        ActionResult { summary, error, .. } => {
+            errors.push(error.unwrap_or(summary));
+            None
+        }
+    };
+
+    let failed_doctor_check = doctor.as_ref().and_then(|snapshot| {
+        snapshot
+            .checks
+            .iter()
+            .find(|check| matches!(check.status, crate::models::DoctorCheckStatus::Fail))
+    });
+    let ok = errors.is_empty() && doctor.as_ref().is_none_or(|snapshot| snapshot.ok);
+    let (recommended_tool, reason, params_map) = if let Some(check) = failed_doctor_check {
+        let tool = if matches!(
+            check.name.as_str(),
+            "project_config" | "backlog_items" | "backlog_epics"
+        ) {
+            "init_project"
+        } else {
+            "doctor_snapshot"
+        };
+        (
+            tool.to_string(),
+            check
+                .next_action
+                .clone()
+                .unwrap_or_else(|| check.summary.clone()),
+            map_params([("root", root.as_str())]),
+        )
+    } else if let Some(queue) = queue.as_ref() {
+        (
+            queue.recommended_tool.clone(),
+            queue.reason.clone(),
+            queue.params.clone(),
+        )
+    } else if errors.is_empty() {
+        (
+            "inspect_work_queue".to_string(),
+            "Inspect the work queue to choose the next deterministic workflow step.".to_string(),
+            map_params([("root", root.as_str())]),
+        )
+    } else {
+        (
+            "doctor_snapshot".to_string(),
+            "Resolve session inspection errors, then inspect the session again.".to_string(),
+            map_params([("root", root.as_str())]),
+        )
+    };
+    let summary = if ok {
+        "Session inspected; use the recommended tool to continue.".to_string()
+    } else if errors.is_empty() {
+        "Session inspected with setup blockers.".to_string()
+    } else {
+        format!(
+            "Session inspection collected {} non-fatal error(s).",
+            errors.len()
+        )
+    };
+    let recovery_action = (!ok).then(|| reason.clone());
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Completed,
+        summary: summary.clone(),
+        next_action: Some(reason.clone()),
+        recovery_action,
+        data: Some(InspectSessionData {
+            root,
+            ok,
+            doctor,
+            status,
+            workflow,
+            queue,
+            errors,
+            recommended_tool,
+            summary,
+            reason,
+            params: params_map,
+        }),
+        error: None,
+    }
 }
 
 pub fn inspect_work_queue(
@@ -152,8 +171,8 @@ pub fn inspect_work_queue(
     params: InspectWorkQueueParams,
 ) -> ActionResult<WorkQueueData> {
     let action = "inspect_work_queue";
-    let require_task_plan = params.require_task_plan.unwrap_or(false);
-    let require_planning_approval = params.require_planning_approval.unwrap_or(false);
+    let legacy_policy_warnings =
+        legacy_policy_warnings(params.require_task_plan, params.require_planning_approval);
     let requested_limit = params.limit.unwrap_or(10).clamp(1, 200);
     let listed = backlog::list_backlog(default_root, params.root.as_deref(), Some(200));
     let (root, candidates) = match listed {
@@ -171,33 +190,31 @@ pub fn inspect_work_queue(
         }
     };
 
-    let active_source_items = active_source_item_ids(Path::new(&root));
+    let execution_config = match config::effective_execution_config(Path::new(&root)) {
+        Ok(config) => config,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect executable work queue.", error)
+        }
+    };
+    let dispatch_blockers = source_item_dispatch_blockers(Path::new(&root));
+    let inventory = queue_inventory(default_root, &root, requested_limit, &dispatch_blockers);
     let mut active_item_ids = Vec::new();
+    let mut active_task_ids = Vec::new();
     let mut active_filtered = 0usize;
-    let filtered_candidates = candidates
-        .into_iter()
-        .filter(|candidate| {
-            let blocked = active_source_items.contains(&candidate.item_id);
-            if blocked {
-                active_filtered += 1;
-                active_item_ids.push(candidate.item_id.clone());
-            }
-            !blocked
-        })
-        .collect::<Vec<_>>();
-    let mut items: Vec<WorkQueueItem> = filtered_candidates
+    let mut items: Vec<WorkQueueItem> = candidates
         .into_iter()
         .take(requested_limit)
         .enumerate()
         .map(|(index, candidate)| {
-            work_queue_item(
-                default_root,
-                &root,
-                index + 1,
-                candidate,
-                require_task_plan,
-                require_planning_approval,
-            )
+            let mut item =
+                work_queue_item(default_root, &root, index + 1, candidate, &execution_config);
+            if let Some(blocker) = dispatch_blockers.get(&item.candidate.item_id) {
+                active_filtered += 1;
+                active_item_ids.push(item.candidate.item_id.clone());
+                active_task_ids.push(blocker.task_id.clone());
+                apply_dispatch_blocker(&mut item, blocker);
+            }
+            item
         })
         .collect();
     let mut preflight_warnings = Vec::new();
@@ -209,10 +226,12 @@ pub fn inspect_work_queue(
             let artifact_only_dirty = manager_dirty_paths(Path::new(&root))
                 .is_some_and(|paths| paths_are_backlog_artifacts(&paths));
             if artifact_only_dirty {
-                preflight_warnings.push(
-                    "Info: manager workspace has only backlog artifacts pending. Enable auto_commit_artifacts=true if you want dispatch_ready_work to auto-commit these artifacts."
-                        .to_string(),
-                );
+                if items.iter().any(item_requires_clean_workspace) {
+                    preflight_warnings.push(
+                        "Info: manager workspace has only backlog artifacts pending. Enable auto_commit_artifacts=true if you want dispatch_ready_work to auto-commit these artifacts."
+                            .to_string(),
+                    );
+                }
             } else {
                 let warning = readiness.next_action.clone().unwrap_or_else(|| {
                     "Commit, stash, or discard local changes before dispatch.".to_string()
@@ -220,19 +239,18 @@ pub fn inspect_work_queue(
                 let reason = format!(
                     "{warning} Dispatch will be blocked until the manager workspace is clean."
                 );
-                preflight_warnings.push(reason.clone());
-                dispatch_blocker = Some((
-                    "next_safe_action".to_string(),
-                    format!(
-                        "{reason} After cleanup, rerun inspect_work_queue or dispatch_ready_work."
-                    ),
-                ));
+                if items.iter().any(item_requires_clean_workspace) {
+                    preflight_warnings.push(reason.clone());
+                }
+                dispatch_blocker = Some(("doctor_snapshot".to_string(), reason.clone()));
                 for item in &mut items {
-                    if item.ready_to_dispatch {
+                    if item.ready_to_dispatch && item_requires_clean_workspace(item) {
                         dispatch_blocker_applies = true;
                         item.ready_to_dispatch = false;
-                        item.recommended_tool = "next_safe_action".to_string();
+                        item.queue_state = "workspace_blocked".to_string();
+                        item.recommended_tool = "doctor_snapshot".to_string();
                         item.reason = "Planning is ready, but dispatch is currently blocked by local manager workspace changes.".to_string();
+                        apply_execution_metadata(item);
                     }
                 }
             }
@@ -245,55 +263,25 @@ pub fn inspect_work_queue(
             preflight_warnings.push(reason.clone());
             dispatch_blocker = Some(("doctor_snapshot".to_string(), reason));
             for item in &mut items {
-                if item.ready_to_dispatch {
+                if item.ready_to_dispatch && item_requires_clean_workspace(item) {
                     dispatch_blocker_applies = true;
                     item.ready_to_dispatch = false;
+                    item.queue_state = "config_blocked".to_string();
                     item.recommended_tool = "doctor_snapshot".to_string();
                     item.reason = "Planning is ready, but dispatch is currently blocked because Git is not ready.".to_string();
+                    apply_execution_metadata(item);
                 }
             }
         }
     }
-    let initial_ready_count = items.iter().filter(|item| item.ready_to_dispatch).count();
-    let agent_readiness = config::inspect_agent_profile_readiness(Path::new(&root)).ok();
-    let worker_ready = agent_readiness
-        .as_ref()
-        .is_some_and(|readiness| readiness.worker_ready());
-    let ready_worker_profiles = agent_readiness
-        .as_ref()
-        .map(|readiness| readiness.ready_worker_count)
-        .unwrap_or(0);
-    let worker_profile_blocker_applies =
-        !items.is_empty() && initial_ready_count > 0 && !worker_ready;
-    if let Some(readiness) = agent_readiness.as_ref() {
-        if !readiness.worker_ready() {
-            preflight_warnings.extend(readiness.warnings.iter().filter_map(|warning| {
-                warning
-                    .to_ascii_lowercase()
-                    .contains("worker")
-                    .then(|| warning.clone())
-            }));
-        }
-    } else if !items.is_empty() {
-        preflight_warnings.push(
-            "Could not inspect worker profiles. Run doctor_snapshot or configure_agent_profile before managed dispatch."
-                .to_string(),
-        );
-    }
-    if worker_profile_blocker_applies {
-        for item in &mut items {
-            if item.ready_to_dispatch {
-                item.ready_to_dispatch = false;
-                item.recommended_tool = "configure_agent_profile".to_string();
-                item.reason = "Planning is ready, but no ready worker profile is configured for managed execution. Configure a worker profile, or explicitly use manual handoff with dispatch_ready_work prepare_handoffs=true.".to_string();
-            }
-        }
-    }
+    let require_task_plan = items
+        .iter()
+        .any(|item| execution_policy::plan_required(&item.effective_policy.planning_gate));
     let ready_count = items.iter().filter(|item| item.ready_to_dispatch).count();
     let blocked_count = items.len().saturating_sub(ready_count);
     if active_filtered > 0 {
         preflight_warnings.push(format!(
-            "{active_filtered} backlog item(s) already have active tasks and were hidden from ready dispatch candidates."
+            "{active_filtered} backlog item(s) already have active tasks or completed tasks awaiting integration."
         ));
     }
     let (mut recommended_tool, mut reason, mut params) = recommended_queue_action(&root, &items);
@@ -304,36 +292,84 @@ pub fn inspect_work_queue(
         reason = blocked_reason;
         params = map_params([("root", root.as_str())]);
     } else if items.is_empty() && active_filtered > 0 {
-        recommended_tool = "next_safe_action".to_string();
+        recommended_tool = active_task_ids
+            .first()
+            .map(|_| "inspect_task")
+            .unwrap_or("inspect_work_queue")
+            .to_string();
         reason = format!(
-            "{active_filtered} backlog item(s) already have active tasks. Use next_safe_action or inspect_task to continue active work instead of creating new backlog items."
+            "{active_filtered} backlog item(s) already have active tasks or completed tasks awaiting integration. Use inspect_task to continue active work instead of creating new backlog items."
         );
         params = map_params([("root", root.as_str())]);
-    } else if worker_profile_blocker_applies {
-        recommended_tool = "configure_agent_profile".to_string();
+        if let Some(task_id) = active_task_ids.first() {
+            params.insert("task_id".to_string(), Value::String(task_id.clone()));
+        }
+    } else if items.is_empty() && inventory.dependency_blocked_count > 0 {
+        recommended_tool = "inspect_item".to_string();
+        let first_blocked = inventory
+            .dependency_blocked_items
+            .first()
+            .map(|item| item.item_id.clone())
+            .unwrap_or_default();
         reason = format!(
-            "Runnable work exists, but no ready worker profile is configured. {} Manual handoff remains possible with dispatch_ready_work prepare_handoffs=true if an external agent will execute the returned assignment.",
-            config::worker_profile_setup_guidance()
+            "No runnable backlog items; {} item(s) are dependency-blocked. Inspect `{}` or close its dependencies before creating more work.",
+            inventory.dependency_blocked_count, first_blocked
         );
-        params = worker_profile_params(&root);
+        params = map_params([("root", root.as_str())]);
+        if !first_blocked.is_empty() {
+            params.insert("item_id".to_string(), Value::String(first_blocked));
+        }
+    } else if items.is_empty() && inventory.total_count > 0 && inventory.runnable_count == 0 {
+        recommended_tool = "create_backlog_items".to_string();
+        reason = format!(
+            "All {} backlog item(s) are closed. Use the host model to decide concrete follow-up work, then call create_backlog_items and validate_backlog.",
+            inventory.total_count
+        );
+        params = map_params([("root", root.as_str())]);
     }
     let summary = if items.is_empty() {
         if active_filtered > 0 {
             format!(
-                "No dispatchable backlog items; {active_filtered} backlog item(s) already have active tasks."
+                "No dispatchable backlog items; {active_filtered} backlog item(s) already have active tasks or completed tasks awaiting integration."
+            )
+        } else if inventory.dependency_blocked_count > 0 || inventory.closed_count > 0 {
+            format!(
+                "No runnable backlog items. Inventory: {} total, {} dependency-blocked, {} closed.",
+                inventory.total_count, inventory.dependency_blocked_count, inventory.closed_count
             )
         } else {
             "No runnable backlog items.".to_string()
         }
     } else {
+        let blocked_by_planning = items
+            .iter()
+            .filter(|item| {
+                !item.ready_to_dispatch
+                    && matches!(
+                        item.queue_state.as_str(),
+                        "planning_blocked"
+                            | "approval_blocked"
+                            | "config_blocked"
+                            | "workspace_blocked"
+                    )
+            })
+            .count();
+        let blocked_by_lifecycle = blocked_count.saturating_sub(blocked_by_planning);
+        let blocked_label = if blocked_by_lifecycle > 0 {
+            format!(
+                "{blocked_by_planning} blocked by planning or setup, {blocked_by_lifecycle} blocked by active lifecycle"
+            )
+        } else {
+            format!("{blocked_count} blocked by planning or setup")
+        };
         format!(
-            "{} runnable backlog item(s) inspected: {} ready, {} blocked by planning.",
+            "{} runnable backlog item(s) inspected: {} ready, {}.",
             items.len(),
             ready_count,
-            blocked_count
+            blocked_label
         )
     };
-    let status = if items.is_empty() && active_filtered == 0 {
+    let status = if items.is_empty() && active_filtered == 0 && inventory.total_count == 0 {
         ActionStatus::Skipped
     } else {
         ActionStatus::Completed
@@ -343,6 +379,7 @@ pub fn inspect_work_queue(
         status,
         summary: summary.clone(),
         next_action: Some(reason.clone()),
+        recovery_action: None,
         data: Some(WorkQueueData {
             root,
             require_task_plan,
@@ -350,9 +387,10 @@ pub fn inspect_work_queue(
             blocked_count,
             active_count: active_filtered,
             active_item_ids,
+            active_task_ids,
+            inventory,
             preflight_warnings,
-            worker_ready,
-            ready_worker_profiles,
+            policy_warnings: legacy_policy_warnings,
             recommended_tool,
             summary,
             reason,
@@ -363,15 +401,398 @@ pub fn inspect_work_queue(
     }
 }
 
-fn active_source_item_ids(root: &Path) -> BTreeSet<String> {
+pub fn inspect_item(
+    default_root: &Path,
+    params: InspectItemParams,
+) -> ActionResult<InspectItemData> {
+    let action = "inspect_item";
+    let _legacy_policy_warnings =
+        legacy_policy_warnings(params.require_task_plan, params.require_planning_approval);
+    let inventory_result =
+        backlog::inspect_backlog_inventory(default_root, params.root.as_deref(), None);
+    let BacklogInventoryData { root, items, .. } = match inventory_result {
+        ActionResult {
+            status: ActionStatus::Completed,
+            data: Some(data),
+            ..
+        } => data,
+        ActionResult { summary, error, .. } => {
+            return ActionResult::failed(
+                action,
+                "Could not inspect backlog item.",
+                error.unwrap_or(summary),
+            )
+        }
+    };
+    let available_ids = items
+        .iter()
+        .map(|item| item.item_id.as_str())
+        .take(20)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let Some(item) = items
+        .into_iter()
+        .find(|item| item.item_id == params.item_id)
+    else {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Failed,
+            summary: format!("Backlog item `{}` was not found.", params.item_id),
+            next_action: Some(if available_ids.is_empty() {
+                "Create backlog items before inspecting one.".to_string()
+            } else {
+                format!("Use one of the existing item ids: {available_ids}.")
+            }),
+            recovery_action: None,
+            data: None,
+            error: Some(format!("unknown backlog item `{}`", params.item_id)),
+        };
+    };
+    let (_root_path, snapshot) =
+        match backlog::backlog_item_snapshot(default_root, Some(&root), &item.item_id) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return ActionResult::failed(action, "Could not inspect backlog item.", error)
+            }
+        };
+    let dispatch_blockers = source_item_dispatch_blockers(Path::new(&root));
+    let blocker = dispatch_blockers.get(&item.item_id);
+    let candidate = candidate_from_item(&item, &snapshot.external_refs);
+    let execution_config = match config::effective_execution_config(Path::new(&root)) {
+        Ok(config) => config,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not inspect backlog item.", error)
+        }
+    };
+    let mut queue = if item.runnable || blocker.is_some() {
+        let mut queue_item =
+            work_queue_item(default_root, &root, 1, candidate.clone(), &execution_config);
+        if let Some(blocker) = blocker {
+            apply_dispatch_blocker(&mut queue_item, blocker);
+        }
+        Some(queue_item)
+    } else {
+        None
+    };
+    if item.closed {
+        queue = None;
+    }
+
+    let planning = queue
+        .as_ref()
+        .map(|item| item.planning.clone())
+        .unwrap_or_else(|| {
+            let policy = effective_policy_for_candidate(
+                default_root,
+                &root,
+                &candidate.item_id,
+                &execution_config,
+            );
+            planning_requirement(&candidate, &policy)
+        });
+    let plan = queue
+        .as_ref()
+        .map(|item| item.plan.clone())
+        .unwrap_or_else(|| {
+            let policy = effective_policy_for_candidate(
+                default_root,
+                &root,
+                &item.item_id,
+                &execution_config,
+            );
+            normalized_task_plan_state(
+                default_root,
+                &root,
+                &item.item_id,
+                execution_policy::plan_required(&policy.planning_gate),
+            )
+        });
+    let planning_approval = queue
+        .as_ref()
+        .and_then(|item| item.planning_approval.clone())
+        .or_else(|| {
+            let policy = effective_policy_for_candidate(
+                default_root,
+                &root,
+                &item.item_id,
+                &execution_config,
+            );
+            execution_policy::approval_required(&policy.planning_gate).then(|| {
+                approvals::planning_approval_state(default_root, Some(&root), &item.item_id, true)
+                    .unwrap_or_else(|error| PlanningApprovalState {
+                        item_id: item.item_id.clone(),
+                        required: true,
+                        approved: false,
+                        approval_id: None,
+                        status: None,
+                        reason: format!("Could not inspect planning approval state: {error}"),
+                    })
+            })
+        });
+    let (queue_state, task_id, assignment_id, ready_to_dispatch, recommended_tool, reason) =
+        if let Some(queue_item) = &queue {
+            (
+                queue_item.queue_state.clone(),
+                queue_item.task_id.clone(),
+                queue_item.assignment_id.clone(),
+                queue_item.ready_to_dispatch,
+                queue_item.recommended_tool.clone(),
+                queue_item.reason.clone(),
+            )
+        } else if item.closed {
+            (
+                "closed".to_string(),
+                None,
+                None,
+                false,
+                "inspect_work_queue".to_string(),
+                item.reason.clone(),
+            )
+        } else if !item.open_dependencies.is_empty() {
+            (
+                "dependency_blocked".to_string(),
+                None,
+                None,
+                false,
+                "inspect_item".to_string(),
+                item.reason.clone(),
+            )
+        } else {
+            (
+                "config_blocked".to_string(),
+                None,
+                None,
+                false,
+                "inspect_work_queue".to_string(),
+                item.reason.clone(),
+            )
+        };
+    let mut tool_params = map_params([("root", root.as_str()), ("item_id", item.item_id.as_str())]);
+    if let Some(task_id) = &task_id {
+        tool_params.insert("task_id".to_string(), Value::String(task_id.clone()));
+    }
+    if let Some(assignment_id) = &assignment_id {
+        tool_params.insert(
+            "assignment_id".to_string(),
+            Value::String(assignment_id.clone()),
+        );
+    }
+    let (findings, evidence) = item_artifacts(&root, &item.item_id, 50);
+    let finding_count = findings.len();
+    let evidence_count = evidence.len();
+    let summary = format!(
+        "Backlog item `{}` inspected: {}.",
+        item.item_id, queue_state
+    );
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Completed,
+        summary: summary.clone(),
+        next_action: Some(reason.clone()),
+        recovery_action: None,
+        data: Some(InspectItemData {
+            root,
+            item,
+            markdown: BacklogItemMarkdownState {
+                path: snapshot.path.display().to_string(),
+                sections: snapshot.sections,
+                external_refs: snapshot.external_refs,
+            },
+            queue,
+            plan,
+            planning,
+            planning_approval,
+            queue_state,
+            task_id,
+            assignment_id,
+            ready_to_dispatch,
+            recommended_tool,
+            reason,
+            params: tool_params,
+            findings,
+            evidence,
+            finding_count,
+            evidence_count,
+        }),
+        error: None,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct QueueDispatchBlocker {
+    task_id: String,
+    task_status: String,
+    assignment_id: Option<String>,
+    assignment_status: Option<String>,
+    queue_state: String,
+}
+
+fn source_item_dispatch_blockers(root: &Path) -> BTreeMap<String, QueueDispatchBlocker> {
     let storage = match crate::storage::connect_existing_read_only(root, None) {
         Ok(Some(storage)) => storage,
-        Ok(None) | Err(_) => return BTreeSet::new(),
+        Ok(None) | Err(_) => return BTreeMap::new(),
     };
-    match storage.repository().tasks().active_source_items() {
-        Ok(items) => items.into_iter().collect(),
-        Err(_) => BTreeSet::new(),
+    match storage.repository().tasks().source_item_dispatch_blockers() {
+        Ok(items) => items
+            .into_iter()
+            .map(|item| {
+                (
+                    item.source_item_id,
+                    QueueDispatchBlocker {
+                        task_id: item.task_id,
+                        task_status: item.task_status,
+                        assignment_id: item.assignment_id,
+                        assignment_status: item.assignment_status,
+                        queue_state: item.queue_state,
+                    },
+                )
+            })
+            .collect(),
+        Err(_) => BTreeMap::new(),
     }
+}
+
+fn queue_inventory(
+    default_root: &Path,
+    root: &str,
+    limit: usize,
+    dispatch_blockers: &BTreeMap<String, QueueDispatchBlocker>,
+) -> WorkQueueInventorySummary {
+    let inventory = backlog::inspect_backlog_inventory(default_root, Some(root), None)
+        .data
+        .unwrap_or_else(|| BacklogInventoryData {
+            root: root.to_string(),
+            items: Vec::new(),
+            total: 0,
+            returned: 0,
+            truncated: false,
+            runnable: 0,
+            closed: 0,
+            blocked: 0,
+        });
+    let dependency_blocked = inventory
+        .items
+        .iter()
+        .filter(|item| !item.closed && !item.open_dependencies.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    let closed = inventory
+        .items
+        .iter()
+        .filter(|item| item.closed)
+        .cloned()
+        .collect::<Vec<_>>();
+    let active_lifecycle_item_ids = dispatch_blockers
+        .iter()
+        .filter(|(_, blocker)| blocker.queue_state == "active")
+        .map(|(item_id, _)| item_id.clone())
+        .collect::<Vec<_>>();
+    let pending_integration_task_ids = dispatch_blockers
+        .values()
+        .filter(|blocker| blocker.queue_state == "completed_pending_integration")
+        .map(|blocker| blocker.task_id.clone())
+        .collect::<Vec<_>>();
+    let truncated = dependency_blocked.len() > limit || closed.len() > limit;
+    WorkQueueInventorySummary {
+        total_count: inventory.total,
+        runnable_count: inventory.runnable,
+        dependency_blocked_count: dependency_blocked.len(),
+        closed_count: inventory.closed,
+        active_lifecycle_count: active_lifecycle_item_ids.len(),
+        pending_integration_count: pending_integration_task_ids.len(),
+        dependency_blocked_items: dependency_blocked.into_iter().take(limit).collect(),
+        closed_items: closed.into_iter().take(limit).collect(),
+        active_lifecycle_item_ids,
+        pending_integration_task_ids,
+        truncated,
+    }
+}
+
+fn apply_dispatch_blocker(item: &mut WorkQueueItem, blocker: &QueueDispatchBlocker) {
+    item.queue_state = blocker.queue_state.clone();
+    item.task_id = Some(blocker.task_id.clone());
+    item.assignment_id = blocker.assignment_id.clone();
+    item.ready_to_dispatch = false;
+    match blocker.queue_state.as_str() {
+        "completed_pending_integration" => {
+            item.recommended_tool = "integrate_worker_result".to_string();
+            item.reason = format!(
+                "Task `{}` for this item is completed and awaiting integration.",
+                blocker.task_id
+            );
+        }
+        "active" if blocker.assignment_status.as_deref() == Some("prepared") => {
+            item.recommended_tool = "start_worker_task".to_string();
+            item.reason = format!(
+                "Worker assignment `{}` for task `{}` is prepared and ready to start.",
+                blocker.assignment_id.as_deref().unwrap_or(""),
+                blocker.task_id
+            );
+        }
+        "active" if blocker.assignment_status.as_deref() == Some("running") => {
+            item.recommended_tool = "record_worker_progress".to_string();
+            item.reason = format!(
+                "Worker assignment `{}` for task `{}` is running.",
+                blocker.assignment_id.as_deref().unwrap_or(""),
+                blocker.task_id
+            );
+        }
+        "active" if matches!(blocker.task_status.as_str(), "queued" | "claimed") => {
+            item.recommended_tool = "prepare_worker_handoff".to_string();
+            item.reason = format!(
+                "Task `{}` for this item is `{}` and needs a worker handoff.",
+                blocker.task_id, blocker.task_status
+            );
+        }
+        _ => {
+            item.recommended_tool = "inspect_task".to_string();
+            item.reason = format!(
+                "Task `{}` for this item is `{}`; continue that lifecycle before dispatching this item again.",
+                blocker.task_id, blocker.task_status
+            );
+        }
+    }
+    apply_execution_metadata(item);
+}
+
+fn candidate_from_item(
+    item: &BacklogInventoryItem,
+    external_refs: &[crate::models::ExternalRef],
+) -> BacklogCandidate {
+    BacklogCandidate {
+        source: "backlog".to_string(),
+        item_id: item.item_id.clone(),
+        title: item.title.clone(),
+        priority: item.priority.clone(),
+        item_type: item.item_type.clone(),
+        area: item.area.clone(),
+        owned_surfaces: item.owned_surfaces.clone(),
+        external_refs: external_refs.to_vec(),
+    }
+}
+
+fn item_artifacts(
+    root: &str,
+    item_id: &str,
+    limit: usize,
+) -> (Vec<FindingRecord>, Vec<EvidenceRecord>) {
+    let storage = match crate::storage::connect_existing_read_only(Path::new(root), None) {
+        Ok(Some(storage)) => storage,
+        Ok(None) | Err(_) => return (Vec::new(), Vec::new()),
+    };
+    let repository = storage.repository();
+    let findings = repository
+        .list_findings_for_item(item_id, limit)
+        .unwrap_or_default();
+    let evidence = repository
+        .list_evidence_for_item(item_id, limit)
+        .unwrap_or_default();
+    (findings, evidence)
+}
+
+fn item_requires_clean_workspace(item: &WorkQueueItem) -> bool {
+    item.ready_to_dispatch
+        && item.effective_policy.execution_path == execution_policy::WORKER_HANDOFF
 }
 
 fn manager_dirty_paths(root: &Path) -> Option<Vec<String>> {
@@ -406,223 +827,38 @@ fn paths_are_backlog_artifacts(paths: &[String]) -> bool {
         })
 }
 
-pub fn classify_planning_needs(
-    default_root: &Path,
-    params: ClassifyPlanningNeedsParams,
-) -> ActionResult<PlanningClassificationData> {
-    let action = "classify_planning_needs";
-    let listed = backlog::list_backlog(default_root, params.root.as_deref(), params.limit);
-    let (root, candidates) = match listed {
-        ActionResult {
-            status: ActionStatus::Completed | ActionStatus::Skipped,
-            data: Some(BacklogListData { root, candidates }),
-            ..
-        } => (root, candidates),
-        ActionResult { summary, error, .. } => {
-            return ActionResult::failed(
-                action,
-                "Could not classify planning needs.",
-                error.unwrap_or(summary),
-            )
-        }
-    };
-    let item_filter = params
-        .item_id
-        .as_deref()
-        .map(|value| value.to_ascii_uppercase());
-    let classifications = candidates
-        .iter()
-        .filter(|candidate| {
-            item_filter
-                .as_ref()
-                .map(|filter| candidate.item_id == *filter)
-                .unwrap_or(true)
-        })
-        .map(classify_candidate)
-        .collect::<Vec<_>>();
-    let returned = classifications.len();
-
-    if item_filter.is_some() && returned == 0 {
-        return ActionResult {
-            action: action.to_string(),
-            status: ActionStatus::Skipped,
-            summary: "No runnable backlog item matched the requested item.".to_string(),
-            next_action: Some(
-                "Use list_backlog or inspect_work_queue to inspect runnable items.".to_string(),
-            ),
-            data: Some(PlanningClassificationData {
-                root,
-                classifications,
-                returned,
-            }),
-            error: None,
-        };
-    }
-
-    ActionResult::completed(
-        action,
-        format!("Classified {returned} backlog item(s)."),
-        PlanningClassificationData {
-            root,
-            classifications,
-            returned,
-        },
-    )
-}
-
-pub fn classify_workflow_fit(
-    default_root: &Path,
-    params: ClassifyWorkflowFitParams,
-) -> ActionResult<WorkflowFitData> {
-    let action = "classify_workflow_fit";
-    let root = match crate::project::paths::resolve_root(default_root, params.root.as_deref()) {
-        Ok(root) => root,
-        Err(error) => {
-            return ActionResult::failed(
-                action,
-                "Could not classify workflow fit.",
-                error.to_string(),
-            )
-        }
-    };
-    let goal = params.goal.trim();
-    if goal.is_empty() {
-        return ActionResult::failed(
-            action,
-            "Could not classify workflow fit.",
-            "goal is required",
+fn legacy_policy_warnings(
+    require_task_plan: Option<bool>,
+    require_planning_approval: Option<bool>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if require_task_plan.is_some() {
+        warnings.push(
+            "Deprecated input require_task_plan was ignored. Set workflow.execution or backlog item planning_gate instead."
+                .to_string(),
         );
     }
+    if require_planning_approval.is_some() {
+        warnings.push(
+            "Deprecated input require_planning_approval was ignored. Use planning_gate=approved_task_plan instead."
+                .to_string(),
+        );
+    }
+    warnings
+}
 
-    let inventory =
-        backlog::inspect_backlog_inventory(&root, Some(root.to_string_lossy().as_ref()), None);
-    let (backlog_items, runnable_backlog_items) = match inventory {
-        ActionResult {
-            data: Some(data),
-            status: ActionStatus::Completed,
-            ..
-        } => (data.total, data.runnable),
-        _ => (0, 0),
-    };
-    let meaningful_files = meaningful_project_entries(&root);
-    let goal_lower = goal.to_ascii_lowercase();
-    let owned_surfaces = params
-        .owned_surfaces
-        .iter()
-        .map(|surface| surface.to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    let touches_high_risk_surface = high_risk_surface(&owned_surfaces);
-    let starter_app_goal = keyword_score(
-        &goal_lower,
-        &[
-            "fastapi",
-            "react",
-            "vite",
-            "starter app",
-            "starter project",
-            "simple webapp",
-            "simple web app",
-            "scaffold",
-            "new app",
-        ],
-    ) >= 2;
-    let scaffold_score = keyword_score(
-        &goal_lower,
-        &[
-            "scaffold",
-            "starter",
-            "new project",
-            "new app",
-            "simple webapp",
-            "simple web app",
-            "hello world",
-            "vite",
-            "create react",
-            "fastapi/react",
-            "fastapi react",
-            "bootstrap",
-            "minimal app",
-        ],
-    );
-    let explicit_structured_score = keyword_score(
-        &goal_lower,
-        &[
-            "backlog",
-            "roadmap",
-            "traceability",
-            "evidence",
-            "worker",
-            "approval",
-            "security",
-            "migration",
-            "refactor",
-            "production",
-            "ci",
-            "integration",
-            "multi-step",
-            "multiple",
-        ],
-    );
-    let structured_score = explicit_structured_score + owned_surfaces.len();
-
-    let mut reasons = Vec::new();
-    if scaffold_score > 0 {
-        reasons.push("goal looks like initial scaffolding or starter-app creation".to_string());
-    }
-    if structured_score > 0 {
-        reasons.push("goal asks for structured, multi-step, or traceable work".to_string());
-    }
-    if touches_high_risk_surface {
-        reasons.push("goal touches high-risk lifecycle or persistence surfaces".to_string());
-    }
-    if backlog_items > 0 {
-        reasons.push(format!("{backlog_items} backlog item(s) already exist"));
-    }
-    if meaningful_files <= 2 {
-        reasons.push("project root has little existing product surface".to_string());
-    } else {
-        reasons.push(format!(
-            "project root already has {meaningful_files} meaningful top-level entries"
-        ));
-    }
-
-    let recommended_mode =
-        if backlog_items > 0 || explicit_structured_score >= 2 || touches_high_risk_surface {
-            "platypus_workflow"
-        } else if (starter_app_goal || scaffold_score > 0) && meaningful_files <= 2 {
-            "direct_scaffold"
-        } else if scaffold_score > 0 || starter_app_goal {
-            "hybrid"
-        } else {
-            "platypus_workflow"
-        };
-    let (summary, next_action) = match recommended_mode {
-        "direct_scaffold" => (
-            "Direct scaffold is the best first step.".to_string(),
-            "No Platypus scaffold tool is available for direct_scaffold. Use the host's native file edits or scaffold command first, commit the baseline, then create backlog items for follow-up work.".to_string(),
-        ),
-        "hybrid" => (
-            "Use a hybrid flow: direct scaffold for the first files, then Platypus for follow-up work.".to_string(),
-            "No Platypus scaffold tool is available for the direct part of hybrid mode. Use the host's native file edits or scaffold command for the initial files, commit them, then use Platypus backlog and task tools for the next implementation slices.".to_string(),
-        ),
-        _ => (
-            "Use the full Platypus workflow.".to_string(),
-            "Create or inspect backlog items, classify planning needs, validate task plans when required, then dispatch through worktrees.".to_string(),
-        ),
-    };
-
-    ActionResult::completed(
-        action,
-        summary.clone(),
-        WorkflowFitData {
-            root: root.display().to_string(),
-            recommended_mode: recommended_mode.to_string(),
-            summary,
-            reasons,
-            next_action,
-            backlog_items,
-            runnable_backlog_items,
-        },
+fn effective_policy_for_candidate(
+    default_root: &Path,
+    root: &str,
+    item_id: &str,
+    execution_config: &WorkflowExecutionConfig,
+) -> EffectiveExecutionPolicy {
+    let item_policy = backlog::backlog_item_execution_policy(default_root, Some(root), item_id)
+        .unwrap_or_default();
+    execution_policy::resolve_effective_policy(
+        execution_config,
+        item_policy.execution_path.as_deref(),
+        item_policy.planning_gate.as_deref(),
     )
 }
 
@@ -631,19 +867,16 @@ fn work_queue_item(
     root: &str,
     position: usize,
     candidate: BacklogCandidate,
-    require_task_plan: bool,
-    require_planning_approval: bool,
+    execution_config: &WorkflowExecutionConfig,
 ) -> WorkQueueItem {
-    let planning = classify_candidate(&candidate);
-    let mut plan = task_plan_state(default_root, root, &candidate.item_id);
+    let effective_policy =
+        effective_policy_for_candidate(default_root, root, &candidate.item_id, execution_config);
+    let planning = planning_requirement(&candidate, &effective_policy);
+    let plan_required = execution_policy::plan_required(&effective_policy.planning_gate);
+    let approval_required = execution_policy::approval_required(&effective_policy.planning_gate);
+    let plan = normalized_task_plan_state(default_root, root, &candidate.item_id, plan_required);
     let plan_valid = plan.status == "valid";
-    let planning_required = require_task_plan && planning.required_mode != "direct";
-    if !planning_required && plan.status == "missing" {
-        plan.status = "not_required".to_string();
-        plan.errors.clear();
-    }
-    let plan_ready = !planning_required || plan_valid;
-    let approval_required = require_planning_approval && planning.required_mode != "direct";
+    let plan_ready = !plan_required || plan_valid;
     let planning_approval = if approval_required {
         match approvals::planning_approval_state(default_root, Some(root), &candidate.item_id, true)
         {
@@ -657,15 +890,6 @@ fn work_queue_item(
                 reason: format!("Could not inspect planning approval state: {error}"),
             }),
         }
-    } else if require_planning_approval {
-        Some(PlanningApprovalState {
-            item_id: candidate.item_id.clone(),
-            required: false,
-            approved: true,
-            approval_id: None,
-            status: None,
-            reason: "Direct work does not require planning approval.".to_string(),
-        })
     } else {
         None
     };
@@ -673,20 +897,33 @@ fn work_queue_item(
         .as_ref()
         .is_none_or(|state| !state.required || state.approved);
     let ready_to_dispatch = plan_ready && approval_ready;
-    let (recommended_tool, reason) = if ready_to_dispatch {
+    let (recommended_tool, reason, queue_state) = if ready_to_dispatch
+        && effective_policy.execution_path == execution_policy::DIRECT_EDIT
+    {
+        (
+            "prepare_work".to_string(),
+            "Direct host work is ready; prepare_work will return direct_edit guidance without requiring worker configuration or a worktree.".to_string(),
+            "direct_ready".to_string(),
+        )
+    } else if ready_to_dispatch
+        && effective_policy.execution_path == execution_policy::WORKER_HANDOFF
+    {
         (
             "dispatch_ready_work".to_string(),
-            "Backlog item is runnable.".to_string(),
+            "Worker handoff is ready; prepare_work or dispatch_ready_work can create an isolated worktree handoff.".to_string(),
+            "ready".to_string(),
         )
     } else if !plan_ready && plan.status == "missing" {
         (
-            "draft_task_plan".to_string(),
-            "A task plan is required before dispatch.".to_string(),
+            "write_task_plan".to_string(),
+            "A task plan is required before dispatch. Use the host model to write explicit requirements, design notes, tasks, and verification commands, then validate_task_plan.".to_string(),
+            "planning_blocked".to_string(),
         )
     } else if !plan_ready {
         (
             "validate_task_plan".to_string(),
             "Task plan must be fixed before dispatch.".to_string(),
+            "planning_blocked".to_string(),
         )
     } else if approval_required {
         (
@@ -695,201 +932,136 @@ fn work_queue_item(
                 .as_ref()
                 .map(|state| state.reason.clone())
                 .unwrap_or_else(|| "Planning approval is required before dispatch.".to_string()),
+            "approval_blocked".to_string(),
         )
     } else {
         (
             "inspect_work_queue".to_string(),
             "Backlog item is not ready to dispatch.".to_string(),
+            "config_blocked".to_string(),
         )
     };
+    let (execution_path, completion_tool, task_plan_required_for_worktree, execution_guidance) =
+        execution_metadata(&queue_state, &effective_policy);
     WorkQueueItem {
         position,
         candidate,
         planning,
         plan,
         planning_approval,
+        effective_policy,
+        queue_state,
+        execution_path,
+        completion_tool,
+        task_plan_required_for_worktree,
+        execution_guidance,
+        task_id: None,
+        assignment_id: None,
         ready_to_dispatch,
         recommended_tool,
         reason,
     }
 }
 
-fn keyword_score(text: &str, keywords: &[&str]) -> usize {
-    keywords
-        .iter()
-        .filter(|keyword| text.contains(**keyword))
-        .count()
+fn execution_metadata(
+    queue_state: &str,
+    effective_policy: &EffectiveExecutionPolicy,
+) -> (String, Option<String>, bool, String) {
+    let plan_required = execution_policy::plan_required(&effective_policy.planning_gate);
+    match queue_state {
+        "direct_ready" => (
+            "direct_edit".to_string(),
+            Some("complete_backlog_item".to_string()),
+            true,
+            "Direct edit is ready from durable execution policy. To use a worktree handoff, set execution_path=worker_handoff on the backlog item or workflow.execution default.".to_string(),
+        ),
+        "ready" => (
+            "worker_handoff".to_string(),
+            Some("finish_work".to_string()),
+            false,
+            "Worktree handoff is ready because the required task-plan and approval gates are satisfied.".to_string(),
+        ),
+        "active" => (
+            "active".to_string(),
+            Some("finish_work".to_string()),
+            false,
+            "An existing task lifecycle is active; continue or finish that task before dispatching this item again.".to_string(),
+        ),
+        "completed_pending_integration" => (
+            "pending_integration".to_string(),
+            Some("integrate_worker_result".to_string()),
+            false,
+            "A completed worker result is waiting for integration.".to_string(),
+        ),
+        "planning_blocked" => (
+            "blocked".to_string(),
+            None,
+            true,
+            "A task plan is required or invalid before this item can use a worktree handoff.".to_string(),
+        ),
+        "approval_blocked" => (
+            "blocked".to_string(),
+            None,
+            plan_required,
+            "Planning approval is required before this item can continue.".to_string(),
+        ),
+        "workspace_blocked" | "config_blocked" => (
+            "blocked".to_string(),
+            None,
+            plan_required,
+            "Setup or manager workspace state blocks dispatch until the reported recovery action is completed.".to_string(),
+        ),
+        "dependency_blocked" => (
+            "blocked".to_string(),
+            None,
+            plan_required,
+            "Open dependencies block this item before planning or dispatch can continue.".to_string(),
+        ),
+        _ => (
+            "blocked".to_string(),
+            None,
+            plan_required,
+            "Inspect this item or queue state before choosing an execution path.".to_string(),
+        ),
+    }
 }
 
-fn meaningful_project_entries(root: &Path) -> usize {
-    fs::read_dir(root)
-        .ok()
-        .into_iter()
-        .flat_map(|entries| entries.filter_map(Result::ok))
-        .filter(|entry| {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            !matches!(
-                name.as_ref(),
-                ".git"
-                    | ".platy"
-                    | "target"
-                    | "node_modules"
-                    | ".DS_Store"
-                    | "AGENTS.md"
-                    | "CLAUDE.md"
-                    | "WORKFLOW.md"
-                    | "platy.yaml"
-                    | "backlog"
-            )
-        })
-        .count()
+fn apply_execution_metadata(item: &mut WorkQueueItem) {
+    let (execution_path, completion_tool, task_plan_required_for_worktree, execution_guidance) =
+        execution_metadata(&item.queue_state, &item.effective_policy);
+    item.execution_path = execution_path;
+    item.completion_tool = completion_tool;
+    item.task_plan_required_for_worktree = task_plan_required_for_worktree;
+    item.execution_guidance = execution_guidance;
 }
 
-pub(crate) fn classify_candidate(candidate: &BacklogCandidate) -> PlanningClassification {
-    let mut reasons = Vec::new();
-    let mut mode = "direct";
-    let text = format!(
-        "{} {} {} {}",
-        candidate.title, candidate.area, candidate.item_type, candidate.priority
-    )
-    .to_ascii_lowercase();
-    let surfaces = candidate
-        .owned_surfaces
-        .iter()
-        .map(|surface| surface.to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    let simple_scaffold = is_simple_single_surface_scaffold(&text, &surfaces)
-        || is_simple_dual_surface_scaffold(&text, &surfaces);
+fn normalized_task_plan_state(
+    default_root: &Path,
+    root: &str,
+    item_id: &str,
+    require_task_plan: bool,
+) -> WorkQueuePlanState {
+    let mut plan = task_plan_state(default_root, root, item_id);
+    if !require_task_plan && plan.status == "missing" {
+        plan.status = "not_required".to_string();
+        plan.errors.clear();
+    }
+    plan
+}
 
-    if candidate.owned_surfaces.len() > 1 && !simple_scaffold {
-        mode = "standard";
-        reasons.push("touches multiple owned surfaces".to_string());
-    }
-    if !simple_scaffold
-        && matches!(
-            candidate.item_type.as_str(),
-            "foundation" | "feature" | "safety" | "ux"
-        )
-    {
-        mode = max_mode(mode, "standard");
-        reasons.push(format!(
-            "{} item type usually needs planned execution",
-            candidate.item_type
-        ));
-    }
-    if surfaces
-        .iter()
-        .any(|surface| surface == "src/server.rs" || surface == "src/models.rs")
-    {
-        mode = max_mode(mode, "standard");
-        reasons.push("changes MCP tool schema or server surface".to_string());
-    }
-    if text.contains("workflow") {
-        mode = max_mode(mode, "standard");
-        reasons.push("changes user or developer workflow".to_string());
-    }
-    if text.contains("security") || text.contains("approval") || text.contains("safe") {
-        mode = "full";
-        reasons.push("touches security or approval-sensitive behavior".to_string());
-    }
-    if high_risk_surface(&surfaces) {
-        mode = "full";
-        reasons.push("touches high-risk lifecycle or persistence surfaces".to_string());
-    }
-    if text.contains("migration")
-        || text.contains("daemon")
-        || text.contains("network")
-        || text.contains("protocol")
-        || text.contains("architecture")
-    {
-        mode = "full";
-        reasons.push(
-            "mentions architecture, protocol, migration, daemon, or network behavior".to_string(),
-        );
-    }
-    if reasons.is_empty() {
-        if simple_scaffold {
-            reasons.push("single-surface scaffold/setup item can be handled directly".to_string());
-        } else {
-            reasons.push("small low-risk item can be handled directly".to_string());
-        }
-    }
-
+fn planning_requirement(
+    candidate: &BacklogCandidate,
+    effective_policy: &EffectiveExecutionPolicy,
+) -> PlanningClassification {
+    let mode = effective_policy.planning_gate.clone();
+    let reasons = vec![effective_policy.reason.clone()];
     PlanningClassification {
         item_id: candidate.item_id.clone(),
-        required_mode: mode.to_string(),
-        required_artifact: match mode {
-            "standard" | "full" => Some(format!("backlog/plans/{}.yaml", candidate.item_id)),
-            _ => None,
-        },
+        required_mode: mode,
+        required_artifact: execution_policy::plan_required(&effective_policy.planning_gate)
+            .then(|| format!("backlog/plans/{}.yaml", candidate.item_id)),
         reasons,
     }
-}
-
-fn is_simple_single_surface_scaffold(text: &str, surfaces: &[String]) -> bool {
-    surfaces.len() == 1
-        && !high_risk_surface(surfaces)
-        && [
-            "scaffold",
-            "setup",
-            "set up",
-            "bootstrap",
-            "initial",
-            "starter",
-        ]
-        .iter()
-        .any(|keyword| text.contains(keyword))
-}
-
-fn is_simple_dual_surface_scaffold(text: &str, surfaces: &[String]) -> bool {
-    if surfaces.len() != 2 || high_risk_surface(surfaces) {
-        return false;
-    }
-    let normalized = surfaces
-        .iter()
-        .map(|surface| surface.trim_end_matches('/').to_string())
-        .collect::<BTreeSet<_>>();
-    if normalized != BTreeSet::from(["backend".to_string(), "frontend".to_string()]) {
-        return false;
-    }
-    [
-        "scaffold",
-        "setup",
-        "set up",
-        "bootstrap",
-        "initial",
-        "starter",
-        "placeholder",
-        "baseline",
-        "simple",
-        "create",
-    ]
-    .iter()
-    .any(|keyword| text.contains(keyword))
-}
-
-fn max_mode(current: &str, candidate: &str) -> &'static str {
-    if current == "full" || candidate == "full" {
-        "full"
-    } else if current == "standard" || candidate == "standard" {
-        "standard"
-    } else {
-        "direct"
-    }
-}
-
-fn high_risk_surface(surfaces: &[String]) -> bool {
-    surfaces.iter().any(|surface| {
-        surface.starts_with("src/storage")
-            || surface.starts_with("src/workspace")
-            || surface.starts_with("src/approvals")
-            || surface.starts_with("src/assignments")
-            || surface.starts_with("src/runner")
-            || surface.starts_with("src/workers")
-            || surface.starts_with("src/reconcile")
-            || surface == "src/dispatch.rs"
-    })
 }
 
 fn task_plan_state(default_root: &Path, root: &str, item_id: &str) -> WorkQueuePlanState {
@@ -954,9 +1126,9 @@ fn recommended_queue_action(
 ) -> (String, String, BTreeMap<String, Value>) {
     let Some(first) = items.first() else {
         return (
-            "create_backlog_item".to_string(),
-            "Create or draft a backlog item before dispatching work.".to_string(),
-            map_params([("root", root), ("summary", "Describe the work item.")]),
+            "create_backlog_items".to_string(),
+            "No backlog item exists yet. Use the host model to decide concrete work, then call create_backlog_items and validate_backlog.".to_string(),
+            map_params([("root", root)]),
         );
     };
 
@@ -970,8 +1142,54 @@ fn recommended_queue_action(
                 Value::Number((ready_count.max(1).min(10) as u64).into()),
             );
         }
-        "draft_task_plan" | "validate_task_plan" => {
+        "prepare_work" => {
+            params.insert(
+                "max_tasks".to_string(),
+                Value::Number((ready_count.max(1).min(10) as u64).into()),
+            );
+        }
+        "write_task_plan" | "validate_task_plan" => {
             params.insert("item_id".to_string(), Value::String(item_id.to_string()));
+        }
+        "prepare_worker_handoff" | "integrate_worker_result" | "inspect_task" => {
+            if let Some(task_id) = &first.task_id {
+                params.insert("task_id".to_string(), Value::String(task_id.clone()));
+            }
+            if first.recommended_tool == "integrate_worker_result"
+                && crate::config::effective_workflow_config(Path::new(root))
+                    .map(|config| !config.require_verification_evidence)
+                    .unwrap_or(false)
+            {
+                params.insert("allow_unverified".to_string(), Value::Bool(true));
+            }
+        }
+        "start_worker_task" => {
+            if let Some(assignment_id) = &first.assignment_id {
+                params.insert(
+                    "assignment_id".to_string(),
+                    Value::String(assignment_id.clone()),
+                );
+            }
+            params.insert(
+                "worker_session".to_string(),
+                Value::String("external-worker-session".to_string()),
+            );
+        }
+        "record_worker_progress" => {
+            if let Some(assignment_id) = &first.assignment_id {
+                params.insert(
+                    "assignment_id".to_string(),
+                    Value::String(assignment_id.clone()),
+                );
+            }
+            params.insert(
+                "event_type".to_string(),
+                Value::String("worker_progress".to_string()),
+            );
+            params.insert(
+                "summary".to_string(),
+                Value::String("Describe the worker progress.".to_string()),
+            );
         }
         _ => {}
     }
@@ -980,6 +1198,13 @@ fn recommended_queue_action(
         if first.recommended_tool == "dispatch_ready_work" {
             format!(
                 "{} {} {} ready item(s) can be selected now; pass max_tasks to control the batch size.",
+                item_id,
+                first.reason,
+                ready_count
+            )
+        } else if first.recommended_tool == "prepare_work" {
+            format!(
+                "{} {} {} ready item(s) can be prepared now; pass max_tasks to control the batch size.",
                 item_id,
                 first.reason,
                 ready_count
@@ -999,16 +1224,6 @@ fn map_params<const N: usize>(params: [(&str, &str); N]) -> BTreeMap<String, Val
         .collect()
 }
 
-fn worker_profile_params(root: &str) -> BTreeMap<String, Value> {
-    BTreeMap::from([
-        ("root".to_string(), Value::String(root.to_string())),
-        ("name".to_string(), Value::String("coder".to_string())),
-        ("role".to_string(), Value::String("worker".to_string())),
-        ("harness".to_string(), Value::String("codex".to_string())),
-        ("executable".to_string(), Value::String("codex".to_string())),
-    ])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1017,198 +1232,6 @@ mod tests {
     use crate::tasks::{create_task_record, NewTask};
     use std::{fs, process::Command};
     use tempfile::TempDir;
-
-    #[test]
-    fn recommends_preparing_queued_task() {
-        let project = TempDir::new().expect("temp dir");
-        init_git(project.path());
-        create_task_record(
-            project.path(),
-            None,
-            NewTask {
-                source_item_id: "PROJ-001".to_string(),
-                title: "Queued task".to_string(),
-                worker: Some("coder".to_string()),
-            },
-        )
-        .expect("task");
-
-        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
-        let data = result.data.expect("next action");
-
-        assert_eq!(data.recommended_tool, "prepare_worker_handoff");
-        assert_eq!(data.params["task_id"], "PROJ-001-T001");
-    }
-
-    #[test]
-    fn recommends_preparing_claimed_task_before_dispatching_more_backlog() {
-        let project = backlog_project();
-        init_git(project.path());
-        write_item(project.path(), "PROJ-001", "First item");
-        create_task_record(
-            project.path(),
-            None,
-            NewTask {
-                source_item_id: "PROJ-001".to_string(),
-                title: "Claimed task".to_string(),
-                worker: Some("coder".to_string()),
-            },
-        )
-        .expect("task");
-        crate::tasks::claim_next_task(
-            project.path(),
-            crate::models::ClaimNextTaskParams {
-                root: None,
-                worker: Some("coder".to_string()),
-                claimant: Some("runner-1".to_string()),
-            },
-        );
-
-        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
-        let data = result.data.expect("next action");
-
-        assert_eq!(data.recommended_tool, "prepare_worker_handoff");
-        assert_eq!(data.params["task_id"], "PROJ-001-T001");
-        assert!(data.summary.contains("already claimed"));
-    }
-
-    #[test]
-    fn next_safe_action_integrates_completed_task_when_verification_not_required() {
-        let project = TempDir::new().expect("temp dir");
-        init_git(project.path());
-        let task = create_task_record(
-            project.path(),
-            None,
-            NewTask {
-                source_item_id: "PROJ-001".to_string(),
-                title: "Completed task".to_string(),
-                worker: Some("coder".to_string()),
-            },
-        )
-        .expect("task");
-        crate::tasks::claim_next_task(
-            project.path(),
-            crate::models::ClaimNextTaskParams {
-                root: None,
-                worker: Some("coder".to_string()),
-                claimant: Some("runner-1".to_string()),
-            },
-        );
-        crate::tasks::mark_task_running(project.path(), None, &task.id).expect("running");
-        crate::tasks::finish_task(project.path(), None, &task.id, "completed").expect("completed");
-
-        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
-        let data = result.data.expect("next action");
-
-        assert_eq!(data.recommended_tool, "integrate_worker_result");
-        assert_eq!(data.params["task_id"], task.id);
-        assert_eq!(data.params["allow_unverified"], true);
-    }
-
-    #[test]
-    fn skips_active_tasks_for_closed_backlog_items() {
-        let project = backlog_project();
-        init_git_with_closed_item(project.path(), "PROJ-001");
-        write_item(project.path(), "PROJ-001", "Closed item");
-        write_item(project.path(), "PROJ-002", "Open item");
-        create_task_record(
-            project.path(),
-            None,
-            NewTask {
-                source_item_id: "PROJ-001".to_string(),
-                title: "Stale queued task".to_string(),
-                worker: Some("coder".to_string()),
-            },
-        )
-        .expect("task");
-
-        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
-        let data = result.data.expect("next action");
-
-        assert_eq!(data.recommended_tool, "dispatch_ready_work");
-        assert!(data.summary.contains("PROJ-002"));
-    }
-
-    #[test]
-    fn next_safe_action_reports_missing_git_before_dispatch() {
-        let project = backlog_project();
-        write_item(project.path(), "PROJ-001", "First item");
-
-        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
-        let data = result.data.expect("next action");
-
-        assert_eq!(data.recommended_tool, "doctor_snapshot");
-        assert!(data.summary.contains("not initialized"));
-        assert!(data.reason.contains("git init"));
-    }
-
-    #[test]
-    fn next_safe_action_reports_unborn_head_before_dispatch() {
-        let project = backlog_project();
-        git(project.path(), &["init"]);
-        write_item(project.path(), "PROJ-001", "First item");
-
-        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
-        let data = result.data.expect("next action");
-
-        assert_eq!(data.recommended_tool, "doctor_snapshot");
-        assert!(data.summary.contains("no initial commit"));
-        assert!(data.reason.contains("initial commit"));
-    }
-
-    #[test]
-    fn next_safe_action_recommends_worker_profile_when_runnable_work_exists() {
-        let project = backlog_project();
-        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
-        init_git(project.path());
-        write_item(project.path(), "PROJ-001", "First item");
-        git(project.path(), &["add", "backlog", "platy.yaml"]);
-        git(project.path(), &["commit", "-m", "Add backlog item"]);
-
-        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
-        let data = result.data.expect("next action");
-
-        assert_eq!(data.recommended_tool, "configure_agent_profile");
-        assert!(data.reason.contains("configure_agent_profile"));
-        assert_eq!(data.params["role"], "worker");
-        assert_eq!(data.params["name"], "coder");
-    }
-
-    #[test]
-    fn next_safe_action_prefers_queue_inspection_when_backlog_exists_but_is_not_runnable() {
-        let project = backlog_project();
-        init_git(project.path());
-        fs::write(
-            project.path().join("backlog/items/PROJ-001.md"),
-            r#"---
-id: PROJ-001
-title: Closed item
-status: done
-priority: P1
-type: feature
-area: backend
-epic: general
-suggested_worker: coder
-owned_surfaces:
-  - src
-acceptance:
-  - Already complete
----
-
-## Goal
-- This item is already closed.
-
-## Implementation Contract
-- No further action needed.
-"#,
-        )
-        .expect("write blocked item");
-
-        let result = next_safe_action(project.path(), NextSafeActionParams { root: None });
-        let data = result.data.expect("next action");
-        assert_eq!(data.recommended_tool, "inspect_work_queue");
-        assert!(data.summary.contains("Backlog has 1 item"));
-    }
 
     #[test]
     fn inspect_work_queue_does_not_create_runtime_state() {
@@ -1233,6 +1256,36 @@ acceptance:
     }
 
     #[test]
+    fn inspect_session_combines_startup_state_without_mutation() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "Ready item");
+
+        let result = inspect_session(
+            project.path(),
+            InspectSessionParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: None,
+                require_planning_approval: None,
+            },
+        );
+        let data = result.data.expect("session");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert!(data.ok);
+        assert_eq!(data.recommended_tool, "prepare_work");
+        assert!(data.doctor.as_ref().expect("doctor").ok);
+        assert_eq!(data.status.as_ref().expect("status").backlog_items, 1);
+        assert!(data.workflow.is_some());
+        assert_eq!(data.queue.as_ref().expect("queue").items.len(), 1);
+        assert!(
+            !project.path().join(".platy").exists(),
+            "read-only session inspection must not create runtime state"
+        );
+    }
+
+    #[test]
     fn inspect_work_queue_reports_missing_git_before_dispatch() {
         let project = backlog_project();
         write_item(project.path(), "PROJ-001", "Ready item");
@@ -1249,9 +1302,9 @@ acceptance:
         let data = result.data.expect("queue");
 
         assert_eq!(result.status, ActionStatus::Completed);
-        assert_eq!(data.recommended_tool, "doctor_snapshot");
-        assert!(!data.items[0].ready_to_dispatch);
-        assert!(data.reason.contains("git init"));
+        assert_eq!(data.recommended_tool, "prepare_work");
+        assert!(data.items[0].ready_to_dispatch);
+        assert_eq!(data.items[0].queue_state, "direct_ready");
     }
 
     #[test]
@@ -1272,15 +1325,47 @@ acceptance:
         let data = result.data.expect("queue");
 
         assert_eq!(result.status, ActionStatus::Completed);
-        assert_eq!(data.recommended_tool, "doctor_snapshot");
-        assert!(!data.items[0].ready_to_dispatch);
-        assert!(data.reason.contains("initial commit"));
+        assert_eq!(data.recommended_tool, "prepare_work");
+        assert!(data.items[0].ready_to_dispatch);
+        assert_eq!(data.items[0].queue_state, "direct_ready");
     }
 
     #[test]
     fn inspect_work_queue_can_require_planning_approval() {
         let project = backlog_project();
         write_item(project.path(), "PROJ-001", "Ready item");
+        mark_worker_policy(project.path(), "PROJ-001", "approved_task_plan");
+        fs::create_dir_all(project.path().join("backlog/plans")).expect("plans");
+        fs::write(
+            project.path().join("backlog/plans/PROJ-001.yaml"),
+            r#"item_id: PROJ-001
+version: 1
+mode: standard
+requirements:
+  - id: R1
+    text: Do the work.
+design:
+  summary: Focused implementation.
+  owned_surfaces:
+    - src/lib.rs
+  notes: null
+tasks:
+  - id: PROJ-001-T01
+    title: Implement first item
+    goal: Complete the first item.
+    requirement_refs:
+      - R1
+    depends_on: []
+    owned_surfaces:
+      - src/lib.rs
+    verification:
+      - make check
+    acceptance:
+      - The item is implemented and verified.
+    notes: null
+"#,
+        )
+        .expect("plan");
         init_git(project.path());
 
         let blocked = inspect_work_queue(
@@ -1289,7 +1374,7 @@ acceptance:
                 root: None,
                 limit: Some(10),
                 require_task_plan: None,
-                require_planning_approval: Some(true),
+                require_planning_approval: None,
             },
         );
         let blocked_data = blocked.data.expect("blocked queue");
@@ -1338,7 +1423,7 @@ acceptance:
                 root: None,
                 limit: Some(10),
                 require_task_plan: None,
-                require_planning_approval: Some(true),
+                require_planning_approval: None,
             },
         );
         let ready_data = ready.data.expect("ready queue");
@@ -1357,21 +1442,24 @@ acceptance:
     #[test]
     fn inspects_work_queue_with_missing_required_task_plan() {
         let project = backlog_project();
+        init_git(project.path());
         write_item(project.path(), "PROJ-001", "First item");
+        mark_worker_policy(project.path(), "PROJ-001", "task_plan");
+        git(project.path(), &["add", "backlog"]);
+        git(project.path(), &["commit", "-m", "Add backlog item"]);
 
         let result = inspect_work_queue(
             project.path(),
             InspectWorkQueueParams {
                 root: None,
                 limit: Some(10),
-                require_task_plan: Some(true),
+                require_task_plan: None,
                 require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
 
-        assert_eq!(result.status, ActionStatus::Completed);
-        assert_eq!(data.recommended_tool, "draft_task_plan");
+        assert_eq!(data.recommended_tool, "write_task_plan");
         assert_eq!(data.items.len(), 1);
         assert_eq!(data.items[0].plan.status, "missing");
         assert!(!data.items[0].ready_to_dispatch);
@@ -1400,14 +1488,25 @@ acceptance:
             InspectWorkQueueParams {
                 root: None,
                 limit: Some(10),
-                require_task_plan: Some(true),
+                require_task_plan: Some(false),
                 require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
 
-        assert_eq!(data.recommended_tool, "dispatch_ready_work");
-        assert_eq!(data.items[0].planning.required_mode, "direct");
+        assert_eq!(data.recommended_tool, "prepare_work");
+        assert_eq!(data.items[0].planning.required_mode, "none");
+        assert_eq!(data.items[0].queue_state, "direct_ready");
+        assert_eq!(data.items[0].execution_path, "direct_edit");
+        assert_eq!(
+            data.items[0].completion_tool.as_deref(),
+            Some("complete_backlog_item")
+        );
+        assert!(data.items[0].task_plan_required_for_worktree);
+        assert!(data.items[0]
+            .execution_guidance
+            .contains("durable execution policy"));
+        assert_eq!(data.items[0].recommended_tool, "prepare_work");
         assert_eq!(data.items[0].plan.status, "not_required");
         assert!(data.items[0].plan.errors.is_empty());
         assert!(data.items[0].ready_to_dispatch);
@@ -1434,21 +1533,20 @@ acceptance:
             InspectWorkQueueParams {
                 root: None,
                 limit: Some(10),
-                require_task_plan: Some(true),
+                require_task_plan: Some(false),
                 require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
 
-        assert_eq!(data.recommended_tool, "next_safe_action");
-        assert!(!data.preflight_warnings.is_empty());
-        assert!(data.reason.contains("workspace"));
-        assert!(data.reason.contains("Dispatch will be blocked"));
-        assert!(data.reason.contains("After cleanup"));
+        assert_eq!(data.recommended_tool, "prepare_work");
+        assert_eq!(data.items[0].queue_state, "direct_ready");
+        assert!(data.preflight_warnings.is_empty());
+        assert!(data.reason.contains("Direct host work is ready"));
     }
 
     #[test]
-    fn inspect_work_queue_reports_missing_worker_profile_for_runnable_work() {
+    fn inspect_work_queue_does_not_block_direct_work_for_missing_worker_config() {
         let project = backlog_project();
         fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
         init_git(project.path());
@@ -1470,41 +1568,23 @@ acceptance:
             InspectWorkQueueParams {
                 root: None,
                 limit: Some(10),
-                require_task_plan: Some(true),
+                require_task_plan: Some(false),
                 require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
 
-        assert_eq!(data.recommended_tool, "configure_agent_profile");
-        assert!(!data.worker_ready);
-        assert_eq!(data.ready_worker_profiles, 0);
-        assert!(data
-            .preflight_warnings
-            .iter()
-            .any(|warning| warning.contains("No worker profile")));
-        assert!(!data.items[0].ready_to_dispatch);
-        assert_eq!(data.items[0].recommended_tool, "configure_agent_profile");
+        assert_eq!(data.recommended_tool, "prepare_work");
+        assert!(data.preflight_warnings.is_empty());
+        assert!(data.items[0].ready_to_dispatch);
+        assert_eq!(data.items[0].queue_state, "direct_ready");
+        assert_eq!(data.items[0].recommended_tool, "prepare_work");
     }
 
     #[test]
-    fn inspect_work_queue_reports_non_ready_worker_profile() {
+    fn inspect_work_queue_ignores_legacy_agent_config() {
         let project = backlog_project();
-        fs::write(
-            project.path().join("platy.yaml"),
-            r#"agents:
-  profiles:
-    manager:
-      role: manager
-      harness: codex
-      executable: git
-    coder:
-      role: worker
-      harness: codex
-      executable: definitely-missing-platypus-agent
-"#,
-        )
-        .expect("config");
+        fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
         init_git(project.path());
         write_item_with(
             project.path(),
@@ -1524,22 +1604,19 @@ acceptance:
             InspectWorkQueueParams {
                 root: None,
                 limit: Some(10),
-                require_task_plan: Some(true),
+                require_task_plan: Some(false),
                 require_planning_approval: None,
             },
         );
         let data = result.data.expect("queue");
 
-        assert_eq!(data.recommended_tool, "configure_agent_profile");
-        assert!(!data.worker_ready);
-        assert!(data
-            .preflight_warnings
-            .iter()
-            .any(|warning| warning.contains("none are ready")));
+        assert_eq!(data.recommended_tool, "prepare_work");
+        assert!(data.preflight_warnings.is_empty());
+        assert_eq!(data.items[0].queue_state, "direct_ready");
     }
 
     #[test]
-    fn simple_single_surface_scaffolds_do_not_require_task_plan() {
+    fn explicit_task_plan_requirement_applies_to_any_item() {
         let project = backlog_project();
         init_git(project.path());
         write_item_with(
@@ -1552,6 +1629,7 @@ acceptance:
                 owned_surfaces: &["frontend"],
             },
         );
+        mark_worker_policy(project.path(), "PROJ-001", "task_plan");
         git(project.path(), &["add", "backlog"]);
         git(project.path(), &["commit", "-m", "Add backlog item"]);
 
@@ -1566,186 +1644,14 @@ acceptance:
         );
         let data = result.data.expect("queue");
 
-        assert_eq!(data.recommended_tool, "dispatch_ready_work");
-        assert_eq!(data.items[0].planning.required_mode, "direct");
-        assert_eq!(data.items[0].plan.status, "not_required");
-        assert!(data.items[0].plan.errors.is_empty());
-        assert!(data.items[0].ready_to_dispatch);
-    }
-
-    #[test]
-    fn simple_dual_surface_foundation_scaffold_stays_direct() {
-        let project = backlog_project();
-        init_git(project.path());
-        write_item_with(
-            project.path(),
-            ItemFixture {
-                id: "PROJ-001",
-                title: "Create simple backend and frontend starter scaffolds",
-                item_type: "foundation",
-                area: "tooling",
-                owned_surfaces: &["backend/", "frontend/"],
-            },
-        );
-        git(project.path(), &["add", "backlog"]);
-        git(project.path(), &["commit", "-m", "Add backlog item"]);
-
-        let result = inspect_work_queue(
-            project.path(),
-            InspectWorkQueueParams {
-                root: None,
-                limit: Some(10),
-                require_task_plan: Some(true),
-                require_planning_approval: None,
-            },
-        );
-        let data = result.data.expect("queue");
-
-        assert_eq!(data.recommended_tool, "dispatch_ready_work");
-        assert_eq!(data.items[0].planning.required_mode, "direct");
-        assert_eq!(data.items[0].plan.status, "not_required");
-        assert!(data.items[0].ready_to_dispatch);
-    }
-
-    #[test]
-    fn classifies_full_planning_for_high_risk_surfaces() {
-        let project = backlog_project();
-        write_item_with(
-            project.path(),
-            ItemFixture {
-                id: "PROJ-001",
-                title: "Change approval security",
-                item_type: "safety",
-                area: "approvals",
-                owned_surfaces: &["src/approvals.rs"],
-            },
-        );
-
-        let result = classify_planning_needs(
-            project.path(),
-            ClassifyPlanningNeedsParams {
-                root: None,
-                item_id: Some("PROJ-001".to_string()),
-                limit: Some(10),
-            },
-        );
-        let data = result.data.expect("classification");
-
-        assert_eq!(data.returned, 1);
-        assert_eq!(data.classifications[0].required_mode, "full");
+        assert_eq!(data.recommended_tool, "write_task_plan");
+        assert_eq!(data.items[0].planning.required_mode, "task_plan");
         assert_eq!(
-            data.classifications[0].required_artifact.as_deref(),
+            data.items[0].planning.required_artifact.as_deref(),
             Some("backlog/plans/PROJ-001.yaml")
         );
-    }
-
-    #[test]
-    fn classifies_workflow_fit_for_greenfield_scaffold() {
-        let project = TempDir::new().expect("temp dir");
-
-        let result = classify_workflow_fit(
-            project.path(),
-            ClassifyWorkflowFitParams {
-                root: None,
-                goal: "Create a simple FastAPI React web app scaffold".to_string(),
-                owned_surfaces: Vec::new(),
-            },
-        );
-        let data = result.data.expect("workflow fit");
-
-        assert!(matches!(result.status, ActionStatus::Completed));
-        assert_eq!(data.recommended_mode, "direct_scaffold");
-        assert!(data.next_action.contains("No Platypus scaffold tool"));
-        assert!(data.next_action.contains("host's native file edits"));
-    }
-
-    #[test]
-    fn classifies_platypus_initialized_scaffold_as_direct_scaffold() {
-        let project = TempDir::new().expect("temp dir");
-        crate::project::init_project(
-            project.path(),
-            crate::models::InitProjectParams {
-                root: None,
-                project_name: Some("Scaffold".to_string()),
-                overwrite: None,
-            },
-        );
-
-        let result = classify_workflow_fit(
-            project.path(),
-            ClassifyWorkflowFitParams {
-                root: None,
-                goal: "Build a simple FastAPI + React web app with authentication and a dashboard"
-                    .to_string(),
-                owned_surfaces: vec!["backend/".to_string(), "frontend/".to_string()],
-            },
-        );
-        let data = result.data.expect("workflow fit");
-
-        assert_eq!(data.recommended_mode, "direct_scaffold");
-    }
-
-    #[test]
-    fn classifies_workflow_fit_for_existing_traceable_work() {
-        let project = backlog_project();
-        write_item(project.path(), "PROJ-001", "First item");
-
-        let result = classify_workflow_fit(
-            project.path(),
-            ClassifyWorkflowFitParams {
-                root: None,
-                goal: "Implement the next roadmap item with evidence and CI validation".to_string(),
-                owned_surfaces: vec!["src/server.rs".to_string(), "src/guidance.rs".to_string()],
-            },
-        );
-        let data = result.data.expect("workflow fit");
-
-        assert_eq!(data.recommended_mode, "platypus_workflow");
-        assert_eq!(data.backlog_items, 1);
-        assert!(data.next_action.contains("dispatch through worktrees"));
-    }
-
-    #[test]
-    fn classifies_workflow_fit_high_risk_surface_as_platypus_workflow() {
-        let project = TempDir::new().expect("temp dir");
-
-        let result = classify_workflow_fit(
-            project.path(),
-            ClassifyWorkflowFitParams {
-                root: None,
-                goal: "Scaffold approval handling".to_string(),
-                owned_surfaces: vec!["src/approvals.rs".to_string()],
-            },
-        );
-        let data = result.data.expect("workflow fit");
-
-        assert_eq!(data.recommended_mode, "platypus_workflow");
-        assert!(data
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("high-risk")));
-    }
-
-    #[test]
-    fn classifies_workflow_fit_for_hybrid_scaffold_in_existing_project() {
-        let project = TempDir::new().expect("temp dir");
-        fs::write(project.path().join("README.md"), "# Existing\n").expect("readme");
-        fs::write(project.path().join("package.json"), "{}\n").expect("package");
-        fs::write(project.path().join("src.txt"), "src\n").expect("src");
-
-        let result = classify_workflow_fit(
-            project.path(),
-            ClassifyWorkflowFitParams {
-                root: None,
-                goal: "Add a Vite starter UI".to_string(),
-                owned_surfaces: Vec::new(),
-            },
-        );
-        let data = result.data.expect("workflow fit");
-
-        assert_eq!(data.recommended_mode, "hybrid");
-        assert!(data.next_action.contains("No Platypus scaffold tool"));
-        assert!(data.next_action.contains("commit"));
+        assert_eq!(data.items[0].plan.status, "missing");
+        assert!(!data.items[0].ready_to_dispatch);
     }
 
     #[test]
@@ -1753,6 +1659,7 @@ acceptance:
         let project = backlog_project();
         init_git(project.path());
         write_item(project.path(), "PROJ-001", "First item");
+        mark_worker_policy(project.path(), "PROJ-001", "task_plan");
         fs::create_dir_all(project.path().join("backlog/plans")).expect("plans");
         fs::write(
             project.path().join("backlog/plans/PROJ-001.yaml"),
@@ -1776,7 +1683,6 @@ tasks:
     depends_on: []
     owned_surfaces:
       - src/lib.rs
-    suggested_worker: coder
     verification:
       - make check
     acceptance:
@@ -1806,11 +1712,13 @@ tasks:
         assert_eq!(data.recommended_tool, "dispatch_ready_work");
         assert_eq!(data.items[0].plan.status, "valid");
         assert!(data.items[0].ready_to_dispatch);
+        assert_eq!(data.items[0].queue_state, "ready");
+        assert_eq!(data.items[0].recommended_tool, "dispatch_ready_work");
         assert_eq!(data.items[0].plan.task_count, 1);
     }
 
     #[test]
-    fn inspect_work_queue_hides_items_with_active_tasks() {
+    fn inspect_work_queue_reports_items_with_active_tasks() {
         let project = backlog_project();
         init_git(project.path());
         write_item(project.path(), "PROJ-001", "First item");
@@ -1837,19 +1745,135 @@ tasks:
         let data = result.data.expect("queue");
 
         assert_eq!(result.status, ActionStatus::Completed);
-        assert_eq!(data.items.len(), 0);
+        assert_eq!(data.items.len(), 1);
         assert_eq!(data.active_count, 1);
         assert_eq!(data.active_item_ids, vec!["PROJ-001"]);
-        assert_eq!(data.recommended_tool, "next_safe_action");
-        assert!(data.summary.contains("already have active tasks"));
+        assert_eq!(data.active_task_ids, vec!["PROJ-001-T001"]);
+        assert_eq!(data.items[0].queue_state, "active");
+        assert_eq!(data.items[0].recommended_tool, "prepare_worker_handoff");
+        assert_eq!(data.items[0].task_id.as_deref(), Some("PROJ-001-T001"));
+        assert!(!data.items[0].ready_to_dispatch);
+        assert_eq!(data.recommended_tool, "prepare_worker_handoff");
+        assert!(data.summary.contains("blocked by active lifecycle"));
         assert!(data
             .preflight_warnings
             .iter()
-            .any(|warning| warning.contains("already have active tasks")));
+            .any(|warning| warning.contains("active tasks or completed tasks")));
     }
 
     #[test]
-    fn inspect_work_queue_applies_limit_after_active_task_filtering() {
+    fn inspect_work_queue_includes_blocked_inventory_context() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "First item");
+        write_item_with_deps(project.path(), "PROJ-002", "Second item", &["PROJ-001"]);
+        git(project.path(), &["add", "backlog"]);
+        git(
+            project.path(),
+            &["commit", "-m", "Add dependent backlog items"],
+        );
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: Some(false),
+                require_planning_approval: None,
+            },
+        );
+        let data = result.data.expect("queue");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.inventory.total_count, 2);
+        assert_eq!(data.inventory.runnable_count, 1);
+        assert_eq!(data.inventory.dependency_blocked_count, 1);
+        assert_eq!(
+            data.inventory.dependency_blocked_items[0].item_id,
+            "PROJ-002"
+        );
+    }
+
+    #[test]
+    fn inspect_item_reports_blocked_item_without_creating_runtime_state() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "First item");
+        write_item_with_deps(project.path(), "PROJ-002", "Second item", &["PROJ-001"]);
+        git(project.path(), &["add", "backlog"]);
+        git(
+            project.path(),
+            &["commit", "-m", "Add dependent backlog items"],
+        );
+
+        let result = inspect_item(
+            project.path(),
+            InspectItemParams {
+                root: None,
+                item_id: "PROJ-002".to_string(),
+                require_task_plan: Some(false),
+                require_planning_approval: None,
+            },
+        );
+        let data = result.data.expect("item");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.item.item_id, "PROJ-002");
+        assert_eq!(data.queue_state, "dependency_blocked");
+        assert_eq!(data.recommended_tool, "inspect_item");
+        assert_eq!(data.plan.status, "not_required");
+        assert!(data.queue.is_none());
+        assert!(data.findings.is_empty());
+        assert!(data.evidence.is_empty());
+        assert!(data.markdown.sections.contains(&"Goal".to_string()));
+    }
+
+    #[test]
+    fn inspect_work_queue_reports_completed_items_awaiting_integration() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "First item");
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Completed item".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        crate::tasks::claim_next_task(
+            project.path(),
+            crate::models::ClaimNextTaskParams {
+                root: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("runner-1".to_string()),
+            },
+        );
+        crate::tasks::mark_task_running(project.path(), None, &task.id).expect("running");
+        crate::tasks::finish_task(project.path(), None, &task.id, "completed").expect("completed");
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: Some(false),
+                require_planning_approval: None,
+            },
+        );
+        let data = result.data.expect("queue");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.items.len(), 1);
+        assert_eq!(data.items[0].queue_state, "completed_pending_integration");
+        assert_eq!(data.items[0].recommended_tool, "integrate_worker_result");
+        assert!(data.items[0].reason.contains("awaiting integration"));
+    }
+
+    #[test]
+    fn inspect_work_queue_applies_limit_before_active_task_filtering() {
         let project = backlog_project();
         init_git(project.path());
         for index in 1..=11 {
@@ -1885,9 +1909,10 @@ tasks:
 
         assert_eq!(result.status, ActionStatus::Completed);
         assert_eq!(data.items.len(), 1);
-        assert_eq!(data.items[0].candidate.item_id, "PROJ-011");
-        assert_eq!(data.active_count, 10);
-        assert_eq!(data.recommended_tool, "dispatch_ready_work");
+        assert_eq!(data.items[0].candidate.item_id, "PROJ-001");
+        assert_eq!(data.items[0].queue_state, "active");
+        assert_eq!(data.active_count, 1);
+        assert_eq!(data.recommended_tool, "prepare_worker_handoff");
     }
 
     #[test]
@@ -1926,15 +1951,16 @@ tasks:
         let data = result.data.expect("queue");
 
         assert_eq!(result.status, ActionStatus::Completed);
-        assert_eq!(data.items.len(), 1);
-        assert_eq!(data.items[0].candidate.item_id, "PROJ-101");
+        assert_eq!(data.items.len(), 101);
+        assert_eq!(data.items[0].candidate.item_id, "PROJ-001");
+        assert_eq!(data.items[100].candidate.item_id, "PROJ-101");
         assert_eq!(data.active_count, 100);
-        assert_eq!(data.recommended_tool, "dispatch_ready_work");
+        assert_eq!(data.recommended_tool, "prepare_worker_handoff");
     }
 
     fn backlog_project() -> TempDir {
         let project = TempDir::new().expect("temp dir");
-        write_ready_profiles(project.path());
+        write_ready_config(project.path());
         fs::create_dir_all(project.path().join("backlog/items")).expect("items");
         fs::create_dir_all(project.path().join("backlog/epics")).expect("epics");
         fs::write(
@@ -1954,38 +1980,8 @@ area: general
         project
     }
 
-    fn write_ready_profiles(root: &Path) {
-        fs::write(
-            root.join("platy.yaml"),
-            r#"agents:
-  profiles:
-    manager:
-      role: manager
-      harness: codex
-      executable: git
-    coder:
-      role: worker
-      harness: codex
-      executable: git
-"#,
-        )
-        .expect("config");
-    }
-
-    fn init_git_with_closed_item(root: &Path, item_id: &str) {
-        git(root, &["init"]);
-        git(root, &["config", "user.name", "Platypus Test"]);
-        git(root, &["config", "user.email", "platypus@example.invalid"]);
-        fs::write(root.join("README.md"), "# Test\n").expect("readme");
-        git(root, &["add", "--all"]);
-        git(
-            root,
-            &[
-                "commit",
-                "-m",
-                &format!("Close item\n\nPlatypus-Closes: {item_id}\nPlatypus-Verification: test"),
-            ],
-        );
+    fn write_ready_config(root: &Path) {
+        fs::write(root.join("platy.yaml"), "project: test\n").expect("config");
     }
 
     fn init_git(root: &Path) {
@@ -2025,6 +2021,40 @@ area: general
         );
     }
 
+    fn mark_worker_policy(root: &Path, id: &str, planning_gate: &str) {
+        let path = root.join("backlog/items").join(format!("{id}.md"));
+        let text = fs::read_to_string(&path).expect("item");
+        let text = text.replace(
+            "\n---\n\n#",
+            &format!("\nexecution_path: worker_handoff\nplanning_gate: {planning_gate}\n---\n\n#"),
+        );
+        fs::write(path, text).expect("item policy");
+    }
+
+    fn write_item_with_deps(root: &Path, id: &str, title: &str, depends_on: &[&str]) {
+        let depends = if depends_on.is_empty() {
+            "[]".to_string()
+        } else {
+            format!(
+                "[{}]",
+                depends_on
+                    .iter()
+                    .map(|dependency| format!("\"{dependency}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        write_item_raw(
+            root,
+            id,
+            title,
+            "feature",
+            "general",
+            &["src/lib.rs"],
+            &depends,
+        );
+    }
+
     struct ItemFixture<'a> {
         id: &'a str,
         title: &'a str,
@@ -2034,15 +2064,33 @@ area: general
     }
 
     fn write_item_with(root: &Path, fixture: ItemFixture<'_>) {
-        let surfaces = fixture
-            .owned_surfaces
+        write_item_raw(
+            root,
+            fixture.id,
+            fixture.title,
+            fixture.item_type,
+            fixture.area,
+            fixture.owned_surfaces,
+            "[]",
+        );
+    }
+
+    fn write_item_raw(
+        root: &Path,
+        id: &str,
+        title: &str,
+        item_type: &str,
+        area: &str,
+        owned_surfaces: &[&str],
+        depends_on: &str,
+    ) {
+        let surfaces = owned_surfaces
             .iter()
             .map(|surface| format!("- {surface}"))
             .collect::<Vec<_>>()
             .join("\n");
         fs::write(
-            root.join("backlog/items")
-                .join(format!("{}.md", fixture.id)),
+            root.join("backlog/items").join(format!("{}.md", id)),
             format!(
                 r#"---
 id: {id}
@@ -2051,8 +2099,7 @@ priority: P1
 type: {item_type}
 area: {area}
 epic: general
-depends_on: []
-suggested_worker: coder
+depends_on: {depends_on}
 owned_surfaces:
 {surfaces}
 ---
@@ -2071,10 +2118,11 @@ Keep the change scoped.
 
 - The item is implemented.
 "#,
-                id = fixture.id,
-                title = fixture.title,
-                item_type = fixture.item_type,
-                area = fixture.area,
+                id = id,
+                title = title,
+                item_type = item_type,
+                area = area,
+                depends_on = depends_on,
                 surfaces = surfaces
             ),
         )

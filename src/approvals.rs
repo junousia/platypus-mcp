@@ -112,6 +112,7 @@ pub fn approval_list(
             status: ActionStatus::Skipped,
             summary: "No approvals matched the filters.".to_string(),
             next_action: Some("Request an approval before listing pending approvals.".to_string()),
+            recovery_action: None,
             data: Some(data),
             error: None,
         }
@@ -679,7 +680,7 @@ mod tests {
         .expect("epic");
         fs::write(
             project.path().join("backlog/items/PROJ-001.md"),
-            "---\nid: PROJ-001\ntitle: Planned work\npriority: P1\ntype: feature\narea: app\nepic: general\ndepends_on: []\nsuggested_worker: coder\nowned_surfaces:\n- src/app.rs\n---\n\n# PROJ-001 Planned work\n\n## Goal\n\nGoal.\n\n## Implementation Contract\n\nContract.\n\n## Acceptance\n\n- Done.\n",
+            "---\nid: PROJ-001\ntitle: Planned work\npriority: P1\ntype: feature\narea: app\nepic: general\ndepends_on: []\nowned_surfaces:\n- src/app.rs\n---\n\n# PROJ-001 Planned work\n\n## Goal\n\nGoal.\n\n## Implementation Contract\n\nContract.\n\n## Acceptance\n\n- Done.\n",
         )
         .expect("item");
         project

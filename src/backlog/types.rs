@@ -5,6 +5,8 @@ use std::{collections::BTreeSet, path::PathBuf};
 pub(super) const VALID_PRIORITIES: &[&str] = &["P0", "P1", "P2"];
 pub(super) const VALID_TYPES: &[&str] = &["foundation", "feature", "safety", "ux", "test", "docs"];
 pub(super) const VALID_EPIC_STATUSES: &[&str] = &["active", "archived"];
+pub(super) const VALID_EXECUTION_PATHS: &[&str] = &["direct_edit", "worker_handoff"];
+pub(super) const VALID_PLANNING_GATES: &[&str] = &["none", "task_plan", "approved_task_plan"];
 pub(super) const REQUIRED_SECTIONS: &[&str] = &["Goal", "Implementation Contract", "Acceptance"];
 
 #[derive(Debug, Deserialize, Clone)]
@@ -19,11 +21,12 @@ pub(super) struct BacklogItemFrontmatter {
     pub epic: String,
     #[serde(default)]
     pub depends_on: Vec<String>,
-    pub suggested_worker: Option<String>,
     #[serde(default)]
     pub owned_surfaces: Vec<String>,
     #[serde(default)]
     pub external_refs: Vec<ExternalRef>,
+    pub execution_path: Option<String>,
+    pub planning_gate: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,9 +65,12 @@ pub(super) struct BacklogItemFrontmatterOut {
     pub area: String,
     pub epic: String,
     pub depends_on: Vec<String>,
-    pub suggested_worker: Option<String>,
     pub owned_surfaces: Vec<String>,
     pub external_refs: Vec<ExternalRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub planning_gate: Option<String>,
 }
 
 #[derive(Debug)]

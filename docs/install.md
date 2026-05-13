@@ -132,7 +132,8 @@ If you did not use `--init-project`, first ask the host to call
 `init_project`.
 
 These tools should return structured JSON envelopes with `status`, `summary`,
-and `next_action` when recovery guidance is needed.
+`next_action` for normal continuation, and `recovery_action` when recovery
+guidance is needed.
 
 ## Security Defaults
 

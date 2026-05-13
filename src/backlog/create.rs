@@ -6,6 +6,7 @@ use super::{
     },
     validate::{valid_item_id, validate_backlog_at_root},
 };
+use crate::execution_policy;
 use crate::models::{
     ActionResult, ActionStatus, BacklogValidationData, CreateBacklogItemParams,
     CreateBacklogItemsEntry, CreateBacklogItemsParams, CreatedBacklogBatchItem,
@@ -159,6 +160,17 @@ pub fn create_backlog_item(
             "Could not create backlog item.",
             error,
             "For each external_ref, provide provider, kind, id, and either url or locator.",
+        );
+    }
+    if let Err(error) = validate_execution_policy_fields(
+        params.execution_path.as_deref(),
+        params.planning_gate.as_deref(),
+    ) {
+        return failed_with_next(
+            action,
+            "Could not create backlog item.",
+            error,
+            "Use execution_path direct_edit or worker_handoff, and planning_gate none, task_plan, or approved_task_plan.",
         );
     }
     let existing_ids = existing_item_ids(&validation.items);
@@ -399,6 +411,18 @@ pub fn create_backlog_items(
                 "For each external_ref, provide provider, kind, id, and either url or locator.",
             );
         }
+        if let Err(error) = validate_execution_policy_fields(
+            params.execution_path.as_deref(),
+            params.planning_gate.as_deref(),
+        ) {
+            return failed_batch_item(
+                action,
+                planned_item.index,
+                planned_item.client_key.as_deref(),
+                error,
+                "Use execution_path direct_edit or worker_handoff, and planning_gate none, task_plan, or approved_task_plan.",
+            );
+        }
         if let Err(error) =
             validate_dependencies(&planned_item.item_id, &params.depends_on, &used_ids)
         {
@@ -518,11 +542,13 @@ fn failed_with_next<T: serde::Serialize + schemars::JsonSchema>(
     error: impl Into<String>,
     next_action: impl Into<String>,
 ) -> ActionResult<T> {
+    let next_action = next_action.into();
     ActionResult {
         action: action.to_string(),
         status: ActionStatus::Failed,
         summary: summary.into(),
-        next_action: Some(next_action.into()),
+        next_action: Some(next_action.clone()),
+        recovery_action: Some(next_action),
         data: None,
         error: Some(error.into()),
     }
@@ -717,9 +743,10 @@ fn batch_item_params(item: CreateBacklogItemsEntry, item_id: String) -> CreateBa
         area: item.area,
         epic: item.epic,
         depends_on: item.depends_on,
-        suggested_worker: item.suggested_worker,
         owned_surfaces: item.owned_surfaces,
         external_refs: item.external_refs,
+        execution_path: item.execution_path,
+        planning_gate: item.planning_gate,
         goal: item.goal,
         implementation_contract: item.implementation_contract,
         contract: item.contract,
@@ -951,10 +978,18 @@ fn backlog_item_text(
         area: clean_optional(params.area.clone()).unwrap_or_else(|| "tooling".to_string()),
         epic: epic.to_string(),
         depends_on: clean_vec(params.depends_on.clone()),
-        suggested_worker: clean_optional(params.suggested_worker.clone())
-            .or_else(|| Some("coder".to_string())),
         owned_surfaces: clean_vec(params.owned_surfaces.clone()),
         external_refs: params.external_refs.clone(),
+        execution_path: params
+            .execution_path
+            .as_deref()
+            .and_then(execution_policy::normalize_execution_path)
+            .map(str::to_string),
+        planning_gate: params
+            .planning_gate
+            .as_deref()
+            .and_then(execution_policy::normalize_planning_gate)
+            .map(str::to_string),
     };
     let yaml = serde_yaml::to_string(&frontmatter).map_err(|error| error.to_string())?;
     let mut body = format!(
@@ -1004,6 +1039,27 @@ fn validate_external_refs(refs: &[crate::models::ExternalRef]) -> Result<(), Str
                 .is_some();
         if !has_location {
             return Err("external_refs require url or locator".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_execution_policy_fields(
+    execution_path: Option<&str>,
+    planning_gate: Option<&str>,
+) -> Result<(), String> {
+    if let Some(value) = execution_path {
+        if execution_policy::normalize_execution_path(value).is_none() {
+            return Err(format!(
+                "invalid execution_path `{value}`; expected direct_edit or worker_handoff"
+            ));
+        }
+    }
+    if let Some(value) = planning_gate {
+        if execution_policy::normalize_planning_gate(value).is_none() {
+            return Err(format!(
+                "invalid planning_gate `{value}`; expected none, task_plan, or approved_task_plan"
+            ));
         }
     }
     Ok(())

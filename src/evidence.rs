@@ -139,6 +139,7 @@ pub fn list_evidence(
             status: ActionStatus::Skipped,
             summary: "No evidence matched the filters.".to_string(),
             next_action: Some("Record evidence before listing it.".to_string()),
+            recovery_action: None,
             data: Some(data),
             error: None,
         }

@@ -2,12 +2,9 @@ use super::{
     closure::closed_item_ids, filesystem::resolve_root, types::ParsedBacklogItem,
     validate::validate_backlog_at_root,
 };
-use crate::{
-    config,
-    models::{
-        ActionResult, ActionStatus, BacklogCandidate, BacklogInventoryData, BacklogInventoryItem,
-        BacklogListData, ProjectStatusData,
-    },
+use crate::models::{
+    ActionResult, ActionStatus, BacklogCandidate, BacklogInventoryData, BacklogInventoryItem,
+    BacklogListData, ProjectStatusData,
 };
 use std::{collections::BTreeSet, path::Path};
 
@@ -28,7 +25,6 @@ pub fn inspect_status(
     } else {
         Vec::new()
     };
-    let agent_readiness = config::inspect_agent_profile_readiness(&root).ok();
     let data = ProjectStatusData {
         root: root.display().to_string(),
         platy_yaml: root.join("platy.yaml").is_file(),
@@ -36,28 +32,6 @@ pub fn inspect_status(
         git_metadata: root.join(".git").exists(),
         backlog_items: validation.items.len(),
         runnable_backlog_items: candidates.len(),
-        agent_profiles: agent_readiness
-            .as_ref()
-            .map(|readiness| readiness.profile_count)
-            .unwrap_or(0),
-        manager_ready: agent_readiness
-            .as_ref()
-            .is_some_and(|readiness| readiness.manager_ready()),
-        worker_ready: agent_readiness
-            .as_ref()
-            .is_some_and(|readiness| readiness.worker_ready()),
-        ready_worker_profiles: agent_readiness
-            .as_ref()
-            .map(|readiness| readiness.ready_worker_count)
-            .unwrap_or(0),
-        agent_profile_warnings: agent_readiness
-            .map(|readiness| readiness.warnings)
-            .unwrap_or_else(|| {
-                vec![
-                    "Could not inspect agent profiles. Create platy.yaml or run init_project, then configure manager and worker profiles."
-                        .to_string(),
-                ]
-            }),
         tasks_supported: true,
         findings_supported: true,
     };
@@ -91,6 +65,7 @@ pub fn list_backlog(
             status: ActionStatus::Skipped,
             summary: "No runnable backlog items.".to_string(),
             next_action: Some("Create or unblock backlog items.".to_string()),
+            recovery_action: None,
             data: Some(BacklogListData {
                 root: root.display().to_string(),
                 candidates,
@@ -193,7 +168,6 @@ fn runnable_backlog_candidates(
             priority: item.frontmatter.priority.clone(),
             item_type: item.frontmatter.item_type.clone(),
             area: item.frontmatter.area.clone(),
-            suggested_worker: item.frontmatter.suggested_worker.clone(),
             owned_surfaces: item.frontmatter.owned_surfaces.clone(),
             external_refs: item.frontmatter.external_refs.clone(),
         })
@@ -218,7 +192,8 @@ fn backlog_inventory_items(
                 .collect::<Vec<_>>();
             let runnable = !closed && open_dependencies.is_empty();
             let reason = if closed {
-                "closed by reachable Platypus-Closes Git trailer".to_string()
+                "closed by reachable Platypus-Closes Git trailer or recorded direct completion"
+                    .to_string()
             } else if !open_dependencies.is_empty() {
                 format!(
                     "blocked by open dependencies: {}",
@@ -234,7 +209,6 @@ fn backlog_inventory_items(
                 priority: item.frontmatter.priority.clone(),
                 item_type: item.frontmatter.item_type.clone(),
                 area: item.frontmatter.area.clone(),
-                suggested_worker: item.frontmatter.suggested_worker.clone(),
                 owned_surfaces: item.frontmatter.owned_surfaces.clone(),
                 depends_on: item.frontmatter.depends_on.clone(),
                 open_dependencies,

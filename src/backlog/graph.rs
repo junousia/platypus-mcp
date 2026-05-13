@@ -171,6 +171,7 @@ pub fn inspect_dependency_graph(
                 "Fix missing dependency references or cycles, then rerun inspect_dependency_graph."
                     .to_string(),
             ),
+            recovery_action: None,
             data: Some(data),
             error: Some("Backlog dependency graph is invalid.".to_string()),
         }
@@ -269,7 +270,6 @@ fn graph_node(
         priority: item.frontmatter.priority.clone(),
         item_type: item.frontmatter.item_type.clone(),
         area: item.frontmatter.area.clone(),
-        suggested_worker: item.frontmatter.suggested_worker.clone(),
         depends_on,
         dependents,
         blocked_by,
@@ -628,7 +628,7 @@ pub(super) mod tests {
             )
         };
         let text = format!(
-            "---\nid: {id}\ntitle: {title}\npriority: {priority}\ntype: feature\narea: tooling\nepic: general\ndepends_on: {depends}\nsuggested_worker: coder\nowned_surfaces: []\n---\n\n# {id} {title}\n\n## Goal\n\nGoal.\n\n## Implementation Contract\n\nContract.\n\n## Acceptance\n\n- Done.\n"
+            "---\nid: {id}\ntitle: {title}\npriority: {priority}\ntype: feature\narea: tooling\nepic: general\ndepends_on: {depends}\nowned_surfaces: []\n---\n\n# {id} {title}\n\n## Goal\n\nGoal.\n\n## Implementation Contract\n\nContract.\n\n## Acceptance\n\n- Done.\n"
         );
         fs::write(root.join(format!("backlog/items/{id}.md")), text).expect("item");
     }

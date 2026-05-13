@@ -222,11 +222,13 @@ fn failed_with_next<T: serde::Serialize + schemars::JsonSchema>(
     error: impl Into<String>,
     next_action: impl Into<String>,
 ) -> ActionResult<T> {
+    let next_action = next_action.into();
     ActionResult {
         action: action.to_string(),
         status: ActionStatus::Failed,
         summary: summary.into(),
-        next_action: Some(next_action.into()),
+        next_action: Some(next_action.clone()),
+        recovery_action: Some(next_action),
         data: None,
         error: Some(error.into()),
     }

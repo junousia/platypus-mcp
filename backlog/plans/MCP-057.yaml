@@ -28,7 +28,6 @@ tasks:
   owned_surfaces:
   - src/backlog
   - tests
-  suggested_worker: coder
   verification:
   - cargo test backlog::tests::create_backlog_item_reports_schema_guidance
   acceptance:
@@ -47,7 +46,6 @@ tasks:
   - src/host_guidance.rs
   - docs/tools.md
   - docs/workflow.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

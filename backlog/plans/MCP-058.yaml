@@ -27,7 +27,6 @@ tasks:
   owned_surfaces:
   - src/workspace
   - tests
-  suggested_worker: coder
   verification:
   - cargo test workspace::tests
   acceptance:
@@ -46,11 +45,10 @@ tasks:
   - src/project/doctor.rs
   - src/guidance.rs
   - tests
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
   - doctor_snapshot reports Git initialization or initial-commit recovery when needed.
-  - next_safe_action blocks dispatch guidance on Git readiness failures.
+  - inspect_work_queue blocks dispatch guidance on Git readiness failures.
   - Tests cover doctor/safe-action output for not-a-repo and unborn HEAD states.
   notes: null

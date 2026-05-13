@@ -719,6 +719,16 @@ fn run_task_verification_rejects_non_allowlisted_executable() {
 }
 
 #[test]
+fn verification_allowlist_accepts_common_python_commands() {
+    let commands = vec![
+        "python -m compileall src".to_string(),
+        "python3 -m pytest".to_string(),
+    ];
+
+    assert!(validate_verification_command_values(&commands).is_ok());
+}
+
+#[test]
 fn truncate_output_does_not_split_utf8_characters() {
     let value = format!("{}é", "a".repeat(MAX_CAPTURE_BYTES - 1));
 
@@ -759,7 +769,6 @@ type: foundation
 area: execution
 epic: general
 depends_on: []
-suggested_worker: coder
 owned_surfaces:
 - linked/generated/
 ---
@@ -988,7 +997,6 @@ type: foundation
 area: execution
 epic: general
 depends_on: []
-suggested_worker: coder
 owned_surfaces:
 - README.md
 ---

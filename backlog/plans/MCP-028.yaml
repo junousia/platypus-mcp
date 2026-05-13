@@ -30,7 +30,6 @@ tasks:
   - src/guidance.rs
   - src/models.rs
   - src/server.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -50,12 +49,11 @@ tasks:
   - src/guidance.rs
   - src/models.rs
   - tests/stdio_protocol.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
   - Direct items are ready without a task plan when policy is enabled.
-  - Standard/full items recommend draft_task_plan or validate_task_plan when their plan is missing or invalid.
+  - Standard/full items recommend write_task_plan or validate_task_plan when their plan is missing or invalid.
   - Valid standard/full plans allow dispatch recommendation.
   notes: null
 - id: MCP-028-T03
@@ -71,7 +69,6 @@ tasks:
   - docs/tools.md
   - docs/workflow.md
   - src/host_guidance.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

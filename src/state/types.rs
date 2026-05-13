@@ -37,7 +37,6 @@ pub struct BacklogCandidateSnapshot {
     pub priority: String,
     pub area: String,
     pub item_type: String,
-    pub suggested_worker: Option<String>,
     pub owned_surfaces: Vec<String>,
     pub external_refs: Vec<ExternalRef>,
 }
@@ -165,14 +164,6 @@ pub struct IntegrationSnapshot {
     pub evidence_refs: Vec<String>,
     pub integrated_by: String,
     pub integrated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
-pub struct SafeActionSnapshot {
-    pub recommended_tool: String,
-    pub summary: String,
-    pub reason: String,
-    pub params: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]

@@ -107,6 +107,7 @@ pub fn list_leases(default_root: &Path, params: ListLeasesParams) -> ActionResul
             status: ActionStatus::Skipped,
             summary: "No leases matched the filters.".to_string(),
             next_action: Some("Acquire a lease before listing active leases.".to_string()),
+            recovery_action: None,
             data: Some(data),
             error: None,
         }

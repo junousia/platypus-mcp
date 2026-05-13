@@ -57,6 +57,7 @@ pub fn reconcile_project(
             next_action: Some(
                 "Address each reconciliation gap before claiming completion.".to_string(),
             ),
+            recovery_action: None,
             data: Some(data),
             error: None,
         }
@@ -477,7 +478,7 @@ mod tests {
         fs::write(
             root.join("backlog/items").join(format!("{item_id}.md")),
             format!(
-                "---\nid: {item_id}\ntitle: Planned work\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nsuggested_worker: coder\nowned_surfaces:\n- src/lib.rs\n---\n\n# {item_id} Planned work\n\n## Goal\n\nPlan.\n\n## Implementation Contract\n\nImplement.\n\n## Acceptance\n\n- Done.\n"
+                "---\nid: {item_id}\ntitle: Planned work\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nowned_surfaces:\n- src/lib.rs\n---\n\n# {item_id} Planned work\n\n## Goal\n\nPlan.\n\n## Implementation Contract\n\nImplement.\n\n## Acceptance\n\n- Done.\n"
             ),
         )
         .expect("item");

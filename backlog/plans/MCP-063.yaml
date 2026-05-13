@@ -32,7 +32,6 @@ tasks:
   - src/workspace.rs
   - src/models.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test workspace::tests
   acceptance:
@@ -51,7 +50,6 @@ tasks:
   owned_surfaces:
   - src/workspace.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test workspace::tests::integrates_worker_result_with_apply_changed_files_strategy
   acceptance:
@@ -70,7 +68,6 @@ tasks:
   - src/guidance.rs
   - src/models.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test guidance::tests dispatch::tests
   acceptance:

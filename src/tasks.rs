@@ -246,6 +246,7 @@ pub fn inspect_task(
             status: ActionStatus::Skipped,
             summary: format!("Task `{task_id}` was not found."),
             next_action: Some("Dispatch work before inspecting a task id.".to_string()),
+            recovery_action: None,
             data: None,
             error: None,
         },
@@ -286,6 +287,7 @@ pub fn claim_next_task(
             status: ActionStatus::Skipped,
             summary: "No queued task is available to claim.".to_string(),
             next_action: Some("Dispatch runnable backlog work first.".to_string()),
+            recovery_action: None,
             data: None,
             error: None,
         };
@@ -313,6 +315,7 @@ pub fn claim_next_task(
             status: ActionStatus::Skipped,
             summary: format!("Task `{}` was already claimed.", task.id),
             next_action: Some("Retry claim_next_task to claim another queued task.".to_string()),
+            recovery_action: None,
             data: None,
             error: None,
         };
@@ -443,6 +446,7 @@ pub fn inspect_task_events(
             next_action: Some(
                 "Check the task id or dispatch work before inspecting events.".to_string(),
             ),
+            recovery_action: None,
             data: Some(data),
             error: None,
         }

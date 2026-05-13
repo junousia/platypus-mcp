@@ -58,8 +58,8 @@ stateDiagram-v2
 
 ## Host Workflow Sequence
 
-The host should use `next_safe_action` to avoid guessing which lifecycle tool
-is safe at each point.
+The host should use `inspect_work_queue` to inspect queue shape and lifecycle
+routing before mutating state.
 
 ```mermaid
 sequenceDiagram
@@ -69,9 +69,9 @@ sequenceDiagram
     participant Git as Git worktree
     participant State as Runtime store
 
-    Host->>Platy: next_safe_action
-    Platy-->>Host: dispatch_ready_work
-    Host->>Platy: dispatch_ready_work
+    Host->>Platy: inspect_work_queue
+    Platy-->>Host: recommended_tool and params
+    Host->>Platy: prepare_work
     Platy->>State: create queued task and assignment
     Platy->>Git: create/record worktree
     Platy-->>Host: assignment bundle
@@ -270,18 +270,19 @@ flowchart TB
     subgraph Project["Project setup"]
         init["init_project"]
         doctor["doctor_snapshot"]
-        config["configure_agent_profile<br/>inspect_workflow_config"]
+        config["inspect_workflow_config"]
     end
 
     subgraph Planning["Backlog planning"]
-        draft["draft_backlog_items"]
+        decide["host model decides item boundaries"]
         create["create_backlog_item"]
+        create_many["create_backlog_items"]
         validate["validate_backlog"]
         list["list_backlog"]
     end
 
     subgraph Runtime["Task runtime"]
-        next["next_safe_action"]
+        queue["inspect_work_queue"]
         dispatch["dispatch_ready_work"]
         handoff["prepare_worker_handoff<br/>low-level fallback"]
         start["start_worker_task"]

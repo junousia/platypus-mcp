@@ -1,17 +1,26 @@
 use crate::{
-    assignments, dispatch, evidence, execution_mode, findings, guidance,
+    assignments, backlog, dispatch, events, evidence, execution_mode, findings, guidance,
     models::{
-        ActionResult, ActionStatus, CompleteWorkerExecutionParams, DispatchReadyWorkData,
-        DispatchReadyWorkItem, DispatchReadyWorkParams, EvidenceRecord, FinishWorkData,
-        FinishWorkFindingInput, FinishWorkParams, HostAction, IntegrateWorkerResultParams,
-        PrepareWorkData, PrepareWorkParams, ReconcileParams, RecordFindingParams,
+        ActionResult, ActionStatus, CompleteBacklogItemData, CompleteBacklogItemParams,
+        CompleteWorkerExecutionParams, DispatchReadyWorkData, DispatchReadyWorkItem,
+        DispatchReadyWorkParams, EvidenceRecord, FinishWorkData, FinishWorkFindingInput,
+        FinishWorkParams, HostAction, IntegrateWorkerResultParams, PrepareWorkData,
+        PrepareWorkParams, ReconcileParams, RecordEvidenceParams, RecordFindingParams,
         RecordVerificationEvidenceParams, WorkQueueData, WorkQueueItem, WorkerAssignment,
         WorktreeDiffData, WorktreeDiffParams,
     },
     reconcile, workspace,
 };
 use serde_json::Value;
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::{Component, Path},
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn prepare_work(
     default_root: &Path,
@@ -25,6 +34,7 @@ pub fn prepare_work(
         .unwrap_or(execution_mode::MANUAL_HANDOFF)
         .to_string();
     let manual_handoff = execution_mode::is_manual_handoff(&requested_execution_mode);
+    let include_queue_snapshot = params.include_queue_snapshot.unwrap_or(false);
     let queue_result = guidance::inspect_work_queue(
         default_root,
         crate::models::InspectWorkQueueParams {
@@ -38,7 +48,7 @@ pub fn prepare_work(
             require_planning_approval: params.require_planning_approval,
         },
     );
-    let queue = match queue_result {
+    let mut queue = match queue_result {
         ActionResult {
             status: ActionStatus::Completed | ActionStatus::Skipped,
             data: Some(data),
@@ -52,6 +62,11 @@ pub fn prepare_work(
             )
         }
     };
+    if params.auto_commit_artifacts.unwrap_or(false) {
+        queue
+            .preflight_warnings
+            .retain(|warning| !warning.contains("auto_commit_artifacts=true"));
+    }
     let selected =
         selected_prepare_items(&queue, params.item_id.as_deref(), max_tasks, manual_handoff);
     if selected.is_empty() {
@@ -62,7 +77,7 @@ pub fn prepare_work(
                 summary: "No work is ready to prepare.".to_string(),
                 instructions: vec![
                     "Inspect the queue item reasons and resolve planning, approval, Git, or backlog blockers.".to_string(),
-                    "Call inspect_work_queue or next_safe_action after resolving the blocker.".to_string(),
+                    "Call inspect_work_queue after resolving the blocker.".to_string(),
                 ],
                 task_id: None,
                 assignment_id: None,
@@ -71,10 +86,12 @@ pub fn prepare_work(
                 bundle: None,
                 next_tools: vec![
                     "inspect_work_queue".to_string(),
-                    "next_safe_action".to_string(),
                     "doctor_snapshot".to_string(),
                 ],
             }],
+            include_queue_snapshot,
+            "not_prepared",
+            Vec::new(),
         );
         return ActionResult {
             action: action.to_string(),
@@ -83,6 +100,7 @@ pub fn prepare_work(
             next_action: Some(
                 "Resolve the reported queue blockers, then retry prepare_work.".to_string(),
             ),
+            recovery_action: None,
             data: Some(data),
             error: None,
         };
@@ -90,23 +108,38 @@ pub fn prepare_work(
 
     let mut host_actions = selected
         .iter()
-        .filter(|item| item.planning_mode == "direct")
-        .map(|item| direct_host_action(item, params.worker.clone()))
+        .filter(|item| item.execution_path == crate::execution_policy::DIRECT_EDIT)
+        .map(|item| {
+            direct_host_action(
+                item,
+                queue.root.as_str(),
+                params.worker.clone(),
+                params.auto_commit_artifacts.unwrap_or(false),
+            )
+        })
         .collect::<Vec<_>>();
     let non_direct_ids = selected
         .iter()
-        .filter(|item| item.planning_mode != "direct")
+        .filter(|item| item.execution_path == crate::execution_policy::WORKER_HANDOFF)
         .map(|item| item.item_id.clone())
         .collect::<Vec<_>>();
 
     if non_direct_ids.is_empty() {
         let prepared = host_actions.len();
-        let data = prepare_queue_only_data(queue, host_actions);
+        let selected_item_ids = selected.iter().map(|item| item.item_id.clone()).collect();
+        let data = prepare_queue_only_data(
+            queue,
+            host_actions,
+            include_queue_snapshot,
+            "direct_prepared",
+            selected_item_ids,
+        );
         return ActionResult {
             action: action.to_string(),
             status: ActionStatus::Completed,
             summary: format!("Prepared {prepared} direct host action(s)."),
-            next_action: Some("Use the host's native edit tools in the manager workspace; no worker process was launched.".to_string()),
+            next_action: Some("Use the host's native edit tools in the manager workspace, then close the loop with complete_backlog_item. No worker process, assignment, or worktree was launched.".to_string()),
+            recovery_action: None,
             data: Some(data),
             error: None,
         };
@@ -138,6 +171,7 @@ pub fn prepare_work(
                 next_action: Some(
                     "Run returned worktree assignments in the host or selected worker; finish with finish_work.".to_string(),
                 ),
+                recovery_action: None,
                 data: Some(PrepareWorkData {
                     root: dispatch.root.clone(),
                     queue_summary: format!(
@@ -145,6 +179,8 @@ pub fn prepare_work(
                         host_actions.len(),
                         selected.len()
                     ),
+                    prepared_state: "worktree_prepared".to_string(),
+                    selected_item_ids: selected.iter().map(|item| item.item_id.clone()).collect(),
                     ready_count: queue.ready_count,
                     blocked_count: queue.blocked_count,
                     host_actions,
@@ -164,10 +200,13 @@ pub fn prepare_work(
             action: action.to_string(),
             status: ActionStatus::Failed,
             summary,
-            next_action,
+            next_action: next_action.clone(),
+            recovery_action: next_action,
             data: data.map(|dispatch| PrepareWorkData {
                 root: dispatch.root.clone(),
                 queue_summary: "Dispatch failed while preparing host-run work.".to_string(),
+                prepared_state: "not_prepared".to_string(),
+                selected_item_ids: selected.iter().map(|item| item.item_id.clone()).collect(),
                 ready_count: queue.ready_count,
                 blocked_count: queue.blocked_count,
                 host_actions: vec![HostAction {
@@ -184,7 +223,6 @@ pub fn prepare_work(
                     worktree_path: None,
                     bundle: None,
                     next_tools: vec![
-                        "next_safe_action".to_string(),
                         "doctor_snapshot".to_string(),
                         "inspect_work_queue".to_string(),
                     ],
@@ -202,7 +240,7 @@ fn ready_for_prepare_work(item: &WorkQueueItem, manual_handoff: bool) -> bool {
         return true;
     }
     manual_handoff
-        && item.recommended_tool == "configure_agent_profile"
+        && item.recommended_tool == "prepare_work"
         && matches!(item.plan.status.as_str(), "valid" | "not_required")
         && item
             .planning_approval
@@ -210,8 +248,303 @@ fn ready_for_prepare_work(item: &WorkQueueItem, manual_handoff: bool) -> bool {
             .is_none_or(|approval| !approval.required || approval.approved)
 }
 
+pub fn complete_backlog_item(
+    default_root: &Path,
+    params: CompleteBacklogItemParams,
+) -> ActionResult<CompleteBacklogItemData> {
+    let action = "complete_backlog_item";
+    let item_id = match clean_item_id(&params.item_id) {
+        Ok(item_id) => item_id,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not complete backlog item.", error)
+        }
+    };
+    let summary = params.summary.trim();
+    if summary.is_empty() {
+        return ActionResult::failed(
+            action,
+            "Could not complete backlog item.",
+            "summary is required",
+        );
+    }
+    let inventory = backlog::inspect_backlog_inventory(default_root, params.root.as_deref(), None);
+    let (root, already_closed) = match inventory {
+        ActionResult {
+            status: ActionStatus::Completed,
+            data: Some(data),
+            ..
+        } => {
+            let Some(item) = data.items.iter().find(|item| item.item_id == item_id) else {
+                return ActionResult::failed(
+                    action,
+                    "Could not complete backlog item.",
+                    format!("unknown backlog item `{item_id}`"),
+                );
+            };
+            (data.root, item.closed)
+        }
+        ActionResult { summary, error, .. } => {
+            return ActionResult::failed(
+                action,
+                "Could not inspect backlog before completion.",
+                error.unwrap_or(summary),
+            )
+        }
+    };
+    if already_closed {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Skipped,
+            summary: format!("Backlog item `{item_id}` is already closed."),
+            next_action: Some(
+                "Select the next safe action or inspect the backlog queue.".to_string(),
+            ),
+            recovery_action: None,
+            data: Some(CompleteBacklogItemData {
+                root,
+                item_id,
+                summary: summary.to_string(),
+                changed_files: params.changed_files,
+                evidence: Vec::new(),
+                event: None,
+                commit: None,
+                closed: true,
+                host_action: HostAction {
+                    kind: "done".to_string(),
+                    summary: "Backlog item was already closed.".to_string(),
+                    instructions: vec!["inspect_work_queue can choose the next item.".to_string()],
+                    task_id: None,
+                    assignment_id: None,
+                    worker: None,
+                    worktree_path: None,
+                    bundle: None,
+                    next_tools: vec!["inspect_work_queue".to_string()],
+                },
+            }),
+            error: None,
+        };
+    }
+
+    let changed_files = match validate_changed_files(&params.changed_files) {
+        Ok(files) => files,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not complete backlog item.", error)
+        }
+    };
+    let root_path = Path::new(&root);
+    let mut evidence_records = Vec::new();
+    let completion_evidence = evidence::record_evidence(
+        default_root,
+        RecordEvidenceParams {
+            root: Some(root.clone()),
+            id: None,
+            source_item_id: Some(item_id.clone()),
+            source_task_id: None,
+            kind: "note".to_string(),
+            summary: summary.to_string(),
+            refs: completion_refs(&changed_files, &params.evidence_refs, &params.finding_refs),
+            metadata: BTreeMap::from([
+                (
+                    "completion_kind".to_string(),
+                    Value::String("direct".to_string()),
+                ),
+                (
+                    "verification_status".to_string(),
+                    Value::String(
+                        params
+                            .verification_status
+                            .clone()
+                            .unwrap_or_else(|| "not_run".to_string()),
+                    ),
+                ),
+            ]),
+        },
+    );
+    match completion_evidence {
+        ActionResult {
+            status: ActionStatus::Completed,
+            data: Some(data),
+            ..
+        } => evidence_records.push(data.evidence),
+        ActionResult { summary, error, .. } => {
+            return ActionResult::failed(
+                action,
+                "Could not record direct completion evidence.",
+                error.unwrap_or(summary),
+            )
+        }
+    }
+
+    if params.verification_summary.is_some()
+        || !params.verification_refs.is_empty()
+        || matches!(
+            params.verification_status.as_deref(),
+            Some("passed" | "failed" | "skipped")
+        )
+    {
+        let verification = evidence::record_verification_evidence(
+            default_root,
+            RecordVerificationEvidenceParams {
+                root: Some(root.clone()),
+                id: None,
+                source_item_id: Some(item_id.clone()),
+                source_task_id: None,
+                summary: params.verification_summary.clone().unwrap_or_else(|| {
+                    format!(
+                        "Direct work verification status: {}.",
+                        params
+                            .verification_status
+                            .as_deref()
+                            .unwrap_or("not_recorded")
+                    )
+                }),
+                refs: params.verification_refs.clone(),
+                metadata: BTreeMap::new(),
+            },
+        );
+        match verification {
+            ActionResult {
+                status: ActionStatus::Completed,
+                data: Some(data),
+                ..
+            } => evidence_records.push(data.evidence),
+            ActionResult { summary, error, .. } => {
+                return ActionResult::failed(
+                    action,
+                    "Could not record direct verification evidence.",
+                    error.unwrap_or(summary),
+                )
+            }
+        }
+    }
+
+    let commit =
+        if params.commit.unwrap_or(false) {
+            match commit_direct_completion(
+                root_path,
+                &item_id,
+                params.commit_message.as_deref(),
+                summary,
+                params.verification_summary.as_deref(),
+                params.verification_status.as_deref(),
+                &changed_files,
+            ) {
+                Ok(commit) => {
+                    let commit_evidence = evidence::record_evidence(
+                        default_root,
+                        RecordEvidenceParams {
+                            root: Some(root.clone()),
+                            id: None,
+                            source_item_id: Some(item_id.clone()),
+                            source_task_id: None,
+                            kind: "commit".to_string(),
+                            summary: format!("Direct backlog item `{item_id}` closure commit."),
+                            refs: vec![format!("commit:{commit}")],
+                            metadata: BTreeMap::from([(
+                                "completion_kind".to_string(),
+                                Value::String("direct".to_string()),
+                            )]),
+                        },
+                    );
+                    match commit_evidence {
+                        ActionResult {
+                            status: ActionStatus::Completed,
+                            data: Some(data),
+                            ..
+                        } => evidence_records.push(data.evidence),
+                        ActionResult { summary, error, .. } => return ActionResult::failed(
+                            action,
+                            "Direct work was committed but commit evidence could not be recorded.",
+                            error.unwrap_or(summary),
+                        ),
+                    }
+                    Some(commit)
+                }
+                Err(error) => {
+                    return ActionResult::failed(
+                        action,
+                        "Could not create direct completion commit.",
+                        error,
+                    )
+                }
+            }
+        } else {
+            None
+        };
+
+    let event = match events::record_event(
+        default_root,
+        Some(root.as_str()),
+        events::NewEvent {
+            event_type: "backlog_item_completed".to_string(),
+            scope: "backlog".to_string(),
+            task_id: None,
+            summary: format!("Completed direct backlog item `{item_id}`."),
+            payload: Some(serde_json::json!({
+                "item_id": item_id,
+                "summary": summary,
+                "changed_files": changed_files,
+                "evidence_refs": evidence_records.iter().map(|evidence| evidence.id.clone()).collect::<Vec<_>>(),
+                "finding_refs": params.finding_refs,
+                "commit": commit,
+                "completion_kind": "direct"
+            })),
+        },
+    ) {
+        Ok(event) => Some(event),
+        Err(error) => return ActionResult::failed(
+            action,
+            "Direct completion evidence was recorded but completion event could not be recorded.",
+            error,
+        ),
+    };
+
+    let host_action = HostAction {
+        kind: "done".to_string(),
+        summary: format!("Direct backlog item `{item_id}` is complete."),
+        instructions: vec![
+            "The item is now hidden from runnable backlog queues by recorded completion state."
+                .to_string(),
+            "Use a Git commit with Platypus-Closes for repository-portable closure when needed."
+                .to_string(),
+            "Run reconcile_project or inspect_work_queue to choose the next safe action."
+                .to_string(),
+        ],
+        task_id: None,
+        assignment_id: None,
+        worker: None,
+        worktree_path: Some(root.clone()),
+        bundle: None,
+        next_tools: vec![
+            "reconcile_project".to_string(),
+            "inspect_work_queue".to_string(),
+        ],
+    };
+    let data = CompleteBacklogItemData {
+        root,
+        item_id: item_id.clone(),
+        summary: summary.to_string(),
+        changed_files,
+        evidence: evidence_records,
+        event,
+        commit,
+        closed: true,
+        host_action,
+    };
+    let mut result = ActionResult::completed(
+        action,
+        format!("Completed direct backlog item `{item_id}`."),
+        data,
+    );
+    result.next_action = Some("Run inspect_work_queue to continue with the next item.".to_string());
+    result
+}
+
 pub fn finish_work(default_root: &Path, params: FinishWorkParams) -> ActionResult<FinishWorkData> {
     let action = "finish_work";
+    if params.assignment_id.is_none() && params.task_id.is_none() {
+        return direct_finish_guidance(default_root, params);
+    }
     let root = params.root.clone();
     let status = params
         .status
@@ -235,22 +568,23 @@ pub fn finish_work(default_root: &Path, params: FinishWorkParams) -> ActionResul
             .map(|assignment| assignment.task_id.clone());
     }
 
-    let worktree_changes = task_id.as_ref().and_then(|task_id| {
-        match workspace::worktree_diff(
-            default_root,
-            WorktreeDiffParams {
-                root: root.clone(),
-                task_id: task_id.clone(),
-            },
-        ) {
-            ActionResult {
-                status: ActionStatus::Completed,
-                data: Some(data),
-                ..
-            } => Some(data),
-            _ => None,
-        }
-    });
+    let mut worktree_changes =
+        task_id.as_ref().and_then(|task_id| {
+            match workspace::worktree_diff(
+                default_root,
+                WorktreeDiffParams {
+                    root: root.clone(),
+                    task_id: task_id.clone(),
+                },
+            ) {
+                ActionResult {
+                    status: ActionStatus::Completed,
+                    data: Some(data),
+                    ..
+                } => Some(data),
+                _ => None,
+            }
+        });
     let mut changed_files = params.changed_files.clone();
     if changed_files.is_empty() {
         if let Some(diff) = worktree_changes.as_ref() {
@@ -258,43 +592,66 @@ pub fn finish_work(default_root: &Path, params: FinishWorkParams) -> ActionResul
         }
     }
 
-    let completed = assignments::complete_worker_execution(
-        default_root,
-        CompleteWorkerExecutionParams {
-            root: root.clone(),
-            assignment_id: params.assignment_id.clone(),
-            task_id: task_id.clone(),
-            status: status.clone(),
-            summary: params.summary.clone(),
-            changed_files,
-            verification_status: params.verification_status.clone(),
-            auto_start_if_prepared: params.auto_start_if_prepared,
-        },
-    );
-    let assignment = match completed {
-        ActionResult {
-            status: ActionStatus::Completed,
-            data: Some(data),
-            ..
-        } => data.assignment,
-        ActionResult {
-            summary,
-            next_action,
-            error,
-            ..
-        } => {
-            return finish_failed(
-                action,
+    let assignment = if let Some(assignment) = inspected_assignment
+        .as_ref()
+        .filter(|assignment| assignment.status == "completed")
+        .cloned()
+    {
+        assignment
+    } else {
+        let completed = assignments::complete_worker_execution(
+            default_root,
+            CompleteWorkerExecutionParams {
+                root: root.clone(),
+                assignment_id: params.assignment_id.clone(),
+                task_id: task_id.clone(),
+                status: status.clone(),
+                summary: params.summary.clone(),
+                changed_files,
+                verification_status: params.verification_status.clone(),
+                auto_start_if_prepared: params.auto_start_if_prepared,
+            },
+        );
+        match completed {
+            ActionResult {
+                status: ActionStatus::Completed,
+                data: Some(data),
+                ..
+            } => data.assignment,
+            ActionResult {
                 summary,
                 next_action,
                 error,
-                task_id,
-                params.assignment_id,
-                inspected_assignment,
-                worktree_changes,
-            )
+                ..
+            } => {
+                return finish_failed(
+                    action,
+                    summary,
+                    next_action,
+                    error,
+                    task_id,
+                    params.assignment_id,
+                    inspected_assignment,
+                    worktree_changes,
+                )
+            }
         }
     };
+    let refreshed_worktree_changes = workspace::worktree_diff(
+        default_root,
+        WorktreeDiffParams {
+            root: root.clone(),
+            task_id: assignment.task_id.clone(),
+        },
+    );
+    if let ActionResult {
+        status: ActionStatus::Completed,
+        data: Some(data),
+        ..
+    } = refreshed_worktree_changes
+    {
+        worktree_changes = Some(data);
+    }
 
     let mut evidence_records = Vec::new();
     if should_record_verification_evidence(params.verification_status.as_deref(), &params) {
@@ -467,15 +824,23 @@ pub fn finish_work(default_root: &Path, params: FinishWorkParams) -> ActionResul
     result
 }
 
-fn prepare_queue_only_data(queue: WorkQueueData, host_actions: Vec<HostAction>) -> PrepareWorkData {
+fn prepare_queue_only_data(
+    queue: WorkQueueData,
+    host_actions: Vec<HostAction>,
+    include_queue_snapshot: bool,
+    prepared_state: &str,
+    selected_item_ids: Vec<String>,
+) -> PrepareWorkData {
     PrepareWorkData {
         root: queue.root.clone(),
         queue_summary: queue.summary.clone(),
+        prepared_state: prepared_state.to_string(),
+        selected_item_ids,
         ready_count: queue.ready_count,
         blocked_count: queue.blocked_count,
         host_actions,
         dispatch: None,
-        queue: Some(queue),
+        queue: include_queue_snapshot.then_some(queue),
     }
 }
 
@@ -483,7 +848,7 @@ fn prepare_queue_only_data(queue: WorkQueueData, host_actions: Vec<HostAction>) 
 struct PrepareSelection {
     item_id: String,
     title: String,
-    planning_mode: String,
+    execution_path: String,
 }
 
 fn selected_prepare_items(
@@ -501,29 +866,44 @@ fn selected_prepare_items(
         .map(|item| PrepareSelection {
             item_id: item.candidate.item_id.clone(),
             title: item.candidate.title.clone(),
-            planning_mode: item.planning.required_mode.clone(),
+            execution_path: item.effective_policy.execution_path.clone(),
         })
         .collect()
 }
 
-fn direct_host_action(item: &PrepareSelection, worker: Option<String>) -> HostAction {
+fn direct_host_action(
+    item: &PrepareSelection,
+    root: &str,
+    worker: Option<String>,
+    auto_commit_artifacts_requested: bool,
+) -> HostAction {
+    let mut instructions = vec![
+        format!("Implement `{}` directly in the manager workspace when the user wants a lightweight scaffold or direct edit.", item.title),
+        "No worker process was launched.".to_string(),
+        "No task assignment was created.".to_string(),
+        "No Git worktree was created; the manager workspace is the expected target.".to_string(),
+        "When the direct edit is done, call complete_backlog_item with item_id, summary, changed_files, verification status, and any evidence or finding references.".to_string(),
+    ];
+    if auto_commit_artifacts_requested {
+        instructions.push(
+            "auto_commit_artifacts is not applicable to direct work; use complete_backlog_item commit=true when you want Platypus to create the closure commit for explicit changed_files."
+                .to_string(),
+        );
+    }
     HostAction {
         kind: "direct_edit".to_string(),
         summary: format!(
-            "`{}` is direct work; implement it in the manager workspace.",
+            "`{}` is direct work; implement it in the manager workspace and complete it with complete_backlog_item.",
             item.item_id
         ),
-        instructions: vec![
-            format!("Implement `{}` directly in the project workspace when the user wants a lightweight scaffold or direct edit.", item.title),
-            "Keep changes scoped to the backlog contract and commit with Platypus trailers when complete.".to_string(),
-            "Record verification evidence and findings if the work becomes non-trivial or leaves follow-up risk.".to_string(),
-        ],
+        instructions,
         task_id: None,
         assignment_id: None,
         worker,
-        worktree_path: None,
+        worktree_path: Some(root.to_string()),
         bundle: None,
         next_tools: vec![
+            "complete_backlog_item".to_string(),
             "record_verification_evidence".to_string(),
             "record_finding".to_string(),
             "reconcile_project".to_string(),
@@ -551,7 +931,7 @@ fn dispatch_selected_work(
                 prepare_handoffs: Some(true),
                 auto_start: Some(false),
                 auto_commit_artifacts: params.auto_commit_artifacts,
-                require_planning_approval: params.require_planning_approval,
+                require_planning_approval: None,
                 dry_run: Some(false),
                 verification_command: params.verification_command.clone(),
             },
@@ -573,6 +953,7 @@ fn dispatch_selected_work(
         next_action: Some(
             "Select direct work or runnable worker work, then retry prepare_work.".to_string(),
         ),
+        recovery_action: None,
         data: None,
         error: None,
     })
@@ -598,10 +979,6 @@ fn merge_dispatch_data(
     current
         .preflight_warnings
         .append(&mut dispatch.preflight_warnings);
-    current.worker_ready |= dispatch.worker_ready;
-    current.ready_worker_profiles = current
-        .ready_worker_profiles
-        .max(dispatch.ready_worker_profiles);
     if dispatch.stopped_reason != "selection_exhausted"
         && dispatch.stopped_reason != "max_tasks_reached"
     {
@@ -724,14 +1101,14 @@ fn finish_host_action(
         return HostAction {
             kind: "resolve_findings".to_string(),
             summary: if unresolved_required > 0 {
-                format!("{unresolved_required} required finding(s) must be resolved before final integration.")
+                format!("{unresolved_required} required finding(s) must be explicitly dispositioned before final integration.")
             } else {
                 "Confirm findings were reviewed or record follow-up findings before integration.".to_string()
             },
             instructions: vec![
                 "Record limitations, impediments, and follow-up work as findings.".to_string(),
                 "Use findings_reviewed=true only after explicitly checking that no findings are needed.".to_string(),
-                "Resolve or accept required findings before integrating.".to_string(),
+                "Accept, defer, resolve, reject, or mark required findings as duplicate before integrating.".to_string(),
             ],
             task_id: Some(assignment.task_id.clone()),
             assignment_id: Some(assignment.id.clone()),
@@ -769,6 +1146,7 @@ fn finish_host_action(
         ),
         instructions: vec![
             "Inspect the worktree changes and evidence.".to_string(),
+            "Run inspect_integration_gates when the host needs a read-only checklist before integrating.".to_string(),
             "Integrate the worker result when the manager workspace is clean.".to_string(),
             "Run reconcile_project after integration to surface closure or finding gaps."
                 .to_string(),
@@ -780,6 +1158,7 @@ fn finish_host_action(
         bundle: Some(assignment.bundle.clone()),
         next_tools: vec![
             "inspect_worktree_changes".to_string(),
+            "inspect_integration_gates".to_string(),
             "integrate_worker_result".to_string(),
             "reconcile_project".to_string(),
         ],
@@ -811,14 +1190,15 @@ fn finish_failed(
         next_tools: vec![
             "inspect_worker_assignment".to_string(),
             "inspect_task_events".to_string(),
-            "next_safe_action".to_string(),
+            "inspect_work_queue".to_string(),
         ],
     };
     ActionResult {
         action: action.to_string(),
         status: ActionStatus::Failed,
         summary,
-        next_action,
+        next_action: next_action.clone(),
+        recovery_action: next_action,
         data: Some(FinishWorkData {
             root: String::new(),
             assignment,
@@ -848,7 +1228,8 @@ fn finish_failed_with_assignment(
         action: action.to_string(),
         status: ActionStatus::Failed,
         summary,
-        next_action,
+        next_action: next_action.clone(),
+        recovery_action: next_action,
         data: Some(FinishWorkData {
             root,
             assignment: Some(assignment.clone()),
@@ -878,6 +1259,233 @@ fn finish_failed_with_assignment(
             },
         }),
         error,
+    }
+}
+
+fn direct_finish_guidance(
+    default_root: &Path,
+    params: FinishWorkParams,
+) -> ActionResult<FinishWorkData> {
+    let root = params.root.clone().unwrap_or_else(|| {
+        default_root
+            .canonicalize()
+            .unwrap_or_else(|_| default_root.to_path_buf())
+            .display()
+            .to_string()
+    });
+    let item_id = params.item_id.clone();
+    let host_action = HostAction {
+        kind: "inspect_or_recover".to_string(),
+        summary: "finish_work is for worker assignments; direct host work finishes with complete_backlog_item.".to_string(),
+        instructions: vec![
+            "Call complete_backlog_item for direct work returned by prepare_work with host action direct_edit.".to_string(),
+            "Pass item_id, summary, changed_files, verification status, and any evidence or finding references.".to_string(),
+            "Use finish_work only when prepare_work returned a task_id or assignment_id for a worker handoff.".to_string(),
+        ],
+        task_id: None,
+        assignment_id: None,
+        worker: None,
+        worktree_path: Some(root.clone()),
+        bundle: None,
+        next_tools: vec!["complete_backlog_item".to_string(), "inspect_work_queue".to_string()],
+    };
+    ActionResult {
+        action: "finish_work".to_string(),
+        status: ActionStatus::Skipped,
+        summary: "Direct work should be completed with complete_backlog_item.".to_string(),
+        next_action: Some(if let Some(item_id) = item_id {
+            format!("Call complete_backlog_item for `{item_id}` with summary, changed_files, and verification details.")
+        } else {
+            "Call complete_backlog_item with the direct backlog item id, summary, changed_files, and verification details.".to_string()
+        }),
+        recovery_action: None,
+        data: Some(FinishWorkData {
+            root,
+            assignment: None,
+            worktree_changes: None,
+            evidence: Vec::new(),
+            findings: Vec::new(),
+            integration: None,
+            reconciliation: None,
+            host_action,
+        }),
+        error: None,
+    }
+}
+
+fn clean_item_id(value: &str) -> Result<String, String> {
+    let item_id = value.trim().to_ascii_uppercase();
+    let Some((prefix, number)) = item_id.split_once('-') else {
+        return Err("item_id must look like PROJ-001".to_string());
+    };
+    if prefix.is_empty()
+        || !prefix
+            .chars()
+            .all(|character| character.is_ascii_uppercase())
+        || number.len() != 3
+        || !number.chars().all(|character| character.is_ascii_digit())
+    {
+        return Err("item_id must look like PROJ-001".to_string());
+    }
+    Ok(item_id)
+}
+
+fn validate_changed_files(paths: &[String]) -> Result<Vec<String>, String> {
+    let mut validated = Vec::new();
+    for path in paths {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let candidate = Path::new(trimmed);
+        if candidate.is_absolute() {
+            return Err(format!("changed file `{trimmed}` must be relative"));
+        }
+        if trimmed.starts_with(".platy/") || trimmed == ".platy" {
+            return Err("changed_files must not point at Platypus runtime state".to_string());
+        }
+        if candidate.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        }) {
+            return Err(format!(
+                "changed file `{trimmed}` must stay inside the project root"
+            ));
+        }
+        validated.push(trimmed.to_string());
+    }
+    Ok(validated)
+}
+
+fn completion_refs(
+    changed_files: &[String],
+    evidence_refs: &[String],
+    finding_refs: &[String],
+) -> Vec<String> {
+    let mut refs = changed_files
+        .iter()
+        .map(|path| format!("file:{path}"))
+        .collect::<Vec<_>>();
+    refs.extend(evidence_refs.iter().cloned());
+    refs.extend(
+        finding_refs
+            .iter()
+            .map(|finding| format!("finding:{finding}")),
+    );
+    refs
+}
+
+fn commit_direct_completion(
+    root: &Path,
+    item_id: &str,
+    commit_message: Option<&str>,
+    summary: &str,
+    verification_summary: Option<&str>,
+    verification_status: Option<&str>,
+    changed_files: &[String],
+) -> Result<String, String> {
+    if changed_files.is_empty() {
+        return Err(
+            "changed_files is required when commit=true so Platypus does not stage unrelated work"
+                .to_string(),
+        );
+    }
+    run_git(root, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let mut add_args = vec!["add".to_string(), "--".to_string()];
+    add_args.extend(changed_files.iter().cloned());
+    let add_refs = add_args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git(root, &add_refs)?;
+    let subject = commit_message
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("Complete {item_id} direct work"));
+    let verification = verification_summary
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or(verification_status)
+        .unwrap_or("direct completion recorded");
+    commit_with_message(
+        root,
+        &subject,
+        &[
+            format!("Platypus-Closes: {item_id}"),
+            format!("Platypus-Verification: {}", one_line(verification)),
+            format!("Platypus-Direct-Summary: {}", one_line(summary)),
+        ],
+    )?;
+    head_commit(root)
+}
+
+fn commit_with_message(root: &Path, subject: &str, body_lines: &[String]) -> Result<(), String> {
+    let mut args = vec!["commit".to_string(), "-m".to_string(), one_line(subject)];
+    if !body_lines.is_empty() {
+        args.push("-m".to_string());
+        args.push(
+            body_lines
+                .iter()
+                .map(|line| one_line(line))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git(root, &arg_refs).map(|_| ())
+}
+
+fn head_commit(root: &Path) -> Result<String, String> {
+    let output = run_git(root, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let commit = output.lines().next().unwrap_or_default().trim();
+    if commit.is_empty() {
+        Err("HEAD did not resolve to a commit".to_string())
+    } else {
+        Ok(commit.to_string())
+    }
+}
+
+fn one_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to start git: {error}"))?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| format!("failed to collect git output: {error}"))?;
+                if output.status.success() {
+                    return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+                }
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(if stderr.is_empty() {
+                    format!("git {:?} failed with {}", args, output.status)
+                } else {
+                    stderr
+                });
+            }
+            Ok(None) => {
+                if started.elapsed() > GIT_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("git {:?} timed out", args));
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(format!("failed to poll git: {error}")),
+        }
     }
 }
 
@@ -923,22 +1531,144 @@ mod tests {
                 worker: None,
                 claimant: None,
                 execution_mode: None,
-                require_task_plan: Some(true),
+                require_task_plan: Some(false),
                 require_planning_approval: None,
                 auto_commit_artifacts: None,
                 verification_command: Vec::new(),
+                include_queue_snapshot: None,
             },
         );
         let data = result.data.expect("prepare data");
 
         assert_eq!(result.status, ActionStatus::Completed);
         assert_eq!(data.host_actions[0].kind, "direct_edit");
+        assert!(data.host_actions[0]
+            .next_tools
+            .contains(&"complete_backlog_item".to_string()));
+        assert!(data.host_actions[0]
+            .instructions
+            .iter()
+            .any(|instruction| instruction.contains("No Git worktree was created")));
         assert!(data.dispatch.is_none());
-        assert!(data.queue.is_some());
+        assert_eq!(data.prepared_state, "direct_prepared");
+        assert_eq!(data.selected_item_ids, vec!["PROJ-001".to_string()]);
+        assert!(data.queue.is_none());
+
+        let verbose = prepare_work(
+            project.path(),
+            PrepareWorkParams {
+                root: None,
+                item_id: None,
+                max_tasks: None,
+                worker: None,
+                claimant: None,
+                execution_mode: None,
+                require_task_plan: Some(false),
+                require_planning_approval: None,
+                auto_commit_artifacts: None,
+                verification_command: Vec::new(),
+                include_queue_snapshot: Some(true),
+            },
+        )
+        .data
+        .expect("verbose prepare data");
+        assert!(verbose.queue.is_some());
     }
 
     #[test]
-    fn prepare_work_prepares_manual_handoff_without_worker_profile() {
+    fn complete_backlog_item_closes_direct_item_without_worker_task() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Readme docs",
+            "docs",
+            "docs",
+            &["README.md"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+        fs::write(project.path().join("README.md"), "# Done\n").expect("readme");
+
+        let completed = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Updated the readme.".to_string(),
+                changed_files: vec!["README.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: Some("Reviewed README.md manually.".to_string()),
+                verification_refs: vec!["manual:readme".to_string()],
+                evidence_refs: Vec::new(),
+                finding_refs: Vec::new(),
+                commit: Some(false),
+                commit_message: None,
+            },
+        );
+        let data = completed.data.expect("complete data");
+
+        assert_eq!(completed.status, ActionStatus::Completed);
+        assert!(data.closed);
+        assert_eq!(data.host_action.kind, "done");
+        assert!(data.event.is_some());
+        assert_eq!(data.evidence.len(), 2);
+
+        let queue = guidance::inspect_work_queue(
+            project.path(),
+            crate::models::InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: Some(false),
+                require_planning_approval: None,
+            },
+        );
+        let queue_data = queue.data.expect("queue data");
+        assert!(queue_data.items.is_empty());
+    }
+
+    #[test]
+    fn finish_work_guides_direct_callers_to_complete_backlog_item() {
+        let project = backlog_project(false);
+        let result = finish_work(
+            project.path(),
+            FinishWorkParams {
+                root: None,
+                item_id: Some("PROJ-001".to_string()),
+                assignment_id: None,
+                task_id: None,
+                status: None,
+                summary: "Finished direct docs.".to_string(),
+                changed_files: vec!["README.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: None,
+                verification_refs: Vec::new(),
+                findings: Vec::new(),
+                findings_reviewed: Some(true),
+                auto_start_if_prepared: None,
+                integrate_if_ready: None,
+                allow_unverified: None,
+                integration_strategy: None,
+                cleanup_after: None,
+            },
+        );
+        let data = result.data.expect("finish guidance");
+
+        assert_eq!(result.status, ActionStatus::Skipped);
+        assert!(result
+            .next_action
+            .as_deref()
+            .expect("next action")
+            .contains("complete_backlog_item"));
+        assert!(data
+            .host_action
+            .next_tools
+            .contains(&"complete_backlog_item".to_string()));
+    }
+
+    #[test]
+    fn prepare_work_prepares_manual_handoff_without_local_worker_config() {
         let project = backlog_project(false);
         init_git(project.path());
         write_item(
@@ -949,6 +1679,7 @@ mod tests {
             "general",
             &["src/lib.rs"],
         );
+        write_plan(project.path(), "PROJ-001", "src/lib.rs");
         git(project.path(), &["add", "--all"]);
         git(project.path(), &["commit", "-m", "Add standard backlog"]);
 
@@ -961,10 +1692,11 @@ mod tests {
                 worker: Some("coder".to_string()),
                 claimant: Some("host".to_string()),
                 execution_mode: None,
-                require_task_plan: Some(false),
+                require_task_plan: Some(true),
                 require_planning_approval: None,
                 auto_commit_artifacts: None,
                 verification_command: Vec::new(),
+                include_queue_snapshot: None,
             },
         );
         let data = result.data.expect("prepare data");
@@ -999,6 +1731,7 @@ mod tests {
             "general",
             &["src/second.rs"],
         );
+        write_plan(project.path(), "PROJ-002", "src/second.rs");
         git(project.path(), &["add", "--all"]);
         git(project.path(), &["commit", "-m", "Add standard backlog"]);
 
@@ -1011,10 +1744,11 @@ mod tests {
                 worker: Some("coder".to_string()),
                 claimant: Some("host".to_string()),
                 execution_mode: None,
-                require_task_plan: Some(false),
+                require_task_plan: Some(true),
                 require_planning_approval: None,
                 auto_commit_artifacts: None,
                 verification_command: Vec::new(),
+                include_queue_snapshot: None,
             },
         );
         let action = result
@@ -1049,6 +1783,8 @@ mod tests {
             "general",
             &["src/second.rs"],
         );
+        write_plan(project.path(), "PROJ-001", "src/first.rs");
+        write_plan(project.path(), "PROJ-002", "src/second.rs");
         git(project.path(), &["add", "--all"]);
         git(project.path(), &["commit", "-m", "Add standard backlog"]);
 
@@ -1061,10 +1797,11 @@ mod tests {
                 worker: Some("coder".to_string()),
                 claimant: Some("host".to_string()),
                 execution_mode: None,
-                require_task_plan: Some(false),
+                require_task_plan: Some(true),
                 require_planning_approval: None,
                 auto_commit_artifacts: None,
                 verification_command: Vec::new(),
+                include_queue_snapshot: None,
             },
         );
         let data = result.data.expect("prepare data");
@@ -1095,10 +1832,11 @@ mod tests {
                 worker: Some("coder".to_string()),
                 claimant: Some("host".to_string()),
                 execution_mode: None,
-                require_task_plan: Some(false),
+                require_task_plan: Some(true),
                 require_planning_approval: None,
                 auto_commit_artifacts: None,
                 verification_command: Vec::new(),
+                include_queue_snapshot: None,
             },
         );
         let action = prepared
@@ -1119,6 +1857,7 @@ mod tests {
             project.path(),
             FinishWorkParams {
                 root: None,
+                item_id: None,
                 assignment_id: action.assignment_id,
                 task_id: action.task_id,
                 status: None,
@@ -1163,25 +1902,16 @@ mod tests {
             "general",
             &["src/lib.rs"],
         );
+        write_plan(project.path(), "PROJ-001", "src/lib.rs");
         git(project.path(), &["add", "--all"]);
         git(project.path(), &["commit", "-m", "Initial project"]);
         project
     }
 
-    fn backlog_project(with_profiles: bool) -> TempDir {
+    fn backlog_project(with_config: bool) -> TempDir {
         let project = TempDir::new().expect("temp dir");
-        if with_profiles {
-            fs::write(
-                project.path().join("platy.yaml"),
-                r#"agents:
-  profiles:
-    coder:
-      role: worker
-      harness: codex
-      executable: git
-"#,
-            )
-            .expect("profiles");
+        if with_config {
+            fs::write(project.path().join("platy.yaml"), "project: test\n").expect("config");
         }
         fs::create_dir_all(project.path().join("backlog/items")).expect("items");
         fs::create_dir_all(project.path().join("backlog/epics")).expect("epics");
@@ -1215,6 +1945,11 @@ area: general
             .map(|surface| format!("- {surface}"))
             .collect::<Vec<_>>()
             .join("\n");
+        let execution_policy = if item_type == "docs" {
+            String::new()
+        } else {
+            "execution_path: worker_handoff\nplanning_gate: task_plan\n".to_string()
+        };
         fs::write(
             root.join("backlog/items").join(format!("{id}.md")),
             format!(
@@ -1226,9 +1961,9 @@ type: {item_type}
 area: {area}
 epic: general
 depends_on: []
-suggested_worker: coder
 owned_surfaces:
 {surfaces}
+{execution_policy}
 ---
 
 # {id} {title}
@@ -1248,6 +1983,42 @@ Keep the change scoped to owned surfaces.
             ),
         )
         .expect("item");
+    }
+
+    fn write_plan(root: &Path, item_id: &str, surface: &str) {
+        fs::create_dir_all(root.join("backlog/plans")).expect("plans");
+        fs::write(
+            root.join("backlog/plans").join(format!("{item_id}.yaml")),
+            format!(
+                r#"item_id: {item_id}
+version: 1
+mode: standard
+requirements:
+  - id: R1
+    text: Deliver the requested work.
+design:
+  summary: Focused implementation.
+  owned_surfaces:
+    - {surface}
+  notes: null
+tasks:
+  - id: {item_id}-T001
+    title: Implement {item_id}
+    goal: Complete the requested work.
+    requirement_refs:
+      - R1
+    depends_on: []
+    owned_surfaces:
+      - {surface}
+    verification:
+      - make check
+    acceptance:
+      - The work is implemented and verified.
+    notes: null
+"#,
+            ),
+        )
+        .expect("plan");
     }
 
     fn init_git(root: &Path) {

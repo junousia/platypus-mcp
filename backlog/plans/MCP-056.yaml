@@ -30,7 +30,6 @@ tasks:
   - src/bootstrap
   - src/project/init.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test bootstrap
   acceptance:
@@ -49,7 +48,6 @@ tasks:
   - docs/install.md
   - docs/workflow.md
   - README.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

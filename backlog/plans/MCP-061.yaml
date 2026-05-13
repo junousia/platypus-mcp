@@ -16,7 +16,7 @@ design:
   - docs/tools.md
   - src/host_guidance.rs
   - tests
-  notes: Do not add runtime state to backlog items and do not introduce sampling for field generation.
+  notes: Do not add runtime state to backlog items and do not introduce pseudo-intelligent field generation.
 tasks:
 - id: MCP-061-T01
   title: Add deterministic minimal-field normalization
@@ -29,7 +29,6 @@ tasks:
   owned_surfaces:
   - src/backlog/create.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test backlog::tests::create_backlog_item
   acceptance:
@@ -48,7 +47,6 @@ tasks:
   owned_surfaces:
   - docs/tools.md
   - src/host_guidance.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

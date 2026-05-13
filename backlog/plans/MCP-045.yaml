@@ -29,7 +29,6 @@ tasks:
   owned_surfaces:
   - src/state
   - src/assignments
-  suggested_worker: coder
   verification:
   - cargo test state::sqlite
   - cargo test assignments::tests
@@ -51,7 +50,6 @@ tasks:
   - src/tasks.rs
   - src/assignments
   - src/runner.rs
-  suggested_worker: coder
   verification:
   - cargo test stdio_server_dispatches_next_work_without_running_worker
   - cargo test stdio_server_guides_friendly_worker_assignment_lifecycle
@@ -73,7 +71,6 @@ tasks:
   owned_surfaces:
   - src/state
   - tests/stdio_protocol.rs
-  suggested_worker: coder
   verification:
   - make check
   acceptance:

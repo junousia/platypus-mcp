@@ -19,7 +19,7 @@ design:
   - docs/workflow.md
   - README.md
   - tests
-  notes: Do not depend on sampling or any host-specific hidden context behavior.
+  notes: Do not depend on host-specific hidden context behavior.
 tasks:
 - id: MCP-073-T001
   title: Add tool preload guidance resource
@@ -31,7 +31,6 @@ tasks:
   owned_surfaces:
   - src/host_guidance.rs
   - tests/stdio_protocol.rs
-  suggested_worker: coder
   verification:
   - cargo test --test stdio_protocol stdio_server_lists_and_reads_host_guidance_resources
   - cargo test --test stdio_protocol stdio_server_lists_and_returns_host_guidance_prompts
@@ -53,7 +52,6 @@ tasks:
   owned_surfaces:
   - src/project/init.rs
   - tests
-  suggested_worker: coder
   verification:
   - cargo test project::init::tests::init_project_creates_missing_scaffold
   acceptance:
@@ -73,7 +71,6 @@ tasks:
   - docs/tools.md
   - docs/workflow.md
   - README.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -81,4 +78,4 @@ tasks:
   - Workflow docs explain that preload support is optional.
   - README points users to the preload guidance for deferred tool schemas.
   notes:
-  - Avoid implying sampling is required.
+  - Avoid implying host-specific hidden behavior is required.

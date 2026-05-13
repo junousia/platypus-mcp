@@ -3,7 +3,7 @@ use super::{
     parse::{parse_backlog_item, parse_epic},
     types::{
         BacklogValidation, ParsedBacklogItem, REQUIRED_SECTIONS, VALID_EPIC_STATUSES,
-        VALID_PRIORITIES, VALID_TYPES,
+        VALID_EXECUTION_PATHS, VALID_PLANNING_GATES, VALID_PRIORITIES, VALID_TYPES,
     },
 };
 use crate::models::{ActionResult, BacklogValidationData};
@@ -43,6 +43,7 @@ pub fn validate_backlog(
                 "Commit backlog artifacts before dispatching work if this validation followed writes."
                     .to_string(),
             ),
+            recovery_action: None,
             data: Some(data),
             error: None,
         }
@@ -55,6 +56,7 @@ pub fn validate_backlog(
                 validation.errors.len()
             ),
             next_action: Some("Fix backlog frontmatter, sections, or dependencies.".to_string()),
+            recovery_action: None,
             data: Some(data),
             error: Some(validation.errors.join("\n")),
         }
@@ -210,6 +212,26 @@ fn validate_item_shape(
             VALID_TYPES.join(", ")
         ));
     }
+    if let Some(execution_path) = &frontmatter.execution_path {
+        if !VALID_EXECUTION_PATHS.contains(&execution_path.as_str()) {
+            errors.push(format!(
+                "{}: invalid execution_path `{}`; expected one of: {}",
+                path.display(),
+                execution_path,
+                VALID_EXECUTION_PATHS.join(", ")
+            ));
+        }
+    }
+    if let Some(planning_gate) = &frontmatter.planning_gate {
+        if !VALID_PLANNING_GATES.contains(&planning_gate.as_str()) {
+            errors.push(format!(
+                "{}: invalid planning_gate `{}`; expected one of: {}",
+                path.display(),
+                planning_gate,
+                VALID_PLANNING_GATES.join(", ")
+            ));
+        }
+    }
     if !epic_ids.is_empty() && !epic_ids.contains(&frontmatter.epic) {
         errors.push(format!(
             "{}: unknown epic `{}`",
@@ -294,12 +316,12 @@ mod tests {
         .expect("epic");
         fs::write(
             project.path().join("backlog/items/WEB-2.md"),
-            "---\nid: WEB-2\ntitle: Bad\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nsuggested_worker: coder\nowned_surfaces: []\n---\n\n# Bad\n\n## Goal\n\nBad.\n\n## Implementation Contract\n\nBad.\n\n## Acceptance\n\n- Bad.\n",
+            "---\nid: WEB-2\ntitle: Bad\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nowned_surfaces: []\n---\n\n# Bad\n\n## Goal\n\nBad.\n\n## Implementation Contract\n\nBad.\n\n## Acceptance\n\n- Bad.\n",
         )
         .expect("item");
         fs::write(
             project.path().join("backlog/items/WRONG-NAME.md"),
-            "---\nid: PROJ-002\ntitle: Mismatch\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nsuggested_worker: coder\nowned_surfaces: []\n---\n\n# Mismatch\n\n## Goal\n\nMismatch.\n\n## Implementation Contract\n\nMismatch.\n\n## Acceptance\n\n- Mismatch.\n",
+            "---\nid: PROJ-002\ntitle: Mismatch\npriority: P1\ntype: feature\narea: general\nepic: general\ndepends_on: []\nowned_surfaces: []\n---\n\n# Mismatch\n\n## Goal\n\nMismatch.\n\n## Implementation Contract\n\nMismatch.\n\n## Acceptance\n\n- Mismatch.\n",
         )
         .expect("mismatch item");
 

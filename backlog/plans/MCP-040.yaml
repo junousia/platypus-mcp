@@ -27,7 +27,6 @@ tasks:
   owned_surfaces:
   - README.md
   - docs/install.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
@@ -45,7 +44,6 @@ tasks:
   owned_surfaces:
   - Makefile
   - docs/tools.md
-  suggested_worker: coder
   verification:
   - make check
   acceptance:
