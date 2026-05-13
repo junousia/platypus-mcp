@@ -456,6 +456,53 @@ async fn stdio_server_returns_contextual_validation_next_actions() -> anyhow::Re
         }),
     )
     .await?;
+    let blocked_worker = call_tool_json(&client, "validate_backlog", json!({})).await?;
+    assert_stage_status(
+        "validate_backlog blocked worker",
+        &blocked_worker,
+        "completed",
+    );
+    let blocked_worker_next = blocked_worker["next_action"]
+        .as_str()
+        .expect("blocked worker next");
+    assert!(blocked_worker_next.contains("need valid task plans"));
+    assert!(blocked_worker_next.contains("Direct-ready"));
+    assert!(!blocked_worker_next.contains("commit_planning_artifacts"));
+
+    call_tool_json(
+        &client,
+        "write_task_plan",
+        json!({
+            "item_id": "PROJ-002",
+            "plan": {
+                "item_id": "PROJ-002",
+                "version": 1,
+                "mode": "standard",
+                "requirements": [
+                    { "id": "R1", "text": "Deliver the worker backlog item." }
+                ],
+                "design": {
+                    "summary": "Implement a focused worker fixture slice.",
+                    "owned_surfaces": ["src/lib.rs"],
+                    "notes": null
+                },
+                "tasks": [
+                    {
+                        "id": "PROJ-002-T001",
+                        "title": "Implement worker fixture",
+                        "goal": "Complete the worker fixture behavior.",
+                        "requirement_refs": ["R1"],
+                        "depends_on": [],
+                        "owned_surfaces": ["src/lib.rs"],
+                        "verification": ["make check"],
+                        "acceptance": ["Worker backlog item acceptance is satisfied."],
+                        "notes": null
+                    }
+                ]
+            }
+        }),
+    )
+    .await?;
     let mixed = call_tool_json(&client, "validate_backlog", json!({})).await?;
     assert_stage_status("validate_backlog mixed", &mixed, "completed");
     let mixed_next = mixed["next_action"].as_str().expect("mixed next");

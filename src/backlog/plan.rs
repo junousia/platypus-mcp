@@ -335,6 +335,10 @@ fn validate_plans_at_root(root: &Path, item_id: Option<&str>) -> Vec<String> {
     errors
 }
 
+pub(super) fn task_plan_ready_at_root(root: &Path, item_id: &str) -> bool {
+    validate_plans_at_root(root, Some(item_id)).is_empty()
+}
+
 fn validate_plan_with_backlog(root: &Path, plan: &TaskPlanFile) -> Vec<String> {
     let mut errors = validate_plan_shape(plan);
     let backlog = validate_backlog_at_root(root, true);

@@ -77,17 +77,32 @@ pub(super) fn validation_next_action(
     };
     if context.runnable_direct > 0 && context.runnable_worker > 0 {
         return format!(
-            "{artifact} validates. Direct-ready items can use prepare_work, edit the manager workspace, then complete_backlog_item. Worker-handoff items should have committed planning artifacts, or use commit_planning_artifacts, before prepare_work or dispatch_ready_work creates worktrees."
+            "{artifact} validates. Direct-ready items can use prepare_work, edit the manager workspace, then complete_backlog_item. Worker-handoff items should have committed planning artifacts, or use commit_planning_artifacts, before prepare_work or dispatch_ready_work creates worktrees.{}",
+            gated_suffix(&context)
         );
     }
     if context.runnable_worker > 0 {
         return format!(
-            "{artifact} validates. Commit planning artifacts or run commit_planning_artifacts before prepare_work or dispatch_ready_work so worker worktrees receive the reviewed plan."
+            "{artifact} validates. Commit planning artifacts or run commit_planning_artifacts before prepare_work or dispatch_ready_work so worker worktrees receive the reviewed plan.{}",
+            gated_suffix(&context)
         );
     }
     if context.runnable_direct > 0 {
         return format!(
-            "{artifact} validates. Direct-ready work can proceed with prepare_work, manager-workspace edits, and complete_backlog_item; committing first is optional unless your workflow requires a checkpoint."
+            "{artifact} validates. Direct-ready work can proceed with prepare_work, manager-workspace edits, and complete_backlog_item; committing first is optional unless your workflow requires a checkpoint.{}",
+            gated_suffix(&context)
+        );
+    }
+    if context.planning_blocked > 0 {
+        return format!(
+            "{artifact} validates. {} item(s) still need valid task plans before prepare_work or dispatch_ready_work can continue; call write_task_plan or validate_task_plan for the blocked item.",
+            context.planning_blocked
+        );
+    }
+    if context.approval_blocked > 0 {
+        return format!(
+            "{artifact} validates. {} item(s) still need planning approval before prepare_work or dispatch_ready_work can continue; call request_planning_approval and approve it before dispatch.",
+            context.approval_blocked
         );
     }
     if context.dependency_blocked > 0 {
@@ -110,8 +125,31 @@ struct ValidationQueueContext {
     total_items: usize,
     open_items: usize,
     dependency_blocked: usize,
+    planning_blocked: usize,
+    approval_blocked: usize,
     runnable_direct: usize,
     runnable_worker: usize,
+}
+
+fn gated_suffix(context: &ValidationQueueContext) -> String {
+    let mut messages = Vec::new();
+    if context.planning_blocked > 0 {
+        messages.push(format!(
+            "{} item(s) still need valid task plans",
+            context.planning_blocked
+        ));
+    }
+    if context.approval_blocked > 0 {
+        messages.push(format!(
+            "{} item(s) still need planning approval",
+            context.approval_blocked
+        ));
+    }
+    if messages.is_empty() {
+        String::new()
+    } else {
+        format!(" Also note: {}.", messages.join("; "))
+    }
 }
 
 fn validation_queue_context(
@@ -145,6 +183,19 @@ fn validation_queue_context(
             item.frontmatter.execution_path.as_deref(),
             item.frontmatter.planning_gate.as_deref(),
         );
+        if crate::execution_policy::plan_required(&policy.planning_gate)
+            && !super::plan::task_plan_ready_at_root(root, &item.frontmatter.id)
+        {
+            context.planning_blocked += 1;
+            continue;
+        }
+        if crate::execution_policy::approval_required(&policy.planning_gate)
+            && !crate::approvals::planning_approval_is_approved(root, None, &item.frontmatter.id)
+                .unwrap_or(false)
+        {
+            context.approval_blocked += 1;
+            continue;
+        }
         if policy.execution_path == crate::execution_policy::WORKER_HANDOFF {
             context.runnable_worker += 1;
         } else {
