@@ -1068,7 +1068,7 @@ impl PlatypusMcp {
 
     #[tool(
         title = "Inspect Integration Gates",
-        description = "Read-only integration recovery preflight for one task. Reports the lifecycle, worktree, verification evidence, required findings, manager Git cleanliness, branch, and merge gates that block or allow integrate_worker_result.",
+        description = "Read-only integration recovery preflight for one completed worker task/worktree. Reports the lifecycle, worktree, verification evidence, required findings, manager Git cleanliness, branch, and merge gates that block or allow integrate_worker_result. Direct manager-workspace backlog items do not use this tool; complete them with complete_backlog_item.",
         annotations(
             title = "Inspect Integration Gates",
             read_only_hint = true,
@@ -1828,6 +1828,45 @@ mod tests {
     }
 
     #[test]
+    fn active_guidance_uses_available_tool_names_and_published_aliases() {
+        let server = PlatypusMcp::new();
+        let names = server.tool_names();
+
+        for preferred in [
+            "inspect_status",
+            "inspect_worktree_changes",
+            "prepare_work",
+            "start_worker_task",
+            "record_worker_progress",
+            "finish_work",
+        ] {
+            assert!(
+                names.contains(preferred),
+                "missing preferred tool {preferred}"
+            );
+        }
+
+        for alias in [
+            "project_status",
+            "worktree_diff",
+            "start_worker_execution",
+            "record_worker_event",
+            "complete_worker_task",
+            "complete_worker_execution",
+        ] {
+            assert!(names.contains(alias), "missing documented alias {alias}");
+        }
+
+        let guidance = host_guidance::GUIDANCE
+            .iter()
+            .map(|entry| entry.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(guidance.contains("Tool Naming Map"));
+        assert!(!guidance.contains("draft_task_plan"));
+    }
+
+    #[test]
     fn tools_expose_schema_annotations_and_execution_hints() {
         let server = PlatypusMcp::new();
         let tools = server.tool_router.list_all();
@@ -1938,6 +1977,7 @@ mod tests {
         assert!(gates.contains("verification evidence"));
         assert!(gates.contains("required findings"));
         assert!(gates.contains("integrate_worker_result"));
+        assert!(gates.contains("Direct manager-workspace backlog items do not use this tool"));
 
         let reconcile = tool_description(&tools, "reconcile_project");
         for expected in [

@@ -848,8 +848,11 @@ pub fn inspect_integration_gates(
                 "blocked",
                 true,
                 format!("Task `{task_id}` was not found."),
-                Some("dispatch_ready_work"),
-                Some("Dispatch backlog work before inspecting integration gates.".to_string()),
+                Some("inspect_work_queue"),
+                Some(
+                    "inspect_integration_gates expects a worker task id, not a backlog item id. For direct manager-workspace work, use inspect_item or inspect_work_queue, then complete_backlog_item."
+                        .to_string(),
+                ),
             ));
             None
         }
@@ -2856,6 +2859,35 @@ mod tests {
             .gates
             .iter()
             .any(|gate| gate.name == "branch_changes" && !gate.blocking));
+    }
+
+    #[test]
+    fn integration_gates_for_missing_task_point_to_direct_work_recovery() {
+        let project = git_project();
+
+        let result = inspect_integration_gates(
+            project.path(),
+            InspectIntegrationGatesParams {
+                root: None,
+                task_id: "PROJ-001".to_string(),
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let data = result.data.expect("gate data");
+        assert!(!data.ok);
+        let lifecycle = data
+            .gates
+            .iter()
+            .find(|gate| gate.name == "task_lifecycle")
+            .expect("task lifecycle gate");
+        assert_eq!(
+            lifecycle.recommended_tool.as_deref(),
+            Some("inspect_work_queue")
+        );
+        let next = lifecycle.next_action.as_deref().expect("next action");
+        assert!(next.contains("expects a worker task id"));
+        assert!(next.contains("complete_backlog_item"));
     }
 
     #[test]

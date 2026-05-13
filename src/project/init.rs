@@ -246,7 +246,7 @@ state from chat history.
 | `approval_blocked` | `inspect_work_queue` | `queue_state == "approval_blocked"` | call `request_planning_approval`, then `approval_respond` | planning approval is recorded |
 | `config_blocked` | `inspect_work_queue` | `queue_state == "config_blocked"` | call `doctor_snapshot` and follow the reported recovery action | setup blocker is resolved |
 | `workspace_blocked` | `inspect_work_queue` | `queue_state == "workspace_blocked"` | commit, stash, or finish current manager-workspace changes | worker dispatch can safely create a worktree |
-| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | call `prepare_work`, edit the manager workspace, then call `complete_backlog_item` | direct completion evidence or closure commit exists |
+| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | optionally call `prepare_work` for guidance, or edit the manager workspace directly, then call `complete_backlog_item` | direct completion evidence or closure commit exists |
 | `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` for one item or `dispatch_ready_work` for a batch | `run_in_worktree` handoff exists |
 | `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree; call `finish_work` | `finish_work.host_action` is returned |
 | `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` | work is integrated or a specific blocker is reported |
@@ -276,10 +276,12 @@ stale.
 
 Minimum viable direct-edit loop for tiny, user-approved work:
 `inspect_session`, `inspect_queue_status` or `inspect_work_queue`,
-`prepare_work`, edit the manager workspace, run relevant verification, then
-`complete_backlog_item`. This keeps a durable completion record while avoiding
-worktree overhead. Use task plans, worker handoff, findings, and integration
-gates for long-lived or parallel product development.
+edit the manager workspace, run relevant verification, then
+`complete_backlog_item`. When `inspect_work_queue.items[].prepare_work_optional`
+is true, `prepare_work` is optional and only returns response-local guidance.
+This keeps a durable completion record while avoiding worktree overhead. Use
+task plans, worker handoff, findings, and integration gates for long-lived or
+parallel product development.
 
 ## State Rules
 
@@ -323,7 +325,7 @@ Use the Platypus MCP tools to keep planning reproducible:
 - `inspect_session` can replace separate startup detector calls when the
   session snapshot is fresh.
 - Tiny direct edits may use the minimum loop:
-  `inspect_session`, queue inspection, `prepare_work`, edit, verify, and
+  `inspect_session`, queue inspection, edit, verify, and
   `complete_backlog_item`.
 
 Do not manually maintain queue indexes or runtime status in markdown. Queue
@@ -365,7 +367,7 @@ history.
 | `approval_blocked` | `inspect_work_queue` | `queue_state == "approval_blocked"` | call `request_planning_approval`, then `approval_respond` |
 | `config_blocked` | `inspect_work_queue` | `queue_state == "config_blocked"` | call `doctor_snapshot` and follow the reported recovery action |
 | `workspace_blocked` | `inspect_work_queue` | `queue_state == "workspace_blocked"` | commit, stash, or finish current manager-workspace changes |
-| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | call `prepare_work`; treat the direct action as response-local guidance, edit manager workspace, then `complete_backlog_item` |
+| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | optionally call `prepare_work`; edit manager workspace, then `complete_backlog_item` |
 | `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` or `dispatch_ready_work` |
 | `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree, then `finish_work` |
 | `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` |
@@ -395,10 +397,12 @@ stale.
 
 Minimum viable direct-edit loop for tiny, user-approved work:
 `inspect_session`, `inspect_queue_status` or `inspect_work_queue`,
-`prepare_work`, edit the manager workspace, run relevant verification, then
-`complete_backlog_item`. This keeps a durable completion record while avoiding
-worktree overhead. Use task plans, worker handoff, findings, and integration
-gates for long-lived or parallel product development.
+edit the manager workspace, run relevant verification, then
+`complete_backlog_item`. When `inspect_work_queue.items[].prepare_work_optional`
+is true, `prepare_work` is optional and only returns response-local guidance.
+This keeps a durable completion record while avoiding worktree overhead. Use
+task plans, worker handoff, findings, and integration gates for long-lived or
+parallel product development.
 
 ## Tool Preload
 
@@ -447,15 +451,30 @@ schema is deferred, for example `select:mcp__platypus__inspect_session`. The
 part of the Platypus tool name.
 
 Direct quick path: load Startup Inspection, call `inspect_session`, load Direct
-Execution, call `prepare_work`, edit the manager workspace, then call
-`complete_backlog_item`.
+Execution, inspect for `direct_ready`, edit the manager workspace, then call
+`complete_backlog_item`. Call `prepare_work` first only when response-local
+guidance is useful.
 
 Alias and deprecation expectations: use `create_backlog_items` for atomic
 batches, `quick_create_backlog_item` only for simple single-item shorthand,
 `contract` only as an alias for `implementation_contract`, and `prepare_work`
-for normal direct or worker handoff preparation. Do not search for removed
-planning helpers such as `draft_task_plan`, and do not put worker-profile
-fields in backlog items.
+for optional direct guidance or worker handoff preparation. Do not put
+worker-profile fields in backlog items.
+
+## Tool Naming Map
+
+Prefer these host-facing tool names. Compatibility aliases remain callable, but
+guidance should use the preferred name unless it is explicitly documenting an
+alias.
+
+- `inspect_status`; alias `project_status`.
+- `inspect_worktree_changes`; low-level alias `worktree_diff`.
+- `prepare_work`; low-level handoff tools `prepare_worker_handoff` and
+  `prepare_worker_assignment`.
+- `start_worker_task`; alias `start_worker_execution`.
+- `record_worker_progress`; alias `record_worker_event`.
+- `finish_work`; low-level `complete_worker_task` and alias
+  `complete_worker_execution`.
 
 ## Rules
 
@@ -549,8 +568,10 @@ mod tests {
         assert!(agents.contains("contract` only as an alias"));
         assert!(agents.contains("worker-profile"));
         assert!(agents.contains("Minimum viable direct-edit loop"));
+        assert!(agents.contains("prepare_work_optional"));
+        assert!(agents.contains("Tool Naming Map"));
         assert!(agents.contains("write_task_plan"));
-        assert!(agents.contains("draft_task_plan"));
+        assert!(!agents.contains("draft_task_plan"));
         assert!(agents.contains("Tool Preload"));
         assert!(agents.contains("Startup Inspection Group"));
         assert!(agents.contains("Backlog Planning Group"));
@@ -585,8 +606,10 @@ mod tests {
         assert!(claude.contains("contract` only as an alias"));
         assert!(claude.contains("worker-profile"));
         assert!(claude.contains("Minimum viable direct-edit loop"));
+        assert!(claude.contains("prepare_work_optional"));
+        assert!(claude.contains("Tool Naming Map"));
         assert!(claude.contains("write_task_plan"));
-        assert!(claude.contains("draft_task_plan"));
+        assert!(!claude.contains("draft_task_plan"));
         assert!(claude.contains("Tool Preload"));
         assert!(claude.contains("Startup Inspection Group"));
         assert!(claude.contains("Backlog Planning Group"));

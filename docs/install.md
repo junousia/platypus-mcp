@@ -103,9 +103,11 @@ Claude Code can load deferred schemas with ToolSearch selectors such as
 `select:mcp__platypus__inspect_session`; the prefix comes from the configured
 MCP server name.
 
-The direct-work quick path is `inspect_session` -> `prepare_work` -> host file
-edits -> `complete_backlog_item`. Use worker handoff only when the backlog item
-or workflow policy says `execution_path=worker_handoff`.
+The direct-work quick path is `inspect_session` -> queue inspection -> host
+file edits -> `complete_backlog_item`. When queue output says
+`prepare_work_optional=true`, `prepare_work` is optional and only returns
+response-local guidance. Use worker handoff only when the backlog item or
+workflow policy says `execution_path=worker_handoff`.
 
 ## Codex
 

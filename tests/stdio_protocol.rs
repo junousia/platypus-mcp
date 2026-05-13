@@ -667,6 +667,7 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("create_backlog_items"));
     assert!(text.contains("write_task_plan"));
     assert!(text.contains("Minimum viable direct-edit loop"));
+    assert!(text.contains("prepare_work_optional"));
     assert!(text.contains("traceability tradeoff"));
     assert!(text.contains("optional audit/recovery"));
 
@@ -688,7 +689,8 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("select:mcp__platypus__inspect_session"));
     assert!(text.contains("Direct Execution"));
     assert!(text.contains("quick_create_backlog_item"));
-    assert!(text.contains("draft_task_plan"));
+    assert!(!text.contains("draft_task_plan"));
+    assert!(text.contains("Tool Naming Map"));
     assert!(text.contains("host-specific"));
     assert!(text.contains("create_backlog_items"));
     assert!(text.contains("dispatch_ready_work"));
@@ -2950,6 +2952,17 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
     assert_stage_status("create_backlog_item", &created, "completed");
     git(project.path(), &["add", "--all"]);
     git(project.path(), &["commit", "-m", "Initialize direct work"]);
+
+    let direct_queue = call_tool_json(&client, "inspect_work_queue", json!({})).await?;
+    assert_stage_status("inspect_work_queue direct", &direct_queue, "completed");
+    assert_eq!(
+        direct_queue["data"]["items"][0]["queue_state"],
+        "direct_ready"
+    );
+    assert_eq!(
+        direct_queue["data"]["items"][0]["prepare_work_optional"],
+        true
+    );
 
     let prepared = call_tool_json(
         &client,

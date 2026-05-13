@@ -147,7 +147,7 @@ smoke: ## Invoke inspect_status through the stdio tool helper.
 	$(CARGO) run -- tool --root "$(ROOT)" inspect_status '{"limit":5}'
 
 smoke-queue: ## Invoke inspect_work_queue through the stdio tool helper.
-	$(CARGO) run -- tool --root "$(ROOT)" inspect_work_queue '{"limit":5,"require_task_plan":true}'
+	$(CARGO) run -- tool --root "$(ROOT)" inspect_work_queue '{"limit":5}'
 
 smoke-storage: ## Probe storage backend capabilities through MCP.
 	$(CARGO) run -- tool --root "$(ROOT)" storage_capability_probe '{}'

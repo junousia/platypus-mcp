@@ -61,13 +61,28 @@ Platypus docs and tool arguments. Codex and opencode expose the same tool
 schemas through their own MCP discovery UI.
 
 Direct quick path: read the startup guidance, call `inspect_session`, load the
-Direct Execution group, call `prepare_work`, edit the manager workspace, then
-call `complete_backlog_item`.
+Direct Execution group, inspect for `direct_ready`, edit the manager
+workspace, then call `complete_backlog_item`. Call `prepare_work` first only
+when response-local guidance is useful.
 
 Alias and deprecation expectations: `contract` is only an alias for
 `implementation_contract`, `quick_create_backlog_item` is shorthand for simple
-single-item creation, `create_backlog_items` is the atomic batch path, and
-removed helpers such as `draft_task_plan` should not be searched for.
+single-item creation, and `create_backlog_items` is the atomic batch path.
+
+## Tool Naming Map
+
+Prefer these host-facing tool names. Compatibility aliases remain callable, but
+guidance should use the preferred name unless it is explicitly documenting an
+alias.
+
+- `inspect_status`; alias `project_status`.
+- `inspect_worktree_changes`; low-level alias `worktree_diff`.
+- `prepare_work`; low-level handoff tools `prepare_worker_handoff` and
+  `prepare_worker_assignment`.
+- `start_worker_task`; alias `start_worker_execution`.
+- `record_worker_progress`; alias `record_worker_event`.
+- `finish_work`; low-level `complete_worker_task` and alias
+  `complete_worker_execution`.
 
 ## Recommended Host Flow
 
@@ -371,11 +386,12 @@ trailers.
 - `worktree_diff` / `inspect_worktree_changes`: inspect bounded worktree
   changes.
 - `worktree_cleanup`: remove a clean or explicitly forced task worktree.
-- `inspect_integration_gates`: read-only preflight for one task. It reports the
-  lifecycle, worktree, manager workspace cleanliness, verification evidence,
-  required findings, branch, and merge gates that decide whether
-  `integrate_worker_result` can run. It does not mutate task, Git, or worktree
-  state.
+- `inspect_integration_gates`: read-only preflight for one completed worker
+  task/worktree. It reports the lifecycle, worktree, manager workspace
+  cleanliness, verification evidence, required findings, branch, and merge
+  gates that decide whether `integrate_worker_result` can run. It does not
+  mutate task, Git, or worktree state. Direct manager-workspace backlog items
+  do not use this tool; complete them with `complete_backlog_item`.
 - `integrate_worker_result`: merge, fast-forward, or squash a completed
   verified task branch into the manager workspace. Integration is blocked
   while required findings for the item/task remain undispositioned. Required

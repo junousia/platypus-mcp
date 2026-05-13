@@ -180,7 +180,7 @@ git -C "$project_root" commit -q -m "Initialize $display_name feedback project"
 printf '==> Running Platypus smoke checks\n'
 (cd "$repo_root" && "$cargo_bin" run --quiet -- tool --root "$project_root" inspect_status '{"limit":5}')
 (cd "$repo_root" && "$cargo_bin" run --quiet -- tool --root "$project_root" inspect_workflow_config '{}')
-(cd "$repo_root" && "$cargo_bin" run --quiet -- tool --root "$project_root" inspect_work_queue '{"limit":5,"require_task_plan":true}')
+(cd "$repo_root" && "$cargo_bin" run --quiet -- tool --root "$project_root" inspect_work_queue '{"limit":5}')
 mkdir -p "$stdout_dir"
 if [ "$dry_run" = "1" ]; then
   printf '==> Dry run complete; %s was not invoked.\n' "$display_name"
