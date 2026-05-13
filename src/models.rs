@@ -227,8 +227,16 @@ pub enum WorkExecutionPathSchema {
 #[serde(rename_all = "snake_case")]
 pub enum PreparedStateSchema {
     NotPrepared,
-    DirectPrepared,
+    DirectGuidance,
     WorktreePrepared,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PreparationPersistenceSchema {
+    None,
+    ResponseOnly,
+    DurableTaskLifecycle,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -1837,6 +1845,13 @@ pub struct PrepareWorkData {
     /// Preparation state reached by this call.
     #[schemars(with = "PreparedStateSchema")]
     pub prepared_state: String,
+    /// Whether this preparation call persisted durable runtime state.
+    pub state_persisted: bool,
+    /// Persistence mode used by this preparation call.
+    #[schemars(with = "PreparationPersistenceSchema")]
+    pub persistence: String,
+    /// Human-readable explanation of what state was or was not persisted.
+    pub persistence_summary: String,
     /// Backlog item identifiers selected by this preparation call.
     pub selected_item_ids: Vec<String>,
     /// Number of queue items ready to dispatch before preparation.

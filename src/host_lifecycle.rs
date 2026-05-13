@@ -91,6 +91,9 @@ pub fn prepare_work(
             }],
             include_queue_snapshot,
             "not_prepared",
+            false,
+            "none",
+            "No preparation state was persisted because no ready backlog item could be selected.",
             Vec::new(),
         );
         return ActionResult {
@@ -131,7 +134,10 @@ pub fn prepare_work(
             queue,
             host_actions,
             include_queue_snapshot,
-            "direct_prepared",
+            "direct_guidance",
+            false,
+            "response_only",
+            "Direct prepare is response-local guidance only. No task, assignment, event, or worktree was created; complete_backlog_item is the next durable transition.",
             selected_item_ids,
         );
         return ActionResult {
@@ -180,6 +186,11 @@ pub fn prepare_work(
                         selected.len()
                     ),
                     prepared_state: "worktree_prepared".to_string(),
+                    state_persisted: true,
+                    persistence: "durable_task_lifecycle".to_string(),
+                    persistence_summary:
+                        "Worker handoff preparation persisted task and assignment lifecycle state."
+                            .to_string(),
                     selected_item_ids: selected.iter().map(|item| item.item_id.clone()).collect(),
                     ready_count: queue.ready_count,
                     blocked_count: queue.blocked_count,
@@ -206,6 +217,11 @@ pub fn prepare_work(
                 root: dispatch.root.clone(),
                 queue_summary: "Dispatch failed while preparing host-run work.".to_string(),
                 prepared_state: "not_prepared".to_string(),
+                state_persisted: false,
+                persistence: "none".to_string(),
+                persistence_summary:
+                    "No preparation state was persisted because worker handoff preparation failed."
+                        .to_string(),
                 selected_item_ids: selected.iter().map(|item| item.item_id.clone()).collect(),
                 ready_count: queue.ready_count,
                 blocked_count: queue.blocked_count,
@@ -829,12 +845,18 @@ fn prepare_queue_only_data(
     host_actions: Vec<HostAction>,
     include_queue_snapshot: bool,
     prepared_state: &str,
+    state_persisted: bool,
+    persistence: &str,
+    persistence_summary: &str,
     selected_item_ids: Vec<String>,
 ) -> PrepareWorkData {
     PrepareWorkData {
         root: queue.root.clone(),
         queue_summary: queue.summary.clone(),
         prepared_state: prepared_state.to_string(),
+        state_persisted,
+        persistence: persistence.to_string(),
+        persistence_summary: persistence_summary.to_string(),
         selected_item_ids,
         ready_count: queue.ready_count,
         blocked_count: queue.blocked_count,
@@ -879,6 +901,7 @@ fn direct_host_action(
 ) -> HostAction {
     let mut instructions = vec![
         format!("Implement `{}` directly in the manager workspace when the user wants a lightweight scaffold or direct edit.", item.title),
+        "This prepare_work result is response-local guidance; it does not persist a direct-prepared marker.".to_string(),
         "No worker process was launched.".to_string(),
         "No task assignment was created.".to_string(),
         "No Git worktree was created; the manager workspace is the expected target.".to_string(),
@@ -1549,10 +1572,35 @@ mod tests {
             .instructions
             .iter()
             .any(|instruction| instruction.contains("No Git worktree was created")));
+        assert!(data.host_actions[0]
+            .instructions
+            .iter()
+            .any(|instruction| instruction.contains("response-local guidance")));
         assert!(data.dispatch.is_none());
-        assert_eq!(data.prepared_state, "direct_prepared");
+        assert_eq!(data.prepared_state, "direct_guidance");
+        assert_eq!(data.state_persisted, false);
+        assert_eq!(data.persistence, "response_only");
+        assert!(data.persistence_summary.contains("No task"));
         assert_eq!(data.selected_item_ids, vec!["PROJ-001".to_string()]);
         assert!(data.queue.is_none());
+
+        let inspected = crate::guidance::inspect_work_queue(
+            project.path(),
+            crate::models::InspectWorkQueueParams {
+                root: None,
+                limit: Some(5),
+                require_task_plan: Some(false),
+                require_planning_approval: None,
+            },
+        );
+        let inspected = inspected.data.expect("queue");
+        assert_eq!(inspected.items[0].queue_state, "direct_ready");
+        assert!(inspected.items[0]
+            .execution_guidance
+            .contains("response-local"));
+        assert!(inspected.items[0]
+            .execution_guidance
+            .contains("complete_backlog_item"));
 
         let verbose = prepare_work(
             project.path(),

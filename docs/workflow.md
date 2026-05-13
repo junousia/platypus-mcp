@@ -256,7 +256,8 @@ created without an approved planning gate.
    resolves to the same host-managed handoff path.
 6. For normal execution, call `prepare_work`; it either returns `direct_edit`
    guidance or prepares an assignment, worktree, and bundle for host-run worker
-   execution. Direct work creates no task, assignment, or worktree.
+   execution. Direct work creates no task, assignment, worktree, or durable
+   prepared marker; `complete_backlog_item` is the next persisted transition.
 7. For lower-level batch dispatch, call `dispatch_ready_work`; it only accepts
    items whose effective policy is `execution_path=worker_handoff` and whose
    planning gates are satisfied. It dispatches one or more runnable worker
@@ -270,9 +271,12 @@ created without an approved planning gate.
    running transition.
 
 For direct work, edit the manager workspace and finish with
-`complete_backlog_item`. It records direct completion evidence, a backlog event,
-and optionally a closure commit for explicit changed files. For worker work, the
-worker should operate in the assigned worktree, not in the manager workspace.
+`complete_backlog_item`. The `prepare_work` direct action is response-local
+guidance, so queue inspection continues to show `direct_ready` until completion
+is recorded. `complete_backlog_item` records direct completion evidence, a
+backlog event, and optionally a closure commit for explicit changed files. For
+worker work, the worker should operate in the assigned worktree, not in the
+manager workspace.
 Manual handoff is still lifecycle-tracked: after the host or external worker
 edits the worktree, call `start_worker_task` if a running transition is needed,
 then `finish_work`. Follow its `host_action` to verify, record or resolve
@@ -294,8 +298,9 @@ For same-session host-driven edits, `finish_work` can complete a
 prepared assignment directly; it auto-starts prepared assignments by default.
 Set `auto_start_if_prepared=false` when strict lifecycle enforcement is needed.
 For direct manager-workspace edits returned by `prepare_work`, do not call
-`finish_work`; call `complete_backlog_item` with item id, summary, changed
-files, verification status, and any evidence or finding references.
+`finish_work`; no direct task or assignment exists. Call `complete_backlog_item`
+with item id, summary, changed files, verification status, and any evidence or
+finding references.
 Use `inspect_integration_gates` before integration when the host needs a
 read-only explanation of remaining blockers. Required findings block only while
 they are open; `accepted`, `deferred`, `resolved`, `rejected`, and `duplicate`

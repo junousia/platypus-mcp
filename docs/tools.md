@@ -270,9 +270,10 @@ trailers.
   It inspects the queue, returns direct-edit guidance for
   `execution_path=direct_edit`, and prepares safe manual-handoff assignments
   for `execution_path=worker_handoff` once its `planning_gate` is satisfied.
-  The MCP server records state and creates worktrees; it does not launch Codex,
-  Claude, or any other worker process. For direct work, no assignment or
-  worktree is created.
+  For direct work, the returned guidance is response-local: no task,
+  assignment, event, worktree, or durable prepared marker is created. For worker
+  handoff, the MCP server records state and creates worktrees; it does not
+  launch Codex, Claude, or any other worker process.
 - `complete_backlog_item`: complete a direct host-work item without a worker
   task. It records direct completion evidence, a replayable backlog event, and
   can optionally create a closure commit for explicit `changed_files` with
