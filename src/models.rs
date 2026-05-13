@@ -229,6 +229,7 @@ pub enum PreparedStateSchema {
     NotPrepared,
     DirectGuidance,
     WorktreePrepared,
+    MixedPrepared,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -237,6 +238,7 @@ pub enum PreparationPersistenceSchema {
     None,
     ResponseOnly,
     DurableTaskLifecycle,
+    MixedResponseAndDurable,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -1918,6 +1920,10 @@ pub struct PrepareWorkData {
     pub persistence: String,
     /// Human-readable explanation of what state was or was not persisted.
     pub persistence_summary: String,
+    /// Durable tool that records the next persisted transition for the selected
+    /// work, when one exists. Direct guidance uses complete_backlog_item;
+    /// worktree handoffs use finish_work.
+    pub durable_next_tool: Option<String>,
     /// Backlog item identifiers selected by this preparation call.
     pub selected_item_ids: Vec<String>,
     /// Number of queue items ready to dispatch before preparation.

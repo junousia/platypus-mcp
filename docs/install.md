@@ -7,7 +7,7 @@ product boundary is the MCP tool contract, not a custom UI or daemon.
 
 - Rust toolchain with `cargo`
 - Git for worktree-based lifecycle tools
-- An MCP host such as Codex or Claude
+- An MCP host such as Codex, Claude, or opencode
 
 Build and verify the server from the repository root:
 
@@ -78,6 +78,35 @@ Use `ROOT=/path/to/project` to point those smoke checks at another project:
 make smoke ROOT=/path/to/project
 ```
 
+## Harness Startup
+
+After configuring Codex, Claude, opencode, or another MCP host, start each new
+project session with the same deterministic opening sequence:
+
+1. List MCP resources and prompts.
+2. Read `platypus://guidance/workflow`,
+   `platypus://guidance/project-status`, and
+   `platypus://guidance/tool-preload`, or the equivalent prompts
+   `platypus-workflow`, `platypus-project-status`, and
+   `platypus-tool-preload`.
+3. If the client supports deferred schema preloading, load the Startup
+   Inspection group first. Load Backlog Planning, Direct Execution, Worker
+   Handoff, Evidence And Findings, and Recovery only when that phase starts.
+4. Call `inspect_session`. If the client cannot use that broad snapshot, call
+   `doctor_snapshot`, `inspect_status`, `inspect_workflow_config`,
+   `inspect_queue_status`, then `inspect_work_queue` as needed.
+
+Tool schemas are delivered by the MCP client and may be deferred until a tool
+is discovered or selected. Schema preloading is a client convenience, not a
+Platypus requirement; when it is awkward, call the same tools on demand.
+Claude Code can load deferred schemas with ToolSearch selectors such as
+`select:mcp__platypus__inspect_session`; the prefix comes from the configured
+MCP server name.
+
+The direct-work quick path is `inspect_session` -> `prepare_work` -> host file
+edits -> `complete_backlog_item`. Use worker handoff only when the backlog item
+or workflow policy says `execution_path=worker_handoff`.
+
 ## Codex
 
 Use the server name `platypus` so tool calls are easy to recognize.
@@ -119,9 +148,26 @@ Claude uses the same stdio command shape:
 }
 ```
 
+## Opencode
+
+Opencode uses the bootstrap-generated `opencode.json` shape. Prefer bootstrap
+so the `$schema` and MCP server block are written consistently:
+
+```bash
+platypus-mcp bootstrap opencode --root /path/to/project
+```
+
+For a fresh project:
+
+```bash
+platypus-mcp bootstrap opencode --root /path/to/project --init-project
+```
+
 ## First Project Smoke Flow
 
-After configuring the client, ask the MCP host to:
+After configuring the client, ask the MCP host to follow the Harness Startup
+sequence above. If `inspect_session` cannot provide the detail needed for a
+smoke check, ask the host to:
 
 1. Call `doctor_snapshot`.
 2. Call `inspect_status`.

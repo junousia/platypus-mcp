@@ -170,6 +170,22 @@ pub fn prepare_work(
                 ActionStatus::Completed
             };
             let prepared = host_actions.len();
+            let contains_direct = host_actions
+                .iter()
+                .any(|action| action.kind == "direct_edit");
+            let (prepared_state, persistence, persistence_summary) = if contains_direct {
+                (
+                    "mixed_prepared",
+                    "mixed_response_and_durable",
+                    "Mixed preparation returned response-local direct guidance and persisted worker handoff task and assignment lifecycle state.",
+                )
+            } else {
+                (
+                    "worktree_prepared",
+                    "durable_task_lifecycle",
+                    "Worker handoff preparation persisted task and assignment lifecycle state.",
+                )
+            };
             ActionResult {
                 action: action.to_string(),
                 status,
@@ -185,12 +201,11 @@ pub fn prepare_work(
                         host_actions.len(),
                         selected.len()
                     ),
-                    prepared_state: "worktree_prepared".to_string(),
+                    prepared_state: prepared_state.to_string(),
                     state_persisted: true,
-                    persistence: "durable_task_lifecycle".to_string(),
-                    persistence_summary:
-                        "Worker handoff preparation persisted task and assignment lifecycle state."
-                            .to_string(),
+                    persistence: persistence.to_string(),
+                    persistence_summary: persistence_summary.to_string(),
+                    durable_next_tool: durable_next_tool_for_host_actions(&host_actions),
                     selected_item_ids: selected.iter().map(|item| item.item_id.clone()).collect(),
                     ready_count: queue.ready_count,
                     blocked_count: queue.blocked_count,
@@ -222,6 +237,7 @@ pub fn prepare_work(
                 persistence_summary:
                     "No preparation state was persisted because worker handoff preparation failed."
                         .to_string(),
+                durable_next_tool: None,
                 selected_item_ids: selected.iter().map(|item| item.item_id.clone()).collect(),
                 ready_count: queue.ready_count,
                 blocked_count: queue.blocked_count,
@@ -893,6 +909,7 @@ fn prepare_queue_only_data(
         state_persisted,
         persistence: persistence.to_string(),
         persistence_summary: persistence_summary.to_string(),
+        durable_next_tool: durable_next_tool_for_prepared_state(prepared_state),
         selected_item_ids,
         ready_count: queue.ready_count,
         blocked_count: queue.blocked_count,
@@ -938,9 +955,7 @@ fn direct_host_action(
     let mut instructions = vec![
         format!("Implement `{}` directly in the manager workspace when the user wants a lightweight scaffold or direct edit.", item.title),
         "This prepare_work result is response-local guidance; it does not persist a direct-prepared marker.".to_string(),
-        "No worker process was launched.".to_string(),
-        "No task assignment was created.".to_string(),
-        "No Git worktree was created; the manager workspace is the expected target.".to_string(),
+        "No worker process, task assignment, or Git worktree was created; the manager workspace is the expected target.".to_string(),
         "When the direct edit is done, call complete_backlog_item with item_id, summary, changed_files, verification status, and any evidence or finding references.".to_string(),
     ];
     if auto_commit_artifacts_requested {
@@ -967,6 +982,30 @@ fn direct_host_action(
             "record_finding".to_string(),
             "reconcile_project".to_string(),
         ],
+    }
+}
+
+fn durable_next_tool_for_prepared_state(prepared_state: &str) -> Option<String> {
+    match prepared_state {
+        "direct_guidance" => Some("complete_backlog_item".to_string()),
+        "worktree_prepared" => Some("finish_work".to_string()),
+        _ => None,
+    }
+}
+
+fn durable_next_tool_for_host_actions(host_actions: &[HostAction]) -> Option<String> {
+    let mut tools = host_actions
+        .iter()
+        .filter_map(|action| match action.kind.as_str() {
+            "direct_edit" => Some("complete_backlog_item"),
+            "run_in_worktree" => Some("finish_work"),
+            _ => None,
+        });
+    let first = tools.next()?;
+    if tools.all(|tool| tool == first) {
+        Some(first.to_string())
+    } else {
+        None
     }
 }
 
@@ -1656,7 +1695,8 @@ mod tests {
         assert!(data.host_actions[0]
             .instructions
             .iter()
-            .any(|instruction| instruction.contains("No Git worktree was created")));
+            .any(|instruction| instruction
+                .contains("No worker process, task assignment, or Git worktree was created")));
         assert!(data.host_actions[0]
             .instructions
             .iter()
@@ -1665,6 +1705,10 @@ mod tests {
         assert_eq!(data.prepared_state, "direct_guidance");
         assert_eq!(data.state_persisted, false);
         assert_eq!(data.persistence, "response_only");
+        assert_eq!(
+            data.durable_next_tool.as_deref(),
+            Some("complete_backlog_item")
+        );
         assert!(data.persistence_summary.contains("No task"));
         assert_eq!(data.selected_item_ids, vec!["PROJ-001".to_string()]);
         assert!(data.queue.is_none());
@@ -2074,6 +2118,71 @@ mod tests {
             item_ids,
             vec!["PROJ-001".to_string(), "PROJ-002".to_string()]
         );
+    }
+
+    #[test]
+    fn prepare_work_reports_mixed_direct_and_worker_batches_without_single_next_tool() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Document direct path",
+            "docs",
+            "docs",
+            &["README.md"],
+        );
+        write_item(
+            project.path(),
+            "PROJ-002",
+            "Build worker path",
+            "feature",
+            "general",
+            &["src/worker.rs"],
+        );
+        write_plan(project.path(), "PROJ-002", "src/worker.rs");
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add mixed backlog"]);
+
+        let result = prepare_work(
+            project.path(),
+            PrepareWorkParams {
+                root: None,
+                item_id: None,
+                max_tasks: Some(2),
+                worker: Some("coder".to_string()),
+                claimant: Some("host".to_string()),
+                execution_mode: None,
+                require_task_plan: Some(true),
+                require_planning_approval: None,
+                auto_commit_artifacts: None,
+                verification_command: Vec::new(),
+                include_queue_snapshot: None,
+            },
+        );
+        let data = result.data.expect("prepare data");
+        let kinds = data
+            .host_actions
+            .iter()
+            .map(|action| action.kind.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.prepared_state, "mixed_prepared");
+        assert_eq!(data.state_persisted, true);
+        assert_eq!(data.persistence, "mixed_response_and_durable");
+        assert_eq!(data.durable_next_tool, None);
+        assert_eq!(
+            data.selected_item_ids,
+            vec!["PROJ-001".to_string(), "PROJ-002".to_string()]
+        );
+        assert_eq!(kinds, vec!["direct_edit", "run_in_worktree"]);
+        assert!(data.host_actions[0]
+            .next_tools
+            .contains(&"complete_backlog_item".to_string()));
+        assert!(data.host_actions[1]
+            .next_tools
+            .contains(&"finish_work".to_string()));
     }
 
     #[test]

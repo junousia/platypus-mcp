@@ -66,6 +66,7 @@ state name and follow the paired tool instead of inventing a hidden lifecycle.
 | `completed_pending_integration` | queue tools | worker output is complete and waiting for integration | `inspect_integration_gates`, then `integrate_worker_result` |
 | `direct_guidance` | `prepare_work.prepared_state` | response-local direct-edit guidance; no task, assignment, event, or worktree was created | edit manager workspace and call `complete_backlog_item` |
 | `worktree_prepared` | `prepare_work.prepared_state` | durable worker handoff state exists with assignment and worktree | run the external worker, then `finish_work` |
+| `mixed_prepared` | `prepare_work.prepared_state` | one response contains response-local direct guidance plus durable worker handoff state | follow each returned `host_actions[]`; no single `durable_next_tool` is emitted |
 | `not_prepared` | `prepare_work.prepared_state` | no selected item could be prepared | follow `next_action` or inspect the queue |
 | `direct_edit` | `prepare_work.host_actions[].kind` | host should edit the manager workspace | `complete_backlog_item` |
 | `run_in_worktree` | `prepare_work.host_actions[].kind` | host or external harness should work in the assigned worktree | `finish_work` |
@@ -80,6 +81,13 @@ state name and follow the paired tool instead of inventing a hidden lifecycle.
 `inspect_work_queue` when it succeeds in a fresh session. Call the narrower
 tools after mutations, when a detailed payload is needed, or when the session
 snapshot is stale.
+
+For `prepare_work`, prefer structured routing fields over prose:
+`state_persisted=false` plus `durable_next_tool=complete_backlog_item` means
+direct guidance only, while `state_persisted=true` plus
+`durable_next_tool=finish_work` means every selected action is a worker
+handoff. If direct and worker actions are mixed, `durable_next_tool` is null;
+route each entry through `host_actions[].kind` and `host_actions[].next_tools`.
 
 Safety gates: keep runtime state in `.platy/platypus.sqlite3`, keep backlog
 markdown declarative, operate workers in task worktrees, and do not bypass
@@ -114,7 +122,7 @@ straight to broad edits. Convert the goal into a controlled loop:
    with `write_task_plan` and `validate_task_plan`.
 8. Prepare execution with `prepare_work`. Direct items may return a
    `direct_edit` host action; that direct action is response-local guidance,
-   not persisted preparation state. Complete those with
+   not persisted preparation state. Its structured `durable_next_tool` is
    `complete_backlog_item`.
    Standard/full items return a `run_in_worktree`
    action with a worker assignment bundle; the MCP server does not launch the
@@ -177,6 +185,23 @@ execution round trips.
 Preloading is optional and host-specific. If the host cannot preload schemas,
 continue normally and call the tools as needed. Do not depend on hidden client
 context for core state transitions.
+
+Claude Code uses deferred schema discovery through ToolSearch. When using
+Claude, select tools with `select:mcp__platypus__<tool>`, for example
+`select:mcp__platypus__inspect_session` or
+`select:mcp__platypus__complete_backlog_item`. The `mcp__platypus__` prefix
+comes from the MCP server name and is not part of the Platypus tool name.
+
+The direct-work quick path is: load Startup Inspection, call
+`inspect_session`, load Direct Execution, call `prepare_work`, edit the manager
+workspace, then call `complete_backlog_item`.
+
+Alias and deprecation expectations: use `create_backlog_items` for atomic
+batches, `quick_create_backlog_item` only for simple single-item shorthand,
+`contract` only as an alias for `implementation_contract`, and
+`prepare_work` for normal direct or worker handoff preparation. Do not search
+for removed planning helpers such as `draft_task_plan`, and do not include
+worker-profile fields in backlog items.
 
 ## Startup Inspection Group
 

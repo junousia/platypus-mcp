@@ -1213,7 +1213,7 @@ fn work_queue_item(
     {
         (
             "prepare_work".to_string(),
-            "Direct host work is ready; prepare_work returns response-local direct_edit guidance without persisting a prepared marker. Complete with complete_backlog_item to record the durable transition.".to_string(),
+            "Direct host work is ready; prepare_work returns direct_edit guidance with state_persisted=false and durable_next_tool=complete_backlog_item.".to_string(),
             "direct_ready".to_string(),
         )
     } else if ready_to_dispatch
@@ -1284,7 +1284,7 @@ fn execution_metadata(
             "direct_edit".to_string(),
             Some("complete_backlog_item".to_string()),
             true,
-            "Direct edit is ready from durable execution policy. prepare_work is response-local for direct work, so inspect_work_queue will continue to show direct_ready until complete_backlog_item records closure. To use a worktree handoff, set execution_path=worker_handoff on the backlog item or workflow.execution default.".to_string(),
+            "Direct edit is ready from durable execution policy. prepare_work returns response-local guidance, state_persisted=false, and durable_next_tool=complete_backlog_item; inspect_work_queue stays direct_ready until completion records closure. To use a worktree handoff, set execution_path=worker_handoff on the backlog item or workflow.execution default.".to_string(),
         ),
         "ready" => (
             "worker_handoff".to_string(),

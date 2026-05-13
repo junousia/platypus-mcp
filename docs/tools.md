@@ -11,25 +11,32 @@ Platypus tools return typed JSON with a shared envelope:
 - `error`: optional failure detail
 
 Hosts should prefer `inspect_session` at startup and after stale chat context.
-Use `inspect_queue_status` for compact dashboards and chat summaries. Use
-`inspect_work_queue` when inspecting runnable backlog work, task-plan state,
-active lifecycle state, setup blockers, and the recommended next lifecycle
-command. The lower-level tools remain available for precise control and
-testing.
+If `inspect_session` is unavailable or too broad for the current client, fall
+back deterministically to `doctor_snapshot`, `inspect_status`,
+`inspect_workflow_config`, `inspect_queue_status`, then `inspect_work_queue` as
+needed. Use `inspect_queue_status` for compact dashboards and chat summaries.
+Use `inspect_work_queue` when inspecting runnable backlog work, task-plan
+state, active lifecycle state, setup blockers, and the recommended next
+lifecycle command. The lower-level tools remain available for precise control
+and testing.
 
 ## Host Guidance Resources And Prompts
 
-Before using lifecycle tools, MCP hosts should list resources/prompts and read
-the Platypus guidance that matches the current activity. The guidance is
-deterministic and references the current public tool names.
+At session start, MCP hosts should list resources and prompts, then read the
+Platypus guidance that matches the current activity. The guidance is
+deterministic and references the current public tool names. Core startup
+guidance is:
 
 - Resource `platypus://guidance/workflow` / prompt `platypus-workflow`
-- Resource `platypus://guidance/spec-driven-development` / prompt
-  `platypus-spec-driven-development`
 - Resource `platypus://guidance/project-status` / prompt
   `platypus-project-status`
 - Resource `platypus://guidance/tool-preload` / prompt
   `platypus-tool-preload`
+
+Additional phase guidance:
+
+- Resource `platypus://guidance/spec-driven-development` / prompt
+  `platypus-spec-driven-development`
 - Resource `platypus://guidance/backlog-authoring` / prompt
   `platypus-backlog-authoring`
 - Resource `platypus://guidance/worker-handoff` / prompt
@@ -38,16 +45,37 @@ deterministic and references the current public tool names.
   `platypus-integration-review`
 - Resource `platypus://guidance/recovery` / prompt `platypus-recovery`
 
-`platypus://guidance/tool-preload` names small optional groups for deferred
-schema hosts: Startup Inspection, Backlog Planning, Direct Execution, Worker
-Handoff, Evidence And Findings, and Recovery. Tool preloading is
-host-specific. If a host cannot preload schemas, call the same tools normally
-when the workflow reaches that phase.
+`platypus://guidance/tool-preload` names small optional groups for clients with
+deferred tool schemas: Startup Inspection, Backlog Planning, Direct Execution,
+Worker Handoff, Evidence And Findings, and Recovery. Tool schemas are exposed
+by the MCP client and may be loaded lazily; Platypus does not require a hidden
+preload mechanism. If schema preloading is awkward in Codex, Claude, opencode,
+or another host, call the same tools normally when the workflow reaches that
+phase.
+
+For Claude Code, deferred schemas are loaded with ToolSearch selectors such as
+`select:mcp__platypus__inspect_session` or
+`select:mcp__platypus__complete_backlog_item`. The `mcp__platypus__` prefix is
+the configured MCP server name plus tool separator; use unprefixed names in
+Platypus docs and tool arguments. Codex and opencode expose the same tool
+schemas through their own MCP discovery UI.
+
+Direct quick path: read the startup guidance, call `inspect_session`, load the
+Direct Execution group, call `prepare_work`, edit the manager workspace, then
+call `complete_backlog_item`.
+
+Alias and deprecation expectations: `contract` is only an alias for
+`implementation_contract`, `quick_create_backlog_item` is shorthand for simple
+single-item creation, `create_backlog_items` is the atomic batch path, and
+removed helpers such as `draft_task_plan` should not be searched for.
 
 ## Recommended Host Flow
 
 1. Bootstrap and inspect: `platypus-mcp bootstrap <host> --init-project` for
-   fresh projects, or `init_project` and `inspect_session` from an MCP host.
+   fresh projects, or `init_project` from an MCP host. At the start of the
+   first session, list resources/prompts, read `platypus-workflow`,
+   `platypus-project-status`, and `platypus-tool-preload`, then call
+   `inspect_session`.
 2. Shape backlog: the host model decides concrete item boundaries, then calls
    `create_backlog_item`, `create_backlog_items`, `update_backlog_item`,
    `validate_backlog`, `list_backlog`, `draft_external_backlog_items`, and
