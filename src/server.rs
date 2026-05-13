@@ -466,7 +466,7 @@ impl PlatypusMcp {
 
     #[tool(
         title = "Doctor Snapshot",
-        description = "Inspect project setup and recovery guidance.",
+        description = "Read-only setup recovery preflight. Checks scaffold files, backlog directories, Git repository readiness, and backlog presence, then returns exact next actions such as init_project, git init, or initial commit creation.",
         annotations(
             title = "Doctor Snapshot",
             read_only_hint = true,
@@ -1068,7 +1068,7 @@ impl PlatypusMcp {
 
     #[tool(
         title = "Inspect Integration Gates",
-        description = "Read-only integration preflight for one task. Reports lifecycle, worktree, verification, finding, Git, and branch gates enforced by integration.",
+        description = "Read-only integration recovery preflight for one task. Reports the lifecycle, worktree, verification evidence, required findings, manager Git cleanliness, branch, and merge gates that block or allow integrate_worker_result.",
         annotations(
             title = "Inspect Integration Gates",
             read_only_hint = true,
@@ -1594,7 +1594,7 @@ impl PlatypusMcp {
 
     #[tool(
         title = "Reconcile Project",
-        description = "Compare backlog closure, task state, findings, and evidence for gaps.",
+        description = "Read-only recovery audit for completed work. Detects orphaned evidence, evidence on incomplete tasks, missing verification evidence, missing integration evidence, missing Platypus-Closes or Platypus-Verification trailers, stale unapproved lifecycles, and unresolved required findings.",
         annotations(
             title = "Reconcile Project",
             read_only_hint = true,
@@ -1918,6 +1918,41 @@ mod tests {
                 execution.task_support,
                 Some(TaskSupport::Forbidden),
                 "{name} should forbid task invocation"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_tools_explain_inspection_scope_and_repair_boundaries() {
+        let server = PlatypusMcp::new();
+        let tools = server.tool_router.list_all();
+
+        let doctor = tool_description(&tools, "doctor_snapshot");
+        assert!(doctor.contains("Read-only setup recovery preflight"));
+        assert!(doctor.contains("scaffold files"));
+        assert!(doctor.contains("Git repository readiness"));
+        assert!(doctor.contains("init_project"));
+
+        let gates = tool_description(&tools, "inspect_integration_gates");
+        assert!(gates.contains("Read-only integration recovery preflight"));
+        assert!(gates.contains("verification evidence"));
+        assert!(gates.contains("required findings"));
+        assert!(gates.contains("integrate_worker_result"));
+
+        let reconcile = tool_description(&tools, "reconcile_project");
+        for expected in [
+            "Read-only recovery audit",
+            "orphaned evidence",
+            "incomplete tasks",
+            "missing verification evidence",
+            "missing integration evidence",
+            "Platypus-Closes",
+            "Platypus-Verification",
+            "unresolved required findings",
+        ] {
+            assert!(
+                reconcile.contains(expected),
+                "reconcile_project description missing {expected}: {reconcile}"
             );
         }
     }
@@ -2256,6 +2291,17 @@ mod tests {
             .find(|tool| tool.name == tool_name)
             .unwrap_or_else(|| panic!("{tool_name} missing"));
         serde_json::to_value(tool.input_schema.as_ref()).expect("schema json")
+    }
+
+    fn tool_description(tools: &[rmcp::model::Tool], tool_name: &str) -> String {
+        tools
+            .iter()
+            .find(|tool| tool.name == tool_name)
+            .unwrap_or_else(|| panic!("{tool_name} missing"))
+            .description
+            .as_ref()
+            .unwrap_or_else(|| panic!("{tool_name} missing description"))
+            .to_string()
     }
 
     fn property_schema<'a>(schema: &'a Value, property_name: &str) -> &'a Value {

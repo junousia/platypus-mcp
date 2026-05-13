@@ -3646,7 +3646,7 @@ pub struct EvidenceListData {
 pub struct ReconciliationData {
     /// Project root that bounds all file, Git, and state operations.
     pub root: String,
-    /// Whether the operation succeeded.
+    /// Whether every audited task, finding, evidence record, and closure trailer is consistent.
     pub ok: bool,
     /// Backlog item IDs considered closed by Git trailers.
     pub closed_item_ids: Vec<String>,
@@ -3660,11 +3660,11 @@ pub struct ReconciliationData {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ReconciliationGap {
-    /// Kind or category for this record.
+    /// Stable gap category such as missing_verification_evidence or unresolved_required_finding.
     pub kind: String,
-    /// Human-readable summary of the record or result.
+    /// Human-readable explanation of the exact inconsistency that was detected.
     pub summary: String,
-    /// Suggested next action.
+    /// Concrete tool or Git action to run before rerunning reconcile_project.
     pub next_action: String,
 }
 

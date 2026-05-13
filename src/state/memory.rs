@@ -834,7 +834,7 @@ impl ProjectState for MemoryProjectState {
                         evidence.id, evidence.kind, task.status
                     ),
                     next_action:
-                        "Complete the worker lifecycle before relying on verification or integration evidence."
+                        "Call inspect_task for this task, then finish_work or complete_worker_task to reach a completed lifecycle before relying on its evidence."
                             .to_string(),
                 }),
                 None => gaps.push(ReconcileGap {
@@ -846,7 +846,7 @@ impl ProjectState for MemoryProjectState {
                         evidence.id, evidence.kind
                     ),
                     next_action:
-                        "Record evidence against a valid lifecycle task or replace the orphaned evidence."
+                        "Call list_evidence for this item, then record replacement evidence against an existing task or ignore the orphaned record in the next completion."
                             .to_string(),
                 }),
             }
@@ -864,7 +864,10 @@ impl ProjectState for MemoryProjectState {
                         "Completed task `{}` for `{}` has no verification evidence.",
                         task.id, task.source_item_id
                     ),
-                    next_action: "Record verification evidence or rerun verification.".to_string(),
+                    next_action: format!(
+                        "Call record_verification_evidence for task `{}` or run_task_verification if an assignment exists, then rerun reconcile_project.",
+                        task.id
+                    ),
                 });
             }
         }

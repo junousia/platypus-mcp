@@ -352,10 +352,27 @@ When the host is unsure what happened, prefer inspection before mutation.
 - `approval_list` and `approval_respond` handle durable approvals.
 - `list_findings`, `validate_findings`, and `update_finding_disposition` show
   open follow-up obligations and explicit dispositions.
-- `inspect_integration_gates` explains why a completed task is or is not ready
-  for `integrate_worker_result`.
-- `reconcile_project` reports missing verification, integration, findings, and
-  closure evidence.
+- `inspect_integration_gates` is read-only and explains lifecycle, worktree,
+  manager workspace, verification, finding, branch, and merge gates before
+  `integrate_worker_result`.
+- `reconcile_project` is read-only and reports orphaned task evidence,
+  evidence on incomplete tasks, missing verification evidence, missing
+  integration evidence, missing `Platypus-Closes` or `Platypus-Verification`
+  trailers, stale unapproved task lifecycles, and unresolved required findings.
+
+Concrete recovery paths:
+
+- Missing scaffold or Git setup: call `doctor_snapshot`, then `init_project`,
+  `git init`, or create the initial commit named in the failed check.
+- Dirty manager workspace: inspect the blocking paths, then commit, stash, or
+  revert them before retrying dispatch or integration.
+- Completed worker output not integrated: call `inspect_integration_gates`,
+  resolve blocking gates, then call `integrate_worker_result`.
+- Missing verification evidence: call `record_verification_evidence` or
+  `run_task_verification`, then rerun `reconcile_project`.
+- Required finding still open: call `update_finding_disposition`.
+- Orphaned evidence: call `list_evidence`, then record replacement evidence
+  against a valid task or ignore the orphaned record in the next completion.
 
 If a tool fails, return its structured `status`, `summary`, `error`, and
 `next_action` to the user instead of guessing or silently retrying.

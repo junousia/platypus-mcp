@@ -389,6 +389,18 @@ so reconciliation can report the remaining gap.
   closure gaps, and evidence attached to missing or incomplete task
   lifecycles.
 
+Recovery tools separate inspection from repair:
+
+| Scenario | Inspect | Repair |
+| --- | --- | --- |
+| Missing scaffold or Git setup | `doctor_snapshot` | `init_project`, `git init`, or create the initial commit named in the failed check |
+| Dirty manager workspace blocks worktree dispatch or integration | `inspect_work_queue` or `inspect_integration_gates` | commit, stash, or revert the listed manager-workspace paths, then retry the blocked tool |
+| Worker task is complete but not integrated | `inspect_integration_gates` | resolve reported gates, then call `integrate_worker_result` |
+| Completed task has no verification evidence | `reconcile_project` | `record_verification_evidence` or `run_task_verification`, then rerun `reconcile_project` |
+| Required finding is still open | `reconcile_project` or `validate_findings` | `update_finding_disposition` with accepted, deferred, resolved, rejected, or duplicate |
+| Evidence references a missing task | `reconcile_project`, then `list_evidence` | record replacement evidence against a valid task or ignore the orphaned evidence in the next completion |
+| Integration commit lacks closure or verification trailers | `reconcile_project` | create a corrected integration commit with `Platypus-Closes` and `Platypus-Verification`, then rerun `reconcile_project` |
+
 ## Managed Integration
 
 Managed integration from task worktree back into the manager workspace is
