@@ -379,11 +379,12 @@ trailers.
 - `record_evidence` / `record_verification_evidence`: persist audit evidence.
 - `list_evidence`: inspect evidence records.
 - `reconcile_project`: read-only recovery audit after direct completion or
-  worker integration. It reports orphaned task evidence, evidence attached to
-  incomplete tasks, missing verification evidence, missing integration
-  evidence, missing `Platypus-Closes` or `Platypus-Verification` trailers,
-  stale unapproved task lifecycles, and unresolved required findings. Each gap
-  includes the next tool or commit action to run.
+  worker integration. It reports stale lifecycles for closed items, orphaned
+  task evidence, evidence attached to incomplete tasks, missing verification
+  evidence, missing integration evidence, missing `Platypus-Closes` or
+  `Platypus-Verification` trailers, stale unapproved task lifecycles, and
+  unresolved required findings. Each gap includes the next tool or commit
+  action to run.
 - `record_finding`: persist a follow-up finding.
 - `list_findings`: list stored findings.
 - `validate_findings`: fail when required findings remain open.

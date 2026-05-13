@@ -939,9 +939,13 @@ fn source_item_dispatch_blockers(root: &Path) -> BTreeMap<String, QueueDispatchB
         Ok(Some(storage)) => storage,
         Ok(None) | Err(_) => return BTreeMap::new(),
     };
+    let closed_item_ids = backlog::closed_item_ids(root);
     match storage.repository().tasks().source_item_dispatch_blockers() {
         Ok(items) => items
             .into_iter()
+            .filter(|item| {
+                !(item.queue_state == "active" && closed_item_ids.contains(&item.source_item_id))
+            })
             .map(|item| {
                 (
                     item.source_item_id,
@@ -2173,6 +2177,113 @@ tasks:
         assert_eq!(data.active_tasks[0].task_id, task.id);
         assert_eq!(data.active_tasks[0].queue_state, "active");
         assert_eq!(data.top_blocked_items[0].queue_state, "active");
+    }
+
+    #[test]
+    fn inspect_queue_status_ignores_active_tasks_for_closed_items() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "First item");
+        git(project.path(), &["add", "backlog"]);
+        git(project.path(), &["commit", "-m", "Add queue item"]);
+        create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Stale item".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        git(
+            project.path(),
+            &[
+                "commit",
+                "--allow-empty",
+                "-m",
+                "Close item",
+                "-m",
+                "Platypus-Closes: PROJ-001\nPlatypus-Verification: checked",
+            ],
+        );
+
+        let result = inspect_queue_status(
+            project.path(),
+            InspectQueueStatusParams {
+                root: None,
+                limit: Some(5),
+            },
+        );
+        let data = result.data.expect("queue status");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.counts.active_count, 0);
+        assert!(data.active_tasks.is_empty());
+        assert!(data.top_blocked_items.is_empty());
+    }
+
+    #[test]
+    fn inspect_queue_status_preserves_pending_integration_for_closed_items() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "First item");
+        git(project.path(), &["add", "backlog"]);
+        git(project.path(), &["commit", "-m", "Add queue item"]);
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Completed item".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        crate::tasks::claim_next_task(
+            project.path(),
+            crate::models::ClaimNextTaskParams {
+                root: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("runner-1".to_string()),
+            },
+        );
+        crate::tasks::mark_task_running(project.path(), None, &task.id).expect("running");
+        crate::tasks::finish_task(project.path(), None, &task.id, "completed").expect("completed");
+        git(
+            project.path(),
+            &[
+                "commit",
+                "--allow-empty",
+                "-m",
+                "Close item",
+                "-m",
+                "Platypus-Closes: PROJ-001\nPlatypus-Verification: checked",
+            ],
+        );
+
+        let result = inspect_queue_status(
+            project.path(),
+            InspectQueueStatusParams {
+                root: None,
+                limit: Some(5),
+            },
+        );
+        let data = result.data.expect("queue status");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.counts.active_count, 0);
+        assert_eq!(data.counts.pending_integration_count, 1);
+        assert_eq!(data.active_tasks.len(), 1);
+        assert_eq!(data.active_tasks[0].task_id, task.id);
+        assert_eq!(
+            data.active_tasks[0].queue_state,
+            "completed_pending_integration"
+        );
+        assert_eq!(
+            data.active_tasks[0].recommended_tool,
+            "inspect_integration_gates"
+        );
     }
 
     #[test]

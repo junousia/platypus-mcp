@@ -411,10 +411,11 @@ When the host is unsure what happened, prefer inspection before mutation.
 - `inspect_integration_gates` is read-only and explains lifecycle, worktree,
   manager workspace, verification, finding, branch, and merge gates before
   `integrate_worker_result`.
-- `reconcile_project` is read-only and reports orphaned task evidence,
-  evidence on incomplete tasks, missing verification evidence, missing
-  integration evidence, missing `Platypus-Closes` or `Platypus-Verification`
-  trailers, stale unapproved task lifecycles, and unresolved required findings.
+- `reconcile_project` is read-only and reports stale lifecycles for closed
+  items, orphaned task evidence, evidence on incomplete tasks, missing
+  verification evidence, missing integration evidence, missing
+  `Platypus-Closes` or `Platypus-Verification` trailers, stale unapproved task
+  lifecycles, and unresolved required findings.
 
 Concrete recovery paths:
 
@@ -429,6 +430,9 @@ Concrete recovery paths:
 - Required finding still open: call `update_finding_disposition`.
 - Orphaned evidence: call `list_evidence`, then record replacement evidence
   against a valid task or ignore the orphaned record in the next completion.
+- Stale lifecycle for a closed item: do not reopen the backlog item; inspect
+  the task for audit and treat the Git/direct completion closure as
+  authoritative until a lifecycle cleanup flow is available.
 
 If a tool fails, return its structured `status`, `summary`, `error`, and
 `next_action` to the user instead of guessing or silently retrying.
