@@ -273,7 +273,10 @@ Use the Platypus MCP tools to keep planning reproducible:
 - `create_backlog_item` writes one accepted backlog item.
 - `create_backlog_items` atomically writes a related set and resolves
   `depends_on_keys`.
-- `validate_backlog` checks item and epic schema.
+- `validate_backlog` checks item and epic schema. Its next action follows
+  explicit execution policy: direct work continues through `prepare_work` and
+  `complete_backlog_item`; worker handoff keeps planning-commit guidance when
+  needed for worktree dispatch.
 - `inspect_queue_status` shows compact queue counts, top ready work, top
   blocked work, and active tasks.
 - `inspect_work_queue` shows runnable items, full routing state, and task-plan

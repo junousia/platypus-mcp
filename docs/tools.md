@@ -144,6 +144,9 @@ make smoke-storage
 - `create_epic`: write one structured backlog epic.
 - `list_epics`: list existing backlog epics and their metadata.
 - `validate_backlog`: validate backlog item and epic files.
+  Its `next_action` is policy-aware: direct-only queues point to
+  `prepare_work` and `complete_backlog_item`; worker-handoff queues keep the
+  `commit_planning_artifacts` guidance needed before worktree dispatch.
 - `list_backlog`: list runnable backlog candidates.
 - `inspect_queue_status`: compact queue summary for dashboards and chat
   replies. It returns counts, top ready items, top blocked items, active tasks,
@@ -248,6 +251,9 @@ Security rules for future provider tools:
 - `write_task_plan`: write one reviewable plan to `backlog/plans/<ITEM>.yaml`.
 - `validate_task_plan`: validate strict plan YAML, task IDs, dependencies,
   requirement references, owned surfaces, verification, and acceptance.
+  Successful validation uses the same policy-aware next action as backlog
+  validation, so direct items are not told to commit planning artifacts unless
+  the host wants a checkpoint.
 - `inspect_task_plan`: read one committed task plan.
 - `list_task_plans`: list committed task plans.
 

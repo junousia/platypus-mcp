@@ -133,7 +133,10 @@ mechanism is verified.
 3. Use `update_backlog_item` for typed corrections or refinements after an item
    exists. Do this instead of hand-editing markdown when the change is a
    supported schema or section update.
-4. Run `validate_backlog`.
+4. Run `validate_backlog`. Its `next_action` follows explicit execution
+   policy: direct-ready queues continue through `prepare_work` and
+   `complete_backlog_item`; worker-handoff queues still recommend committing
+   planning artifacts before worktree dispatch when needed.
 5. Use `inspect_queue_status` for compact queue counts, top ready work, top
    blocked work, active tasks, and one-line queue-state descriptions.
 6. Use `inspect_work_queue` when the host needs full runnable candidates,
@@ -147,6 +150,13 @@ mechanism is verified.
    the host can proceed through `prepare_work` and complete with
    `complete_backlog_item`; `ready` means worker/worktree preparation is
    possible; blocked states identify the specific recovery path.
+
+Validation does not make planning commits mandatory for direct work. Direct
+items can continue through `prepare_work` and complete with
+`complete_backlog_item`; commit first only when the host wants a checkpoint.
+Worker-handoff items need committed planning context before creating worktrees.
+Use `commit_planning_artifacts` when backlog or task-plan files are the only
+pending manager-workspace changes.
 
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime

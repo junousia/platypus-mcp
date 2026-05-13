@@ -32,6 +32,7 @@ pub fn validate_backlog(
         },
     };
     if validation.ok {
+        let next_action = validation_next_action(&root, &validation.items, None, "backlog");
         ActionResult {
             action: action.to_string(),
             status: crate::models::ActionStatus::Completed,
@@ -39,10 +40,7 @@ pub fn validate_backlog(
                 "Backlog valid: {} item(s), {} epic(s).",
                 data.item_count, data.epic_count
             ),
-            next_action: Some(
-                "Commit backlog artifacts before dispatching work if this validation followed writes."
-                    .to_string(),
-            ),
+            next_action: Some(next_action),
             recovery_action: None,
             data: Some(data),
             error: None,
@@ -61,6 +59,99 @@ pub fn validate_backlog(
             error: Some(validation.errors.join("\n")),
         }
     }
+}
+
+pub(super) fn validation_next_action(
+    root: &Path,
+    items: &[ParsedBacklogItem],
+    item_id: Option<&str>,
+    artifact: &str,
+) -> String {
+    let context = match validation_queue_context(root, items, item_id) {
+        Ok(context) => context,
+        Err(error) => {
+            return format!(
+                "{artifact} validates, but execution policy could not be inspected: {error}. Run inspect_workflow_config or doctor_snapshot, then inspect_work_queue."
+            )
+        }
+    };
+    if context.runnable_direct > 0 && context.runnable_worker > 0 {
+        return format!(
+            "{artifact} validates. Direct-ready items can use prepare_work, edit the manager workspace, then complete_backlog_item. Worker-handoff items should have committed planning artifacts, or use commit_planning_artifacts, before prepare_work or dispatch_ready_work creates worktrees."
+        );
+    }
+    if context.runnable_worker > 0 {
+        return format!(
+            "{artifact} validates. Commit planning artifacts or run commit_planning_artifacts before prepare_work or dispatch_ready_work so worker worktrees receive the reviewed plan."
+        );
+    }
+    if context.runnable_direct > 0 {
+        return format!(
+            "{artifact} validates. Direct-ready work can proceed with prepare_work, manager-workspace edits, and complete_backlog_item; committing first is optional unless your workflow requires a checkpoint."
+        );
+    }
+    if context.dependency_blocked > 0 {
+        return format!(
+            "{artifact} validates. No runnable item is available yet; inspect dependency-blocked items with inspect_item and close or create their dependencies."
+        );
+    }
+    if context.open_items == 0 && context.total_items > 0 {
+        return format!(
+            "{artifact} validates. All matching backlog items are closed; use the host model to decide follow-up work, then create_backlog_items."
+        );
+    }
+    format!(
+        "{artifact} validates. Inspect the queue with inspect_queue_status or inspect_work_queue to choose the next action."
+    )
+}
+
+#[derive(Default)]
+struct ValidationQueueContext {
+    total_items: usize,
+    open_items: usize,
+    dependency_blocked: usize,
+    runnable_direct: usize,
+    runnable_worker: usize,
+}
+
+fn validation_queue_context(
+    root: &Path,
+    items: &[ParsedBacklogItem],
+    item_id: Option<&str>,
+) -> Result<ValidationQueueContext, String> {
+    let execution_config = crate::config::effective_execution_config(root)?;
+    let closed_ids = super::closed_item_ids(root);
+    let mut context = ValidationQueueContext::default();
+    for item in items
+        .iter()
+        .filter(|item| item_id.is_none_or(|id| item.frontmatter.id == id))
+    {
+        context.total_items += 1;
+        if closed_ids.contains(&item.frontmatter.id) {
+            continue;
+        }
+        context.open_items += 1;
+        if item
+            .frontmatter
+            .depends_on
+            .iter()
+            .any(|dependency| !closed_ids.contains(dependency))
+        {
+            context.dependency_blocked += 1;
+            continue;
+        }
+        let policy = crate::execution_policy::resolve_effective_policy(
+            &execution_config,
+            item.frontmatter.execution_path.as_deref(),
+            item.frontmatter.planning_gate.as_deref(),
+        );
+        if policy.execution_path == crate::execution_policy::WORKER_HANDOFF {
+            context.runnable_worker += 1;
+        } else {
+            context.runnable_direct += 1;
+        }
+    }
+    Ok(context)
 }
 
 pub(super) fn validate_backlog_at_root(root: &Path, include_errors: bool) -> BacklogValidation {

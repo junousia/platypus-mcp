@@ -413,6 +413,61 @@ async fn tool_cli_invokes_mutating_mcp_tool_and_exits_nonzero_on_failed_result(
 }
 
 #[tokio::test]
+async fn stdio_server_returns_contextual_validation_next_actions() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+    call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "Validation Next Actions" }),
+    )
+    .await?;
+
+    call_tool_json(
+        &client,
+        "create_backlog_item",
+        json!({
+            "id": "PROJ-001",
+            "title": "Direct item",
+            "goal": "Exercise direct validation guidance.",
+            "implementation_contract": "Keep direct work in the manager workspace.",
+            "acceptance": ["Direct guidance is clear."]
+        }),
+    )
+    .await?;
+    let direct = call_tool_json(&client, "validate_backlog", json!({})).await?;
+    assert_stage_status("validate_backlog direct", &direct, "completed");
+    let direct_next = direct["next_action"].as_str().expect("direct next");
+    assert!(direct_next.contains("prepare_work"));
+    assert!(direct_next.contains("complete_backlog_item"));
+    assert!(!direct_next.contains("Commit backlog artifacts before dispatching"));
+
+    call_tool_json(
+        &client,
+        "create_backlog_item",
+        json!({
+            "id": "PROJ-002",
+            "title": "Worker item",
+            "goal": "Exercise worker validation guidance.",
+            "implementation_contract": "Keep worker work in a handoff worktree.",
+            "acceptance": ["Worker guidance is clear."],
+            "execution_path": "worker_handoff",
+            "planning_gate": "task_plan"
+        }),
+    )
+    .await?;
+    let mixed = call_tool_json(&client, "validate_backlog", json!({})).await?;
+    assert_stage_status("validate_backlog mixed", &mixed, "completed");
+    let mixed_next = mixed["next_action"].as_str().expect("mixed next");
+    assert!(mixed_next.contains("Direct-ready"));
+    assert!(mixed_next.contains("Worker-handoff"));
+    assert!(mixed_next.contains("commit_planning_artifacts"));
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Result<()> {
     let client = start_client(None).await?;
 
