@@ -1,0 +1,82 @@
+item_id: MCP-091
+version: 1
+mode: minimal
+requirements:
+- id: R1
+  text: Generated host guidance frames inspect_session as the primary startup call.
+- id: R2
+  text: Tool preload guidance gives a concrete direct-work quick path.
+- id: R3
+  text: Claude Code guidance explains deferred schema loading with ToolSearch select:mcp__platypus__<tool>.
+- id: R4
+  text: Alias and deprecation status is visible enough to prevent stale tool searches.
+design:
+  summary: Update central host guidance and generated project guidance text so harness feedback instructions match how Codex, Claude, and OpenCode actually discover Platypus tools.
+  owned_surfaces:
+  - src/host_guidance.rs
+  - src/project/init.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - docs/install.md
+  - AGENTS.md
+  - CLAUDE.md
+  - tests
+  notes: Keep host-specific wording precise and avoid promising true schema preloading when the host owns discovery.
+tasks:
+- id: MCP-091-T001
+  title: Reframe startup guidance around inspect_session
+  goal: Update guidance resources and generated files so inspect_session is the default startup call and individual tools are post-mutation narrowing tools.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - src/host_guidance.rs
+  - src/project/init.rs
+  - docs/workflow.md
+  verification:
+  - cargo test project::init::tests
+  acceptance:
+  - Generated AGENTS.md and CLAUDE.md identify inspect_session as the startup call.
+  - Docs no longer undersell inspect_session as merely optional.
+  notes: null
+- id: MCP-091-T002
+  title: Add harness schema discovery details
+  goal: Document how each supported harness consumes the named preload groups, including Claude Code ToolSearch select syntax and prefix requirements.
+  requirement_refs:
+  - R2
+  - R3
+  - R4
+  depends_on:
+  - MCP-091-T001
+  owned_surfaces:
+  - src/host_guidance.rs
+  - docs/tools.md
+  - docs/install.md
+  - CLAUDE.md
+  verification:
+  - cargo test server::tests::tools_expose_schema_annotations_and_execution_hints
+  acceptance:
+  - Tool preload guidance includes direct-work quick path tools in order.
+  - Claude Code-specific text includes select:mcp__platypus__<tool> and explains the prefix.
+  - Alias/deprecated-input guidance is explicit.
+  notes: null
+- id: MCP-091-T003
+  title: Lock generated guidance with tests
+  goal: Add or update assertions for generated AGENTS.md, CLAUDE.md, and host guidance resources.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  - R4
+  depends_on:
+  - MCP-091-T002
+  owned_surfaces:
+  - tests
+  - src/project/init.rs
+  - src/host_guidance.rs
+  verification:
+  - make check
+  acceptance:
+  - Tests fail if generated guidance drops startup, direct quick path, or Claude ToolSearch instructions.
+  - Full verification passes.
+  notes: null

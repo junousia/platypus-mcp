@@ -1,0 +1,72 @@
+item_id: MCP-090
+version: 1
+mode: minimal
+requirements:
+- id: R1
+  text: Direct prepare responses expose machine-readable persistence semantics.
+- id: R2
+  text: Direct prepare guidance remains concise while preventing worker/worktree confusion.
+- id: R3
+  text: Generated workflow guidance explains that direct_ready remains until completion.
+design:
+  summary: Extend direct prepare response data with explicit persistence and durable-next-tool signals, then consolidate repeated prose in host guidance.
+  owned_surfaces:
+  - src/host_lifecycle.rs
+  - src/models.rs
+  - src/host_guidance.rs
+  - docs/workflow.md
+  - tests
+  notes: This item depends on MCP-089 so contract wording changes land first.
+tasks:
+- id: MCP-090-T001
+  title: Add direct prepare persistence fields
+  goal: Add structured fields for direct prepare persistence and durable next tool to the relevant response model/data.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - src/host_lifecycle.rs
+  - src/models.rs
+  verification:
+  - cargo test host_lifecycle::tests::prepare_work_returns_direct_action_for_direct_items
+  acceptance:
+  - Direct prepare data exposes state_persisted=false or equivalent.
+  - Direct prepare data exposes complete_backlog_item as the durable next tool.
+  notes: null
+- id: MCP-090-T002
+  title: Consolidate direct prepare wording
+  goal: Reduce repeated response-local wording and make the next host action more prominent in output and generated guidance.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-090-T001
+  owned_surfaces:
+  - src/host_lifecycle.rs
+  - src/host_guidance.rs
+  - docs/workflow.md
+  verification:
+  - cargo test host_lifecycle::tests
+  - cargo test server::tests::tools_expose_schema_annotations_and_execution_hints
+  acceptance:
+  - Direct prepare output contains one clear response-local explanation, not repeated disclaimers.
+  - Generated guidance says inspect_work_queue will still show direct_ready until complete_backlog_item.
+  notes: null
+- id: MCP-090-T003
+  title: Cover direct prepare semantics
+  goal: Add tests that assert the structured fields and updated guidance text for direct_edit prepare_work.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-090-T002
+  owned_surfaces:
+  - tests
+  - src/host_lifecycle.rs
+  verification:
+  - make check
+  acceptance:
+  - Tests fail if direct prepare loses persistence metadata or regresses into ambiguous prose.
+  - Full verification passes.
+  notes: null

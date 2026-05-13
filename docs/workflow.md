@@ -219,8 +219,10 @@ status, task attempts, PR metadata, or closure state.
 When creating backlog items through tools, use the typed schema:
 
 - minimal input: a meaningful `goal` or `title`; Platypus derives conservative
-  defaults for missing title, goal, implementation contract, and first
-  acceptance criterion
+  defaults for missing title, goal, an explicit generated implementation
+  contract placeholder, and first acceptance criterion. Do not treat the
+  generated contract placeholder as real execution guidance for delegated or
+  complex work.
 - rich input: explicit `title`, `goal`, `implementation_contract` or
   `contract`, and `acceptance` criteria when the work is complex or generated
   defaults would be too broad

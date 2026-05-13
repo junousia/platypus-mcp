@@ -1,0 +1,71 @@
+item_id: MCP-093
+version: 1
+mode: minimal
+requirements:
+- id: R1
+  text: Evidence kind documentation includes concrete examples and boundaries.
+- id: R2
+  text: Backlog creation guidance makes the general epic default explicit and safe.
+- id: R3
+  text: Recovery guidance distinguishes optional reconcile checks from required recovery actions.
+design:
+  summary: Polish lower-severity documentation and schema guidance surfaced by feedback runs, with generated-doc assertions where practical.
+  owned_surfaces:
+  - src/host_guidance.rs
+  - src/models.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - tests
+  notes: This is intentionally P2 because the core workflow already succeeds.
+tasks:
+- id: MCP-093-T001
+  title: Document evidence kind examples
+  goal: Add concise examples for evidence kinds and clarify when to use note, file_summary, verification, commit, worker_finding, manager_disposition, and external_report.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - src/models.rs
+  - docs/tools.md
+  - docs/workflow.md
+  verification:
+  - cargo test server::tests::tool_schemas_have_human_field_descriptions
+  acceptance:
+  - Evidence kind descriptions include concrete examples or clear references.
+  - Docs explain when to call list_evidence for details.
+  notes: null
+- id: MCP-093-T002
+  title: Clarify epic default behavior
+  goal: Document that omitted epic defaults to general, and guide callers when multiple epics make omission risky.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-093-T001
+  owned_surfaces:
+  - src/backlog/create.rs
+  - src/host_guidance.rs
+  - docs/tools.md
+  verification:
+  - cargo test backlog::tests
+  acceptance:
+  - Backlog creation output or guidance makes the general default explicit.
+  - Multiple-epic projects receive clear guidance to choose an epic intentionally where feasible.
+  notes: null
+- id: MCP-093-T003
+  title: Clarify reconcile optionality
+  goal: Update direct completion and recovery guidance to say when reconcile_project is optional versus required after unclear, failed, or stale state transitions.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-093-T002
+  owned_surfaces:
+  - src/host_guidance.rs
+  - docs/workflow.md
+  - tests
+  verification:
+  - make check
+  acceptance:
+  - complete_backlog_item guidance does not imply reconcile_project is mandatory for every successful direct edit.
+  - Recovery docs point to reconcile_project for stale or unclear state.
+  - Full verification passes.
+  notes: null

@@ -173,8 +173,10 @@ make smoke-storage
 Backlog schema quick reference:
 
 - Minimal `create_backlog_item` input: a meaningful `goal` or `title`.
-  Platypus derives conservative title, goal, implementation contract, and first
-  acceptance text when those fields are omitted.
+  Platypus derives conservative title, goal, an explicit generated placeholder
+  for the implementation contract, and first acceptance text when those fields
+  are omitted. Treat the generated contract placeholder as a prompt to refine
+  the item before delegation or complex work.
 - Rich `create_backlog_item` input: provide explicit `title`, `goal`,
   `implementation_contract` or `contract`, and `acceptance` when the work is
   complex or the generated defaults would be too broad.

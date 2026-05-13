@@ -1,0 +1,70 @@
+item_id: MCP-089
+version: 1
+mode: minimal
+requirements:
+- id: R1
+  text: Omitted implementation contracts must not be written as tautological goal restatements.
+- id: R2
+  text: Schema, validation, and generated guidance must clearly explain contract behavior.
+- id: R3
+  text: Explicit caller-provided implementation_contract values must remain unchanged.
+design:
+  summary: Tighten backlog creation normalization so generated items avoid fake specificity while preserving strict validation and compatibility for explicit contracts.
+  owned_surfaces:
+  - src/backlog/create.rs
+  - src/models.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - tests
+  notes: Start by locating the current derived contract path and tests that assert the existing behavior.
+tasks:
+- id: MCP-089-T001
+  title: Map contract derivation behavior
+  goal: Inspect create_backlog_items and validation paths to identify every place omitted implementation_contract is derived, validated, or documented.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/backlog/create.rs
+  - src/models.rs
+  verification:
+  - cargo test backlog::tests::create_backlog_item_derives_fields_from_minimal_goal_or_title
+  acceptance:
+  - The implementation path for omitted contracts is identified and covered by tests before behavior changes.
+  notes: null
+- id: MCP-089-T002
+  title: Implement non-misleading contract policy
+  goal: Change backlog creation so omitted contracts do not create authoritative tautological markdown, while explicit contracts keep exact caller text.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on:
+  - MCP-089-T001
+  owned_surfaces:
+  - src/backlog/create.rs
+  - src/models.rs
+  verification:
+  - cargo test backlog::tests
+  acceptance:
+  - Omitted contracts are absent or clearly guidance-only according to the chosen policy.
+  - Explicit contracts remain persisted unchanged.
+  notes: null
+- id: MCP-089-T003
+  title: Document and validate contract behavior
+  goal: Update schema descriptions, docs, and regression tests for omitted/provided/invalid contract cases.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-089-T002
+  owned_surfaces:
+  - docs/tools.md
+  - docs/workflow.md
+  - tests
+  verification:
+  - make check
+  acceptance:
+  - Docs and generated schema text no longer imply fake implementation specificity.
+  - Full verification passes.
+  notes: null

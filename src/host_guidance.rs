@@ -312,8 +312,10 @@ completion events created by `complete_backlog_item`.
 Backlog schema quick reference:
 
 - Minimal create input: a meaningful `goal` or `title`. Platypus derives
-  conservative title, goal, implementation contract, and first acceptance text
-  when those fields are omitted.
+  conservative title, goal, an explicit generated implementation contract
+  placeholder, and first acceptance text when those fields are omitted. Treat
+  the generated contract placeholder as a reminder to refine the item before
+  delegation or complex work, not as real execution guidance.
 - Rich create input: provide explicit `title`, `goal`,
   `implementation_contract` or `contract`, and `acceptance` when the work is
   complex or the defaults would be too broad.

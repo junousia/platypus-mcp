@@ -784,12 +784,16 @@ pub struct CreateBacklogItemParams {
     /// Goal text that drives this request or record.
     #[schemars(example = example_goal())]
     pub goal: String,
-    /// Implementation contract text for this backlog item.
+    /// Implementation contract text for this backlog item. Provide this for
+    /// real execution guidance; when omitted, creation tools write an explicit
+    /// generated placeholder that says no contract was provided.
     pub implementation_contract: Option<String>,
-    /// Optional contract text for this backlog item.
+    /// Optional alias for implementation_contract. Provide only one of
+    /// implementation_contract or contract.
     pub contract: Option<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
-    /// Acceptance criteria for this item.
+    /// Acceptance criteria for this item. When omitted, creation tools write
+    /// one generated acceptance criterion so the backlog item remains valid.
     pub acceptance: Vec<String>,
     /// Optional notes for this item.
     pub notes: Option<String>,
@@ -922,12 +926,16 @@ pub struct CreateBacklogItemsEntry {
     /// Goal text that drives this request or record.
     #[schemars(example = example_goal())]
     pub goal: String,
-    /// Implementation contract text for this backlog item.
+    /// Implementation contract text for this backlog item. Provide this for
+    /// real execution guidance; when omitted, creation tools write an explicit
+    /// generated placeholder that says no contract was provided.
     pub implementation_contract: Option<String>,
-    /// Optional contract text for this backlog item.
+    /// Optional alias for implementation_contract. Provide only one of
+    /// implementation_contract or contract.
     pub contract: Option<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
-    /// Acceptance criteria for this item.
+    /// Acceptance criteria for this item. When omitted, creation tools write
+    /// one generated acceptance criterion so the backlog item remains valid.
     pub acceptance: Vec<String>,
     /// Optional notes for this item.
     pub notes: Option<String>,
@@ -2774,7 +2782,9 @@ pub struct CreatedBacklogItemPreview {
     pub owned_surfaces: Vec<String>,
     /// Goal text that drives this request or record.
     pub goal: String,
-    /// Implementation contract text for this backlog item.
+    /// Implementation contract text for this backlog item. Generated previews
+    /// may contain an explicit placeholder when the caller omitted a real
+    /// implementation contract.
     pub implementation_contract: String,
     /// Acceptance criteria for this item.
     pub acceptance: Vec<String>,
