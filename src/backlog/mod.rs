@@ -687,8 +687,9 @@ mod tests {
             fs::read_to_string(temp.path().join("backlog/items/PROJ-001.md")).expect("goal item");
         assert!(goal_text.contains("title: Scaffold frontend"));
         assert!(goal_text.contains(
-            "## Implementation Contract\n\nImplement the requested change: Scaffold frontend."
+            "## Implementation Contract\n\nNo implementation contract was provided. Treat this generated section as a reminder to refine the contract before delegation or complex work."
         ));
+        assert!(!goal_text.contains("Implement the requested change: Scaffold frontend."));
         assert!(goal_text
             .contains("- Scaffold frontend is implemented and verification notes are recorded."));
 
@@ -720,8 +721,9 @@ mod tests {
             fs::read_to_string(temp.path().join("backlog/items/PROJ-002.md")).expect("title item");
         assert!(title_text.contains("## Goal\n\nDocument recovery flow."));
         assert!(title_text.contains(
-            "## Implementation Contract\n\nImplement the requested change: Document recovery flow."
+            "## Implementation Contract\n\nNo implementation contract was provided. Treat this generated section as a reminder to refine the contract before delegation or complex work."
         ));
+        assert!(!title_text.contains("Implement the requested change: Document recovery flow."));
 
         let validation = validate_backlog(temp.path(), Some(root_arg(temp.path()).as_str()), true);
         assert!(matches!(validation.status, ActionStatus::Completed));
@@ -777,10 +779,13 @@ mod tests {
             .expect("missing required fields deserialize to validation defaults");
         let missing_from_omitted = create_backlog_item(temp.path(), omitted_required_fields);
         let missing_from_omitted_error = missing_from_omitted.error.unwrap();
-        assert!(missing_from_omitted_error.contains("title"));
-        assert!(missing_from_omitted_error.contains("goal"));
-        assert!(missing_from_omitted_error.contains("implementation_contract|contract"));
-        assert!(missing_from_omitted_error.contains("acceptance"));
+        let missing_from_omitted_fields = missing_from_omitted_error
+            .split('.')
+            .next()
+            .expect("missing field sentence");
+        assert!(missing_from_omitted_fields.contains("title|goal"));
+        assert!(!missing_from_omitted_fields.contains("implementation_contract|contract"));
+        assert!(!missing_from_omitted_fields.contains("acceptance"));
 
         let invalid_priority = create_backlog_item(
             temp.path(),
@@ -867,10 +872,50 @@ mod tests {
             },
         );
         let missing_error = missing.error.unwrap();
-        assert!(missing_error.contains("title"));
-        assert!(missing_error.contains("goal"));
-        assert!(missing_error.contains("implementation_contract|contract"));
-        assert!(missing_error.contains("acceptance"));
+        let missing_fields = missing_error
+            .split('.')
+            .next()
+            .expect("missing field sentence");
+        assert!(missing_fields.contains("title|goal"));
+        assert!(!missing_fields.contains("implementation_contract|contract"));
+        assert!(!missing_fields.contains("acceptance"));
+    }
+
+    #[test]
+    fn create_backlog_item_rejects_conflicting_contract_aliases() {
+        let temp = project_fixture();
+
+        let result = create_backlog_item(
+            temp.path(),
+            CreateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                id: Some("PROJ-001".to_string()),
+                id_prefix: None,
+                title: "Conflicting contract".to_string(),
+                priority: Some("P1".to_string()),
+                item_type: Some("feature".to_string()),
+                area: Some("general".to_string()),
+                epic: Some("general".to_string()),
+                depends_on: Vec::new(),
+                owned_surfaces: Vec::new(),
+                external_refs: Vec::new(),
+                execution_path: None,
+                planning_gate: None,
+                goal: "Create a conflicting request.".to_string(),
+                implementation_contract: Some("Primary contract.".to_string()),
+                contract: Some("Alias contract.".to_string()),
+                acceptance: vec!["Done.".to_string()],
+                notes: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("provide only one of implementation_contract or contract"));
+        assert!(!temp.path().join("backlog/items/PROJ-001.md").exists());
     }
 
     #[test]
@@ -1164,6 +1209,81 @@ mod tests {
             .contains("# WEB-001 Shape web foundation"));
         assert!(!temp.path().join("backlog/items/WEB-001.md").exists());
         assert!(!temp.path().join("backlog/items/WEB-002.md").exists());
+    }
+
+    #[test]
+    fn create_backlog_items_uses_placeholder_contract_when_omitted() {
+        let temp = project_fixture();
+
+        let result = create_backlog_items(
+            temp.path(),
+            CreateBacklogItemsParams {
+                root: Some(root_arg(temp.path())),
+                id_prefix: Some("WEB".to_string()),
+                preview: true,
+                items: vec![CreateBacklogItemsEntry {
+                    client_key: Some("minimal".to_string()),
+                    depends_on_keys: Vec::new(),
+                    id: None,
+                    id_prefix: None,
+                    title: String::new(),
+                    priority: None,
+                    item_type: None,
+                    area: None,
+                    epic: None,
+                    depends_on: Vec::new(),
+                    owned_surfaces: Vec::new(),
+                    external_refs: Vec::new(),
+                    execution_path: None,
+                    planning_gate: None,
+                    goal: "Scaffold frontend".to_string(),
+                    implementation_contract: None,
+                    contract: None,
+                    acceptance: Vec::new(),
+                    notes: None,
+                }],
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let data = result.data.expect("preview data");
+        assert_eq!(data.items[0].preview.title, "Scaffold frontend");
+        assert_eq!(
+            data.items[0].preview.implementation_contract,
+            "No implementation contract was provided. Treat this generated section as a reminder to refine the contract before delegation or complex work."
+        );
+        assert!(!data.items[0]
+            .preview
+            .markdown
+            .contains("Implement the requested change: Scaffold frontend."));
+        assert!(!temp.path().join("backlog/items/WEB-001.md").exists());
+    }
+
+    #[test]
+    fn create_backlog_items_rejects_conflicting_contract_aliases_without_writes() {
+        let temp = project_fixture();
+
+        let result = create_backlog_items(
+            temp.path(),
+            CreateBacklogItemsParams {
+                root: Some(root_arg(temp.path())),
+                id_prefix: None,
+                preview: false,
+                items: vec![CreateBacklogItemsEntry {
+                    implementation_contract: Some("Primary contract.".to_string()),
+                    contract: Some("Alias contract.".to_string()),
+                    ..batch_entry("bad", Some("PROJ-001"), "Conflicting contract", vec![])
+                }],
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("provide only one of implementation_contract or contract"));
+        assert!(!temp.path().join("backlog/items/PROJ-001.md").exists());
     }
 
     #[test]

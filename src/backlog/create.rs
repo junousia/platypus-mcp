@@ -48,6 +48,8 @@ struct PlannedBacklogWrite {
     preview: CreatedBacklogItemPreview,
 }
 
+const GENERATED_CONTRACT_PLACEHOLDER: &str = "No implementation contract was provided. Treat this generated section as a reminder to refine the contract before delegation or complex work.";
+
 pub fn create_backlog_item(
     default_root: &Path,
     params: CreateBacklogItemParams,
@@ -184,6 +186,14 @@ pub fn create_backlog_item(
             "Create the missing dependency item first, remove it from depends_on, or reference an existing backlog item ID.",
         );
     }
+    if let Err(error) = validate_contract_aliases(&params) {
+        return failed_with_next(
+            action,
+            "Could not create backlog item.",
+            error,
+            "Provide only one of implementation_contract or contract.",
+        );
+    }
     let normalized = match normalize_backlog_input(&params) {
         Ok(normalized) => normalized,
         Err(missing_fields) => {
@@ -191,10 +201,10 @@ pub fn create_backlog_item(
                 action,
                 "Could not create backlog item.",
                 format!(
-                    "missing required field(s): {}. Provide at least title or goal; explicit fields can still override derived defaults. Required persisted fields: title, goal, implementation_contract or contract, and at least one acceptance criterion.",
+                    "missing required field(s): {}. Provide at least title or goal. implementation_contract/contract and acceptance can be supplied explicitly; when omitted, Platypus writes explicit generated placeholder guidance and a first acceptance criterion.",
                     missing_fields.join(", ")
                 ),
-                "Provide title or goal. Platypus can derive implementation_contract and acceptance from that minimal input when explicit values are omitted.",
+                "Provide title or goal. Add implementation_contract/contract and acceptance when the work needs a real execution contract instead of generated placeholders.",
             );
         }
     };
@@ -446,6 +456,15 @@ pub fn create_backlog_items(
                 "Create the missing dependency item first, remove it from depends_on, or reference an existing backlog item ID or batch client_key.",
             );
         }
+        if let Err(error) = validate_contract_aliases(&params) {
+            return failed_batch_item(
+                action,
+                planned_item.index,
+                planned_item.client_key.as_deref(),
+                error,
+                "Provide only one of implementation_contract or contract.",
+            );
+        }
         let normalized = match normalize_backlog_input(&params) {
             Ok(normalized) => normalized,
             Err(missing_fields) => {
@@ -454,10 +473,10 @@ pub fn create_backlog_items(
                     planned_item.index,
                     planned_item.client_key.as_deref(),
                     format!(
-                        "missing required field(s): {}. Provide at least title or goal; explicit fields can still override derived defaults. Required persisted fields: title, goal, implementation_contract or contract, and at least one acceptance criterion.",
+                        "missing required field(s): {}. Provide at least title or goal. implementation_contract/contract and acceptance can be supplied explicitly; when omitted, Platypus writes explicit generated placeholder guidance and a first acceptance criterion.",
                         missing_fields.join(", ")
                     ),
-                    "Provide title or goal. Platypus can derive implementation_contract and acceptance from that minimal input when explicit values are omitted.",
+                    "Provide title or goal. Add implementation_contract/contract and acceptance when the work needs a real execution contract instead of generated placeholders.",
                 )
             }
         };
@@ -767,6 +786,23 @@ fn validate_dependencies(
     Ok(())
 }
 
+fn validate_contract_aliases(params: &CreateBacklogItemParams) -> Result<(), String> {
+    let has_implementation_contract = params
+        .implementation_contract
+        .as_deref()
+        .and_then(clean_text)
+        .is_some();
+    let has_contract = params.contract.as_deref().and_then(clean_text).is_some();
+    if has_implementation_contract && has_contract {
+        Err(
+            "provide only one of implementation_contract or contract in the same create request"
+                .to_string(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
 fn existing_item_hint(existing_ids: &BTreeSet<String>) -> String {
     if existing_ids.is_empty() {
         return "none".to_string();
@@ -959,12 +995,7 @@ fn normalize_backlog_input(
     let explicit_title = clean_text(&params.title);
     let explicit_goal = clean_text(&params.goal);
     if explicit_title.is_none() && explicit_goal.is_none() {
-        return Err(vec![
-            "title",
-            "goal",
-            "implementation_contract|contract",
-            "acceptance",
-        ]);
+        return Err(vec!["title|goal"]);
     }
 
     let title = explicit_title
@@ -976,7 +1007,7 @@ fn normalize_backlog_input(
         .as_deref()
         .or(params.contract.as_deref())
         .and_then(clean_text)
-        .unwrap_or_else(|| format!("Implement the requested change: {}", with_period(&goal)));
+        .unwrap_or_else(|| GENERATED_CONTRACT_PLACEHOLDER.to_string());
     let mut acceptance = clean_vec(params.acceptance.clone());
     if acceptance.is_empty() {
         acceptance.push(format!(

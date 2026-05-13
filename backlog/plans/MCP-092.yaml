@@ -1,0 +1,72 @@
+item_id: MCP-092
+version: 1
+mode: minimal
+requirements:
+- id: R1
+  text: Empty backlog inspection exposes an explicit machine-readable state.
+- id: R2
+  text: Closed item summaries expose evidence presence and count without dumping full evidence.
+- id: R3
+  text: Compact queue status remains small and consistent with work queue inspection.
+design:
+  summary: Add queue/status visibility fields that let agents follow the state table without inferring from counts and verify closure completeness without a separate evidence lookup for every item.
+  owned_surfaces:
+  - src/guidance.rs
+  - src/models.rs
+  - src/evidence.rs
+  - docs/tools.md
+  - tests
+  notes: Keep response payloads bounded; evidence visibility should be counts/booleans only unless a dedicated evidence tool is called.
+tasks:
+- id: MCP-092-T001
+  title: Add empty backlog state
+  goal: Expose empty_backlog or equivalent explicit state in work queue/status outputs when no backlog items exist.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/guidance.rs
+  - src/models.rs
+  verification:
+  - cargo test guidance::tests::inspect_work_queue_does_not_create_runtime_state
+  acceptance:
+  - Empty backlog output includes a named state usable by workflow tables.
+  - Existing recommended_tool and next_action behavior remains intact.
+  notes: null
+- id: MCP-092-T002
+  title: Expose closed item evidence counts
+  goal: Add evidence presence/count fields to closed item summaries without returning full evidence records.
+  requirement_refs:
+  - R2
+  depends_on:
+  - MCP-092-T001
+  owned_surfaces:
+  - src/guidance.rs
+  - src/models.rs
+  - src/evidence.rs
+  verification:
+  - cargo test evidence::tests
+  - cargo test guidance::tests
+  acceptance:
+  - Closed item summaries show has_evidence and evidence_count or equivalent.
+  - Evidence details still require list_evidence or inspect_item, preserving compact output.
+  notes: null
+- id: MCP-092-T003
+  title: Document and test queue visibility
+  goal: Update docs and regression tests for empty_backlog state and evidence visibility fields.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-092-T002
+  owned_surfaces:
+  - docs/tools.md
+  - tests
+  verification:
+  - make check
+  acceptance:
+  - Docs explain the compact visibility fields and when to call list_evidence.
+  - Full verification passes.
+  notes: null
