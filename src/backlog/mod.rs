@@ -1397,6 +1397,39 @@ mod tests {
     }
 
     #[test]
+    fn validate_task_plan_normalizes_item_filter_for_next_action() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Worker planning", "P1", &[]);
+        set_item_policy(temp.path(), "PROJ-001", "worker_handoff", "task_plan");
+
+        let written = write_task_plan(
+            temp.path(),
+            WriteTaskPlanParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                plan: valid_task_plan("PROJ-001"),
+                overwrite: None,
+            },
+        );
+        assert!(matches!(written.status, ActionStatus::Completed));
+
+        let validation = validate_task_plan(
+            temp.path(),
+            TaskPlanQueryParams {
+                root: Some(root_arg(temp.path())),
+                item_id: Some("proj-001".to_string()),
+                include_errors: Some(true),
+            },
+        );
+
+        let next_action = validation.next_action.as_deref().unwrap_or("");
+        assert!(matches!(validation.status, ActionStatus::Completed));
+        assert!(next_action.contains("commit_planning_artifacts"));
+        assert!(next_action.contains("worker worktrees"));
+        assert!(!next_action.contains("Inspect the queue"));
+    }
+
+    #[test]
     fn write_task_plan_rejects_goal_workflow_mode_aliases() {
         let temp = project_fixture();
         write_item(temp.path(), "PROJ-001", "Task planning", "P1", &[]);

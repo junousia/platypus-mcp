@@ -106,7 +106,8 @@ pub fn validate_task_plan(
         Err(error) => return ActionResult::failed(action, "Could not validate task plan.", error),
     };
     let include_errors = params.include_errors.unwrap_or(true);
-    let errors = validate_plans_at_root(&root, params.item_id.as_deref());
+    let item_filter = params.item_id.as_deref().map(normalize_item_id);
+    let errors = validate_plans_at_root(&root, item_filter.as_deref());
     let paths = plan_paths(&root).unwrap_or_default();
     let mut task_count = 0;
     for path in &paths {
@@ -128,12 +129,7 @@ pub fn validate_task_plan(
     if data.ok {
         let backlog = validate_backlog_at_root(&root, true);
         let next_action = if backlog.ok {
-            validation_next_action(
-                &root,
-                &backlog.items,
-                params.item_id.as_deref(),
-                "Task plans",
-            )
+            validation_next_action(&root, &backlog.items, item_filter.as_deref(), "Task plans")
         } else {
             "Task plans validate, but backlog must validate before work can be prepared."
                 .to_string()
