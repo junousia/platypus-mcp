@@ -1,0 +1,75 @@
+item_id: MCP-079
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Existing backlog items can be updated through a typed MCP tool without manual markdown edits.
+- id: R2
+  text: Updates validate the resulting item before write and roll back on failure.
+- id: R3
+  text: Closed items are protected by default.
+design:
+  summary: Add a structured patch-style update path beside create_backlog_item and reuse existing backlog parsing and validation so markdown remains canonical but host interaction is typed.
+  owned_surfaces:
+  - src/backlog
+  - src/models.rs
+  - src/server.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  notes: Keep the first version bounded to fields and sections already supported by the backlog schema.
+tasks:
+- id: MCP-079-T001
+  title: Define update request and response schema
+  goal: Add typed params for patchable frontmatter and body sections plus result data for changed fields.
+  requirement_refs:
+  - R1
+  depends_on: []
+  owned_surfaces:
+  - src/models.rs
+  verification:
+  - cargo test server::tests::tool_input_schemas_expose_examples_and_patterns
+  acceptance:
+  - Schema exposes update_backlog_item with clear optional patch fields.
+  - Mutating behavior is visible in tool annotations.
+  notes:
+  - Avoid free-form arbitrary markdown replacement in the first version.
+- id: MCP-079-T002
+  title: Implement validated update and rollback
+  goal: Load one item, apply supported patch fields, validate, write atomically, and restore original content on post-write validation failure.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-079-T001
+  owned_surfaces:
+  - src/backlog
+  - src/server.rs
+  verification:
+  - cargo test backlog::tests
+  acceptance:
+  - Successful updates change only the requested item.
+  - Invalid priority, epic, dependency, execution path, or planning gate is rejected.
+  - Closed items fail unless an explicit override is supplied.
+  notes:
+  - Reuse existing validation instead of duplicating schema rules.
+- id: MCP-079-T003
+  title: Add protocol coverage and docs
+  goal: Exercise update_backlog_item through stdio and document common correction flows.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-079-T002
+  owned_surfaces:
+  - tests/stdio_protocol.rs
+  - docs/tools.md
+  - docs/workflow.md
+  verification:
+  - make check
+  acceptance:
+  - Stdio tests prove update, rollback, and closed-item protection.
+  - Docs explain update versus direct markdown edits.
+  notes: null

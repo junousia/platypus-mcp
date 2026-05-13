@@ -863,6 +863,58 @@ pub struct CreateBacklogItemsEntry {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateBacklogItemParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Backlog item identifier.
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
+    pub item_id: String,
+    /// Human-readable title or short label.
+    #[schemars(example = example_title())]
+    pub title: Option<String>,
+    /// Backlog priority. Supported values: P0, P1, P2.
+    #[schemars(with = "Option<BacklogPrioritySchema>")]
+    pub priority: Option<String>,
+    /// Backlog item type. Supported values: foundation, feature, safety, ux, test, docs.
+    #[serde(rename = "type")]
+    #[schemars(with = "Option<BacklogItemTypeSchema>")]
+    pub item_type: Option<String>,
+    /// Primary area or surface for this item.
+    pub area: Option<String>,
+    /// Epic or grouping identifier for this item.
+    pub epic: Option<String>,
+    /// Existing backlog item IDs that must be satisfied before this item.
+    #[schemars(inner(pattern(r"^[A-Z]+-[0-9]{3}$")))]
+    pub depends_on: Option<Vec<String>>,
+    /// Relative paths or top-level areas the work is expected to touch.
+    #[schemars(example = example_owned_surfaces())]
+    pub owned_surfaces: Option<Vec<String>>,
+    /// External references tied to this record.
+    pub external_refs: Option<Vec<ExternalRef>>,
+    /// Durable execution path for this item. Use direct_edit for
+    /// manager-workspace edits and worker_handoff for isolated worktree handoff.
+    #[schemars(with = "Option<BacklogExecutionPathSchema>")]
+    pub execution_path: Option<String>,
+    /// Durable planning gate for this item. Use none, task_plan, or approved_task_plan.
+    #[schemars(with = "Option<PlanningGateSchema>")]
+    pub planning_gate: Option<String>,
+    /// Goal text that drives this request or record.
+    #[schemars(example = example_goal())]
+    pub goal: Option<String>,
+    /// Implementation contract text for this backlog item.
+    pub implementation_contract: Option<String>,
+    /// Optional alias for implementation_contract.
+    pub contract: Option<String>,
+    /// Acceptance criteria for this item. Provide at least one criterion when updating this section.
+    pub acceptance: Option<Vec<String>>,
+    /// Optional notes section. Empty string removes notes when present.
+    pub notes: Option<String>,
+    /// Allow updates to items already closed by Git trailer or direct completion.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
+    pub force_closed: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateEpicParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
@@ -2507,6 +2559,22 @@ pub struct CreatedBacklogBatchItem {
     pub depends_on: Vec<String>,
     /// Whether this tool call created the file, record, or workspace.
     pub created: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct UpdatedBacklogItemData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Backlog item identifier.
+    pub item_id: String,
+    /// Filesystem path for the local file or workspace.
+    pub path: String,
+    /// Whether this item was already closed when the update was requested.
+    pub closed: bool,
+    /// Fields changed by this update.
+    pub changed_fields: Vec<String>,
+    /// Validation result after the planning write completed.
+    pub validation: BacklogValidationData,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

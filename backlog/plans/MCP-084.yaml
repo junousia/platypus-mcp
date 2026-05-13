@@ -1,0 +1,73 @@
+item_id: MCP-084
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Direct completion responses show automatically generated evidence records.
+- id: R2
+  text: Hosts can disable automatic evidence generation when they provide explicit evidence.
+- id: R3
+  text: Default behavior keeps current traceability.
+design:
+  summary: Make direct completion evidence behavior explicit in the response and add a narrow option to disable automatic generation when evidence is managed separately.
+  owned_surfaces:
+  - src/host_lifecycle.rs
+  - src/evidence.rs
+  - src/models.rs
+  - src/server.rs
+  - docs/tools.md
+  - tests/stdio_protocol.rs
+  notes: Do not weaken required verification or finding gates.
+tasks:
+- id: MCP-084-T001
+  title: Extend completion schema
+  goal: Add an evidence generation option and response fields for generated evidence IDs.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/models.rs
+  - src/server.rs
+  verification:
+  - cargo check
+  acceptance:
+  - Schema documents the default generation behavior.
+  - Response data can list generated evidence records.
+  notes: null
+- id: MCP-084-T002
+  title: Implement evidence reporting and opt-out
+  goal: Update complete_backlog_item to report generated evidence and honor the opt-out.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-084-T001
+  owned_surfaces:
+  - src/host_lifecycle.rs
+  - src/evidence.rs
+  verification:
+  - cargo test host_lifecycle::tests
+  acceptance:
+  - Default completion reports generated evidence IDs.
+  - Opt-out completion creates no automatic evidence.
+  - Explicit evidence references remain accepted.
+  notes: null
+- id: MCP-084-T003
+  title: Add protocol tests and documentation
+  goal: Cover default, disabled, and explicit evidence flows.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on:
+  - MCP-084-T002
+  owned_surfaces:
+  - tests/stdio_protocol.rs
+  - docs/tools.md
+  verification:
+  - make check
+  acceptance:
+  - Public docs explain when to keep or disable auto evidence.
+  - Protocol tests assert generated evidence visibility.
+  notes: null

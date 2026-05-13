@@ -1,0 +1,73 @@
+item_id: MCP-080
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Hosts can ask for compact queue status without receiving the full inventory payload.
+- id: R2
+  text: Queue states include human-readable descriptions suitable for chat summaries.
+- id: R3
+  text: Existing full queue inspection remains stable.
+design:
+  summary: Add a compact mode or a new quick status tool that reuses inspect_work_queue internals but projects a smaller response optimized for triage and dashboards.
+  owned_surfaces:
+  - src/guidance.rs
+  - src/models.rs
+  - src/server.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  notes: Prefer a single implementation path so compact and full queue counts cannot diverge.
+tasks:
+- id: MCP-080-T001
+  title: Design compact queue response
+  goal: Define the compact data model with counts, top ready items, top blocked items, active tasks, and state descriptions.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/models.rs
+  - src/guidance.rs
+  verification:
+  - cargo check
+  acceptance:
+  - Response includes runnable, blocked, active, pending integration, closed, and total counts.
+  - Response includes concise descriptions for direct_ready, ready, planning_blocked, dependency_blocked, active, and pending_integration.
+  notes:
+  - Decide whether this is inspect_work_queue output_mode=compact or a separate tool before implementation.
+- id: MCP-080-T002
+  title: Implement compact projection
+  goal: Reuse the existing queue inspection computation and return compact output without changing full output.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on:
+  - MCP-080-T001
+  owned_surfaces:
+  - src/guidance.rs
+  - src/server.rs
+  verification:
+  - cargo test guidance::tests
+  acceptance:
+  - Compact output matches full queue counts for the same project.
+  - Full inspect_work_queue tests continue to pass unchanged.
+  notes: null
+- id: MCP-080-T003
+  title: Document queue inspection choice
+  goal: Explain when to use compact status, full queue inspection, list_backlog, and inspect_item.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-080-T002
+  owned_surfaces:
+  - docs/tools.md
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  verification:
+  - make check
+  acceptance:
+  - Docs distinguish the queue tools without overlapping recommendations.
+  - Stdio tests cover the compact surface.
+  notes: null

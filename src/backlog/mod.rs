@@ -7,6 +7,7 @@ mod parse;
 mod plan;
 mod status;
 mod types;
+mod update;
 mod validate;
 
 pub use create::{create_backlog_item, create_backlog_items};
@@ -14,6 +15,7 @@ pub use epic::{create_epic, list_epics};
 pub use graph::inspect_dependency_graph;
 pub use plan::{inspect_task_plan, list_task_plans, validate_task_plan, write_task_plan};
 pub use status::{inspect_backlog_inventory, inspect_status, list_backlog};
+pub use update::update_backlog_item;
 pub use validate::validate_backlog;
 
 pub(crate) use closure::closed_item_ids;
@@ -109,7 +111,7 @@ mod tests {
     use crate::models::{
         ActionStatus, CreateBacklogItemParams, CreateBacklogItemsEntry, CreateBacklogItemsParams,
         CreateEpicParams, PlannedTask, RootParams, TaskPlanDesign, TaskPlanFile,
-        TaskPlanQueryParams, TaskPlanRequirement, WriteTaskPlanParams,
+        TaskPlanQueryParams, TaskPlanRequirement, UpdateBacklogItemParams, WriteTaskPlanParams,
     };
     use std::{fs, path::Path, process::Command};
     use tempfile::TempDir;
@@ -1640,6 +1642,209 @@ tasks:
         assert!(matches!(validation.status, ActionStatus::Failed));
         let error = validation.error.unwrap();
         assert!(error.contains("circular task dependency"), "{error}");
+    }
+
+    #[test]
+    fn update_backlog_item_updates_fields_sections_and_validates() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Old title", "P1", &[]);
+
+        let result = update_backlog_item(
+            temp.path(),
+            UpdateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "proj-001".to_string(),
+                title: Some("New title".to_string()),
+                priority: Some("P0".to_string()),
+                item_type: Some("docs".to_string()),
+                area: Some("documentation".to_string()),
+                epic: None,
+                depends_on: Some(Vec::new()),
+                owned_surfaces: Some(vec!["README.md".to_string()]),
+                external_refs: None,
+                execution_path: Some("worker_handoff".to_string()),
+                planning_gate: Some("task_plan".to_string()),
+                goal: Some("Update the backlog item safely.".to_string()),
+                implementation_contract: Some("Patch the item through the MCP tool.".to_string()),
+                contract: None,
+                acceptance: Some(vec!["Updated item validates.".to_string()]),
+                notes: Some("Reviewed from feedback.".to_string()),
+                force_closed: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Completed));
+        let data = result.data.expect("data");
+        assert_eq!(data.item_id, "PROJ-001");
+        assert!(data.changed_fields.contains(&"title".to_string()));
+        assert!(data.changed_fields.contains(&"acceptance".to_string()));
+        let text = fs::read_to_string(temp.path().join("backlog/items/PROJ-001.md")).unwrap();
+        assert!(text.contains("title: New title"));
+        assert!(text.contains("priority: P0"));
+        assert!(text.contains("type: docs"));
+        assert!(text.contains("execution_path: worker_handoff"));
+        assert!(text.contains("planning_gate: task_plan"));
+        assert!(text.contains("## Notes\n\nReviewed from feedback."));
+        assert!(text.contains("- Updated item validates."));
+    }
+
+    #[test]
+    fn update_backlog_item_rejects_invalid_update_and_rolls_back() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Stable title", "P1", &[]);
+        let path = temp.path().join("backlog/items/PROJ-001.md");
+        let before = fs::read_to_string(&path).expect("before");
+
+        let result = update_backlog_item(
+            temp.path(),
+            UpdateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                title: Some("Changed title".to_string()),
+                priority: Some("P9".to_string()),
+                item_type: None,
+                area: None,
+                epic: None,
+                depends_on: None,
+                owned_surfaces: None,
+                external_refs: None,
+                execution_path: None,
+                planning_gate: None,
+                goal: None,
+                implementation_contract: None,
+                contract: None,
+                acceptance: None,
+                notes: None,
+                force_closed: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("invalid priority"));
+        assert_eq!(fs::read_to_string(path).expect("after"), before);
+    }
+
+    #[test]
+    fn update_backlog_item_rolls_back_unknown_dependency() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Stable title", "P1", &[]);
+        let path = temp.path().join("backlog/items/PROJ-001.md");
+        let before = fs::read_to_string(&path).expect("before");
+
+        let result = update_backlog_item(
+            temp.path(),
+            UpdateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                title: Some("Changed title".to_string()),
+                priority: None,
+                item_type: None,
+                area: None,
+                epic: None,
+                depends_on: Some(vec!["PROJ-999".to_string()]),
+                owned_surfaces: None,
+                external_refs: None,
+                execution_path: None,
+                planning_gate: None,
+                goal: None,
+                implementation_contract: None,
+                contract: None,
+                acceptance: None,
+                notes: None,
+                force_closed: None,
+            },
+        );
+
+        assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("unknown dependency `PROJ-999`"));
+        assert_eq!(fs::read_to_string(path).expect("after"), before);
+    }
+
+    #[test]
+    fn update_backlog_item_protects_closed_items_unless_forced() {
+        let temp = project_fixture();
+        write_item(temp.path(), "PROJ-001", "Closed title", "P1", &[]);
+        git(temp.path(), &["init"]);
+        git(temp.path(), &["config", "user.name", "Platypus Test"]);
+        git(
+            temp.path(),
+            &["config", "user.email", "platypus@example.invalid"],
+        );
+        git(temp.path(), &["add", "--all"]);
+        git(
+            temp.path(),
+            &[
+                "commit",
+                "-m",
+                "Close item",
+                "-m",
+                "Platypus-Closes: PROJ-001",
+            ],
+        );
+
+        let blocked = update_backlog_item(
+            temp.path(),
+            UpdateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                title: Some("Blocked update".to_string()),
+                priority: None,
+                item_type: None,
+                area: None,
+                epic: None,
+                depends_on: None,
+                owned_surfaces: None,
+                external_refs: None,
+                execution_path: None,
+                planning_gate: None,
+                goal: None,
+                implementation_contract: None,
+                contract: None,
+                acceptance: None,
+                notes: None,
+                force_closed: None,
+            },
+        );
+        assert!(matches!(blocked.status, ActionStatus::Failed));
+        assert!(blocked
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("already closed"));
+
+        let forced = update_backlog_item(
+            temp.path(),
+            UpdateBacklogItemParams {
+                root: Some(root_arg(temp.path())),
+                item_id: "PROJ-001".to_string(),
+                title: Some("Forced update".to_string()),
+                priority: None,
+                item_type: None,
+                area: None,
+                epic: None,
+                depends_on: None,
+                owned_surfaces: None,
+                external_refs: None,
+                execution_path: None,
+                planning_gate: None,
+                goal: None,
+                implementation_contract: None,
+                contract: None,
+                acceptance: None,
+                notes: None,
+                force_closed: Some(true),
+            },
+        );
+        assert!(matches!(forced.status, ActionStatus::Completed));
+        assert!(forced.data.unwrap().closed);
     }
 
     fn project_fixture() -> TempDir {

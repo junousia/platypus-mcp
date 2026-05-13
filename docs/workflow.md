@@ -129,13 +129,16 @@ mechanism is verified.
    product intent from goal text.
 2. Persist selected work with `create_backlog_items` when related items should
    be created atomically, or `create_backlog_item` for a single item.
-3. Run `validate_backlog`.
-4. Use `inspect_work_queue` to see runnable candidates, active task state,
+3. Use `update_backlog_item` for typed corrections or refinements after an item
+   exists. Do this instead of hand-editing markdown when the change is a
+   supported schema or section update.
+4. Run `validate_backlog`.
+5. Use `inspect_work_queue` to see runnable candidates, active task state,
    dependency-blocked items, closed items, task-plan state, and setup blockers.
-5. Use `inspect_item` when one backlog item needs full state: markdown
+6. Use `inspect_item` when one backlog item needs full state: markdown
    sections, dependencies, closure state, task plan, findings, evidence, and
    the recommended next tool.
-6. Use `list_backlog` only when a compact runnable-candidate list is enough.
+7. Use `list_backlog` only when a compact runnable-candidate list is enough.
    Use `queue_state` as the authoritative routing signal: `direct_ready` means
    the host can proceed through `prepare_work` and complete with
    `complete_backlog_item`; `ready` means worker/worktree preparation is
@@ -167,6 +170,11 @@ When creating backlog items through tools, use the typed schema:
 - use `client_key` plus `depends_on_keys` in `create_backlog_items` for
   dependencies between newly created items; the tool resolves those keys to
   concrete backlog IDs before writing files
+- use `update_backlog_item` for supported changes to existing items; it
+  validates the full backlog after writing and restores the previous item when
+  validation fails
+- closed items are protected from update by default; create a follow-up item
+  unless the correction is intentional and `force_closed=true` is justified
 
 Backlog items may include `external_refs` for intake and reporting surfaces
 such as GitHub, Linear, Jira, GitLab, support tickets, specs, or local design

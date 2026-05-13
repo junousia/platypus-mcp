@@ -26,6 +26,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"inspect_status"));
     assert!(tool_names.contains(&"create_backlog_item"));
     assert!(tool_names.contains(&"create_backlog_items"));
+    assert!(tool_names.contains(&"update_backlog_item"));
     assert!(tool_names.contains(&"create_epic"));
     assert!(tool_names.contains(&"list_epics"));
     assert!(tool_names.contains(&"doctor_snapshot"));
@@ -224,6 +225,89 @@ async fn stdio_server_creates_backlog_items_atomically() -> anyhow::Result<()> {
     .await?;
     assert_stage_status("create_backlog_items", &failed, "failed");
     assert!(!project.path().join("backlog/items/PROJ-001.md").exists());
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_updates_backlog_item_with_validation() -> anyhow::Result<()> {
+    let project = TempDir::new()?;
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+    let initialized = call_tool_json(
+        &client,
+        "init_project",
+        json!({ "project_name": "Update Smoke" }),
+    )
+    .await?;
+    assert_stage_status("init_project", &initialized, "completed");
+
+    let created = call_tool_json(
+        &client,
+        "create_backlog_item",
+        json!({
+            "id": "PROJ-001",
+            "title": "Original item",
+            "type": "feature",
+            "goal": "Original goal.",
+            "implementation_contract": "Original contract.",
+            "acceptance": ["Original acceptance."]
+        }),
+    )
+    .await?;
+    assert_stage_status("create_backlog_item", &created, "completed");
+
+    let updated = call_tool_json(
+        &client,
+        "update_backlog_item",
+        json!({
+            "item_id": "PROJ-001",
+            "title": "Updated item",
+            "priority": "P0",
+            "type": "docs",
+            "owned_surfaces": ["README.md"],
+            "execution_path": "worker_handoff",
+            "planning_gate": "task_plan",
+            "goal": "Updated goal.",
+            "implementation_contract": "Updated contract.",
+            "acceptance": ["Updated acceptance."]
+        }),
+    )
+    .await?;
+    assert_stage_status("update_backlog_item", &updated, "completed");
+    assert_eq!(updated["data"]["item_id"], "PROJ-001");
+    assert!(updated["data"]["changed_fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|field| field == "title"));
+
+    let text = fs::read_to_string(project.path().join("backlog/items/PROJ-001.md"))?;
+    assert!(text.contains("title: Updated item"));
+    assert!(text.contains("priority: P0"));
+    assert!(text.contains("type: docs"));
+    assert!(text.contains("execution_path: worker_handoff"));
+    assert!(text.contains("- Updated acceptance."));
+
+    let before = text;
+    let failed = call_tool_json(
+        &client,
+        "update_backlog_item",
+        json!({
+            "item_id": "PROJ-001",
+            "depends_on": ["PROJ-999"]
+        }),
+    )
+    .await?;
+    assert_stage_status("update_backlog_item", &failed, "failed");
+    assert!(failed["error"]
+        .as_str()
+        .unwrap_or("")
+        .contains("unknown dependency `PROJ-999`"));
+    assert_eq!(
+        fs::read_to_string(project.path().join("backlog/items/PROJ-001.md"))?,
+        before
+    );
 
     client.cancel().await?;
     Ok(())

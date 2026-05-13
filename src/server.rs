@@ -29,11 +29,12 @@ use crate::{
         StorageCapabilityProbeData, StorageCapabilityProbeParams, TaskBundleData,
         TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData, TaskPlanQueryParams,
         TaskPlanValidationData, TaskPlanWriteData, TaskRecordData, TaskVerificationRunData,
-        UpdateFindingDispositionParams, ValidateBacklogParams, ValidateFindingsParams,
-        WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData, WorkerGuidanceData,
-        WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData,
-        WorktreeCleanupParams, WorktreeCreateParams, WorktreeData, WorktreeDiffData,
-        WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
+        UpdateBacklogItemParams, UpdateFindingDispositionParams, UpdatedBacklogItemData,
+        ValidateBacklogParams, ValidateFindingsParams, WorkQueueData, WorkerAssignmentData,
+        WorkerAssignmentEventData, WorkerGuidanceData, WorkerResultIntegrationData,
+        WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData, WorktreeCleanupParams,
+        WorktreeCreateParams, WorktreeData, WorktreeDiffData, WorktreeDiffParams,
+        WorktreeStatusParams, WriteTaskPlanParams,
     },
     project, reconcile, storage, tasks, workspace,
 };
@@ -652,6 +653,25 @@ impl PlatypusMcp {
         Parameters(params): Parameters<CreateBacklogItemsParams>,
     ) -> Json<ActionResult<CreatedBacklogItemsData>> {
         Json(backlog::create_backlog_items(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Update Backlog Item",
+        description = "Update one existing backlog item through a typed patch, validating and rolling back on failure.",
+        annotations(
+            title = "Update Backlog Item",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn update_backlog_item(
+        &self,
+        Parameters(params): Parameters<UpdateBacklogItemParams>,
+    ) -> Json<ActionResult<UpdatedBacklogItemData>> {
+        Json(backlog::update_backlog_item(&self.default_root, params))
     }
 
     #[tool(
@@ -1704,6 +1724,7 @@ mod tests {
             "record_external_report_dispatch",
             "create_backlog_item",
             "create_backlog_items",
+            "update_backlog_item",
             "create_epic",
             "list_epics",
             "inspect_task_plan",
@@ -1770,6 +1791,7 @@ mod tests {
             "init_project",
             "create_backlog_item",
             "create_backlog_items",
+            "update_backlog_item",
             "create_epic",
             "write_task_plan",
             "import_github_issues",
@@ -2001,6 +2023,26 @@ mod tests {
                 "duplicate",
             ],
         );
+        assert_property_enum_values(
+            &input_schema(&tools, "update_backlog_item"),
+            "priority",
+            &["P0", "P1", "P2"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "update_backlog_item"),
+            "type",
+            &["foundation", "feature", "safety", "ux", "test", "docs"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "update_backlog_item"),
+            "execution_path",
+            &["direct_edit", "worker_handoff"],
+        );
+        assert_property_enum_values(
+            &input_schema(&tools, "update_backlog_item"),
+            "planning_gate",
+            &["none", "task_plan", "approved_task_plan"],
+        );
         assert_property_numeric_bounds(
             &input_schema(&tools, "dispatch_ready_work"),
             "max_tasks",
@@ -2067,6 +2109,13 @@ mod tests {
 
         let create_backlog_items = input_schema(&tools, "create_backlog_items");
         assert_property_pattern(&create_backlog_items, "id_prefix", r"^[A-Z]+$");
+
+        let update_backlog_item = input_schema(&tools, "update_backlog_item");
+        assert_property_has_example(&update_backlog_item, "item_id");
+        assert_property_has_example(&update_backlog_item, "title");
+        assert_property_has_example(&update_backlog_item, "goal");
+        assert_property_pattern(&update_backlog_item, "item_id", r"^[A-Z]+-[0-9]{3}$");
+        assert_array_item_pattern(&update_backlog_item, "depends_on", r"^[A-Z]+-[0-9]{3}$");
 
         let create_epic = input_schema(&tools, "create_epic");
         assert_property_has_example(&create_epic, "id");

@@ -1,0 +1,74 @@
+item_id: MCP-083
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Hosts can preview backlog item batches before writing files.
+- id: R2
+  text: Simple backlog items can be created through a compact schema.
+- id: R3
+  text: Preview and quick create use the same strict validation as full create.
+design:
+  summary: Extend the backlog creation path with dry-run preview and a compact input adapter that expands to the canonical creation model before validation.
+  owned_surfaces:
+  - src/backlog/create.rs
+  - src/models.rs
+  - src/server.rs
+  - docs/tools.md
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  notes: Do not add heuristic drafting. The host still supplies item content.
+tasks:
+- id: MCP-083-T001
+  title: Add batch preview support
+  goal: Add dry_run or preview mode to create_backlog_items that validates and returns would-write targets without filesystem mutation.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/backlog/create.rs
+  - src/models.rs
+  verification:
+  - cargo test backlog::tests
+  acceptance:
+  - Preview allocates deterministic would-be IDs.
+  - Preview returns file paths and normalized item data.
+  - Preview leaves git status unchanged.
+  notes: null
+- id: MCP-083-T002
+  title: Add quick-create schema adapter
+  goal: Provide a compact item input for common fields and expand it into the existing canonical item creation path.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-083-T001
+  owned_surfaces:
+  - src/models.rs
+  - src/backlog/create.rs
+  - src/server.rs
+  verification:
+  - cargo test server::tests::tool_input_schemas_expose_enum_and_bound_constraints
+  acceptance:
+  - Quick create supports title, goal, type, priority, area, owned surfaces, and acceptance criteria.
+  - Invalid quick-create inputs fail with the same recovery guidance as full create.
+  notes: null
+- id: MCP-083-T003
+  title: Document authoring modes
+  goal: Explain full create, quick create, and preview in docs and protocol tests.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on:
+  - MCP-083-T002
+  owned_surfaces:
+  - docs/tools.md
+  - docs/workflow.md
+  - tests/stdio_protocol.rs
+  verification:
+  - make check
+  acceptance:
+  - Stdio tests cover preview and quick create.
+  - Docs state that preview is non-mutating.
+  notes: null

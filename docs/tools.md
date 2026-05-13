@@ -51,8 +51,8 @@ schemas, call the same tools normally when they are needed.
 1. Bootstrap and inspect: `platypus-mcp bootstrap <host> --init-project` for
    fresh projects, or `init_project` and `inspect_session` from an MCP host.
 2. Shape backlog: the host model decides concrete item boundaries, then calls
-   `create_backlog_item` or `create_backlog_items`, `validate_backlog`,
-   `list_backlog`, `draft_external_backlog_items`, and
+   `create_backlog_item`, `create_backlog_items`, `update_backlog_item`,
+   `validate_backlog`, `list_backlog`, `draft_external_backlog_items`, and
    `import_github_issues`.
 3. Plan non-trivial work: `write_task_plan`,
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
@@ -134,6 +134,9 @@ make smoke-storage
   plan or backlog tranche before non-direct work is dispatched.
 - `create_backlog_item`: write one structured backlog item.
 - `create_backlog_items`: atomically write related backlog items in one call.
+- `update_backlog_item`: update one existing backlog item through a typed
+  patch. It validates before keeping the write, rolls back failed updates, and
+  protects closed items unless `force_closed=true` is supplied intentionally.
 - `create_epic`: write one structured backlog epic.
 - `list_epics`: list existing backlog epics and their metadata.
 - `validate_backlog`: validate backlog item and epic files.
@@ -162,6 +165,10 @@ Backlog schema quick reference:
 - Use `create_backlog_items` for related items that should land together. It
   accepts per-item `client_key` values and resolves `depends_on_keys` to the
   created item IDs; if any item fails validation, no batch files are written.
+- Use `update_backlog_item` to correct or refine an existing item. Supported
+  updates include title, priority, type, area, epic, dependencies, owned
+  surfaces, external refs, execution path, planning gate, goal, implementation
+  contract, acceptance criteria, and notes. Invalid updates are rolled back.
 - Priority values: `P0`, `P1`, `P2`.
 - Type values: `foundation`, `feature`, `safety`, `ux`, `test`, `docs`.
 - Defaults when omitted: priority `P1`, type `feature`, epic `general`.
