@@ -38,15 +38,11 @@ deterministic and references the current public tool names.
   `platypus-integration-review`
 - Resource `platypus://guidance/recovery` / prompt `platypus-recovery`
 
-`platypus://guidance/tool-preload` names two optional startup groups:
-planning-session tools such as `doctor_snapshot`, `create_backlog_items`,
-`inspect_session`, `inspect_queue_status`, `inspect_work_queue`, and
-`write_task_plan`; and
-execution-session tools such as `dispatch_ready_work`, `inspect_worktree_changes`,
-`commit_planning_artifacts`, `complete_backlog_item`, `complete_worker_task`, `finish_work`,
-`record_verification_evidence`, `integrate_worker_result`, and
-`reconcile_project`. Tool preloading is host-specific. If a host cannot preload
-schemas, call the same tools normally when they are needed.
+`platypus://guidance/tool-preload` names small optional groups for deferred
+schema hosts: Startup Inspection, Backlog Planning, Direct Execution, Worker
+Handoff, Evidence And Findings, and Recovery. Tool preloading is
+host-specific. If a host cannot preload schemas, call the same tools normally
+when the workflow reaches that phase.
 
 ## Recommended Host Flow
 
