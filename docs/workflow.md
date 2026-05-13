@@ -170,24 +170,28 @@ mechanism is verified.
 1. Decide workflow strategy with the host model and user intent. Platypus MCP
    exposes facts, schemas, validation, and state transitions; it does not infer
    product intent from goal text.
-2. Persist selected work with `create_backlog_items` when related items should
-   be created atomically, or `create_backlog_item` for a single item.
-3. Use `update_backlog_item` for typed corrections or refinements after an item
+2. Preview related work with `create_backlog_items` and `preview=true` when the
+   host needs to show deterministic would-be IDs, target files, and markdown
+   before changing the repository.
+3. Persist selected work with `create_backlog_items` when related items should
+   be created atomically, `create_backlog_item` for a full single-item schema,
+   or `quick_create_backlog_item` for a compact common-field single item.
+4. Use `update_backlog_item` for typed corrections or refinements after an item
    exists. Do this instead of hand-editing markdown when the change is a
    supported schema or section update.
-4. Run `validate_backlog`. Its `next_action` follows explicit execution
+5. Run `validate_backlog`. Its `next_action` follows explicit execution
    policy: direct-ready queues continue through `prepare_work` and
    `complete_backlog_item`; worker-handoff queues still recommend committing
    planning artifacts before worktree dispatch when needed.
-5. Use `inspect_queue_status` for compact queue counts, top ready work, top
+6. Use `inspect_queue_status` for compact queue counts, top ready work, top
    blocked work, active tasks, and one-line queue-state descriptions.
-6. Use `inspect_work_queue` when the host needs full runnable candidates,
+7. Use `inspect_work_queue` when the host needs full runnable candidates,
    active task state, dependency-blocked items, closed items, task-plan state,
    setup blockers, and recommended tool parameters.
-7. Use `inspect_item` when one backlog item needs full state: markdown
+8. Use `inspect_item` when one backlog item needs full state: markdown
    sections, dependencies, closure state, task plan, findings, evidence, and
    the recommended next tool.
-8. Use `list_backlog` only when a compact runnable-candidate list is enough.
+9. Use `list_backlog` only when a compact runnable-candidate list is enough.
    Use `queue_state` as the authoritative routing signal: `direct_ready` means
    the host can proceed through `prepare_work` and complete with
    `complete_backlog_item`; `ready` means worker/worktree preparation is

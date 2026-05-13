@@ -10,7 +10,8 @@ use crate::execution_policy;
 use crate::models::{
     ActionResult, ActionStatus, BacklogValidationData, CreateBacklogItemParams,
     CreateBacklogItemsEntry, CreateBacklogItemsParams, CreatedBacklogBatchItem,
-    CreatedBacklogItemData, CreatedBacklogItemsData,
+    CreatedBacklogItemData, CreatedBacklogItemPreview, CreatedBacklogItemsData,
+    QuickCreateBacklogItemParams,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -44,6 +45,7 @@ struct PlannedBacklogWrite {
     path: PathBuf,
     text: String,
     depends_on: Vec<String>,
+    preview: CreatedBacklogItemPreview,
 }
 
 pub fn create_backlog_item(
@@ -235,11 +237,21 @@ pub fn create_backlog_item(
     )
 }
 
+pub fn quick_create_backlog_item(
+    default_root: &Path,
+    params: QuickCreateBacklogItemParams,
+) -> ActionResult<CreatedBacklogItemData> {
+    let mut result = create_backlog_item(default_root, quick_create_params(params));
+    result.action = "quick_create_backlog_item".to_string();
+    result
+}
+
 pub fn create_backlog_items(
     default_root: &Path,
     params: CreateBacklogItemsParams,
 ) -> ActionResult<CreatedBacklogItemsData> {
     let action = "create_backlog_items";
+    let preview = params.preview;
     let root = match resolve_root(default_root, params.root.as_deref()) {
         Ok(root) => root,
         Err(error) => {
@@ -467,8 +479,16 @@ pub fn create_backlog_items(
             client_key: planned_item.client_key,
             item_id: planned_item.item_id,
             path: item_path,
+            depends_on: clean_vec(params.depends_on.clone()),
+            preview: created_item_preview(
+                &params,
+                &normalized,
+                &priority,
+                &item_type,
+                &epic,
+                &text,
+            ),
             text,
-            depends_on: clean_vec(params.depends_on),
         });
     }
     if let Some(cycle) = batch_dependency_cycle(&writes) {
@@ -481,6 +501,32 @@ pub fn create_backlog_items(
             write.and_then(|write| write.client_key.as_deref()),
             format!("cyclic batch dependency: {}", cycle.join(" -> ")),
             "Remove or reverse one depends_on or depends_on_keys edge so the batch dependency graph is acyclic.",
+        );
+    }
+
+    if preview {
+        let validation = backlog_validation_data(&root, &validation, true);
+        let items = writes
+            .into_iter()
+            .map(|write| CreatedBacklogBatchItem {
+                client_key: write.client_key,
+                item_id: write.item_id,
+                path: write.path.display().to_string(),
+                depends_on: write.depends_on,
+                created: false,
+                preview: write.preview,
+            })
+            .collect::<Vec<_>>();
+        return ActionResult::completed(
+            action,
+            format!("Previewed {} backlog item(s).", items.len()),
+            CreatedBacklogItemsData {
+                root: root.display().to_string(),
+                created: 0,
+                preview: true,
+                items,
+                validation,
+            },
         );
     }
 
@@ -522,6 +568,7 @@ pub fn create_backlog_items(
             path: write.path.display().to_string(),
             depends_on: write.depends_on,
             created: true,
+            preview: write.preview,
         })
         .collect::<Vec<_>>();
     ActionResult::completed(
@@ -530,6 +577,7 @@ pub fn create_backlog_items(
         CreatedBacklogItemsData {
             root: root.display().to_string(),
             created: items.len(),
+            preview: false,
             items,
             validation,
         },
@@ -752,6 +800,29 @@ fn batch_item_params(item: CreateBacklogItemsEntry, item_id: String) -> CreateBa
         contract: item.contract,
         acceptance: item.acceptance,
         notes: item.notes,
+    }
+}
+
+fn quick_create_params(params: QuickCreateBacklogItemParams) -> CreateBacklogItemParams {
+    CreateBacklogItemParams {
+        root: params.root,
+        id: params.id,
+        id_prefix: params.id_prefix,
+        title: params.title,
+        priority: params.priority,
+        item_type: params.item_type,
+        area: params.area,
+        epic: params.epic,
+        depends_on: params.depends_on,
+        owned_surfaces: params.owned_surfaces,
+        external_refs: Vec::new(),
+        execution_path: None,
+        planning_gate: None,
+        goal: params.goal,
+        implementation_contract: None,
+        contract: None,
+        acceptance: params.acceptance,
+        notes: None,
     }
 }
 
@@ -1015,6 +1086,29 @@ fn backlog_item_text(
         body.push_str(&format!("\n## Notes\n\n{}\n", notes));
     }
     Ok(body)
+}
+
+fn created_item_preview(
+    params: &CreateBacklogItemParams,
+    normalized: &NormalizedBacklogInput,
+    priority: &str,
+    item_type: &str,
+    epic: &str,
+    markdown: &str,
+) -> CreatedBacklogItemPreview {
+    CreatedBacklogItemPreview {
+        title: normalized.title.clone(),
+        priority: priority.to_string(),
+        item_type: item_type.to_string(),
+        area: clean_optional(params.area.clone()).unwrap_or_else(|| "tooling".to_string()),
+        epic: epic.to_string(),
+        depends_on: clean_vec(params.depends_on.clone()),
+        owned_surfaces: clean_vec(params.owned_surfaces.clone()),
+        goal: normalized.goal.clone(),
+        implementation_contract: normalized.contract.clone(),
+        acceptance: normalized.acceptance.clone(),
+        markdown: markdown.to_string(),
+    }
 }
 
 fn validate_external_refs(refs: &[crate::models::ExternalRef]) -> Result<(), String> {
