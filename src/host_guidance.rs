@@ -178,20 +178,29 @@ Preloading is optional and host-specific. If the host cannot preload schemas,
 continue normally and call the tools as needed. Do not depend on hidden client
 context for core state transitions.
 
-## Planning Startup Group
+## Startup Inspection Group
 
-Load this group at the start of planning, backlog shaping, or project-status
-sessions:
+Load at session start or whenever chat context may be stale:
 
 - `doctor_snapshot`
 - `inspect_status`
 - `inspect_workflow_config`
 - `inspect_session`
+- `inspect_queue_status`
+
+## Backlog Planning Group
+
+Load before backlog shaping, item updates, task-plan work, or planning
+approvals:
+
 - `create_backlog_item`
+- `quick_create_backlog_item`
 - `create_backlog_items`
 - `create_epic`
+- `list_epics`
 - `validate_backlog`
 - `list_backlog`
+- `inspect_queue_status`
 - `inspect_work_queue`
 - `inspect_item`
 - `write_task_plan`
@@ -200,10 +209,24 @@ sessions:
 - `request_planning_approval`
 - `approval_respond`
 
-## Execution Startup Group
+## Direct Execution Group
 
-Load this group before dispatch, worker handoff, verification, integration, or
-recovery sessions:
+Load before manager-workspace direct edits and direct completion:
+
+- `inspect_session`
+- `inspect_queue_status`
+- `inspect_work_queue`
+- `prepare_work`
+- `complete_backlog_item`
+- `record_verification_evidence`
+- `record_finding`
+- `validate_findings`
+- `reconcile_project`
+
+## Worker Handoff Group
+
+Load before worktree handoff, external-worker execution, verification, and
+integration:
 
 - `inspect_work_queue`
 - `inspect_session`
@@ -211,6 +234,7 @@ recovery sessions:
 - `dispatch_ready_work`
 - `commit_planning_artifacts`
 - `generate_task_bundle`
+- `inspect_task`
 - `inspect_task_events`
 - `events_replay`
 - `worktree_status`
@@ -230,8 +254,40 @@ recovery sessions:
 - `worktree_cleanup`
 - `reconcile_project`
 
-Hosts may load additional tools when a user asks for lower-level control, but
-these two groups cover the normal long-term product development loop.
+## Evidence And Findings Group
+
+Load before recording or inspecting audit evidence and follow-up findings:
+
+- `record_evidence`
+- `record_verification_evidence`
+- `list_evidence`
+- `record_finding`
+- `list_findings`
+- `validate_findings`
+- `update_finding_disposition`
+
+## Recovery Group
+
+Load when a tool returns `failed`, `recovery_action`, or unclear lifecycle
+state:
+
+- `doctor_snapshot`
+- `inspect_session`
+- `inspect_work_queue`
+- `events_replay`
+- `inspect_task_events`
+- `approval_list`
+- `approval_respond`
+- `list_evidence`
+- `list_findings`
+- `validate_findings`
+- `update_finding_disposition`
+- `inspect_integration_gates`
+- `reconcile_project`
+
+Hosts may load additional tools when a user asks for lower-level control. These
+groups are advisory: if a host cannot preload schemas, call the same tools on
+demand when the workflow reaches that phase.
 "#;
 
 const BACKLOG_AUTHORING_TEXT: &str = r#"# Backlog Authoring Guidance
@@ -404,7 +460,7 @@ pub const GUIDANCE: &[GuidanceEntry] = &[
         name: "platypus-tool-preload",
         uri: TOOL_PRELOAD_URI,
         title: "Tool Preload",
-        description: "Common planning and execution tool groups for hosts with deferred schemas.",
+        description: "Phase-specific tool groups for hosts with deferred schemas.",
         text: TOOL_PRELOAD_TEXT,
     },
     GuidanceEntry {

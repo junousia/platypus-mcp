@@ -204,17 +204,21 @@ Important framing:
 
 Exercise goal:
 1. Inspect the project state and available Platypus workflow.
-2. Use the host model, user intent, or optional sampling to decide whether this goal should be direct work, backlog tracking, or planned work.
-3. Create concrete backlog items with create_backlog_items if tracking is useful; validate them and inspect the queue.
-4. Report whether the deterministic tool surface plus documentation made the workflow clearer or added unnecessary ceremony.
-5. Keep this exercise lightweight: do NOT run heavy scaffolding commands (no npm install, no long generator flows). Create tiny placeholder files if needed.
-6. Move at most one tracked item through queue/dispatch/lifecycle boundaries just enough to expose workflow friction; do not fully implement the app.
-7. If a step fails, use the structured tool output to recover or explain the blocker.
-8. End with a concise feedback report in Markdown.
-9. Write that final feedback report to FEEDBACK.md in this project root.
+2. Read the tool preload guidance if your harness exposes Platypus resources,
+   prompts, or schema discovery. Use the named groups only when useful; if your
+   harness cannot preload schemas, say so in the feedback.
+3. Use the host model, user intent, or optional sampling to decide whether this goal should be direct work, backlog tracking, or planned work.
+4. Create concrete backlog items with create_backlog_items if tracking is useful; validate them and inspect the queue.
+5. Report whether the deterministic tool surface plus documentation made the workflow clearer or added unnecessary ceremony.
+6. Keep this exercise lightweight: do NOT run heavy scaffolding commands (no npm install, no long generator flows). Create tiny placeholder files if needed.
+7. Move at most one tracked item through queue/dispatch/lifecycle boundaries just enough to expose workflow friction; do not fully implement the app.
+8. If a step fails, use the structured tool output to recover or explain the blocker.
+9. End with a concise feedback report in Markdown.
+10. Write that final feedback report to FEEDBACK.md in this project root.
 
 The final feedback report must include:
 - How the deterministic planning guidance behaved
+- Whether the named schema preload groups reduced cold-start friction, were ignored by the harness, or were unavailable
 - How backlog creation and queue inspection behaved
 - What worked
 - Pain points

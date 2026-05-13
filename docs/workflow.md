@@ -21,8 +21,8 @@ Resources:
 - `platypus://guidance/spec-driven-development`: goal intake, backlog
   shaping, task planning, dispatch, evidence, and integration loop.
 - `platypus://guidance/project-status`: project inspection and setup blockers.
-- `platypus://guidance/tool-preload`: optional planning and execution startup
-  tool groups for hosts that defer tool schemas.
+- `platypus://guidance/tool-preload`: optional phase-specific tool groups for
+  hosts that defer tool schemas.
 - `platypus://guidance/backlog-authoring`: declarative backlog authoring rules.
 - `platypus://guidance/worker-handoff`: worker dispatch, handoff, progress, and
   completion flow.
@@ -36,10 +36,10 @@ Equivalent prompts are available as `platypus-workflow`,
 
 Tool preloading is optional and host-specific. Hosts that support deferred
 schema preloading should read `platypus-tool-preload` at session start, load
-the planning group for backlog/design/status work, and load the execution group
-before dispatch, worker handoff, verification, integration, or recovery. Hosts
-without preloading support should use the same tools normally as the workflow
-requires them.
+Startup Inspection first, then load Backlog Planning, Direct Execution, Worker
+Handoff, Evidence And Findings, or Recovery only when the workflow reaches that
+phase. Hosts without preloading support should use the same tools normally as
+the workflow requires them.
 
 ## Principles
 

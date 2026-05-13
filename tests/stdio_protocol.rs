@@ -673,11 +673,19 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
         })
         .await?;
     let text = resource_text(&preload.contents[0]);
-    assert!(text.contains("Planning Startup Group"));
-    assert!(text.contains("Execution Startup Group"));
+    assert!(text.contains("Startup Inspection Group"));
+    assert!(text.contains("Backlog Planning Group"));
+    assert!(text.contains("Direct Execution Group"));
+    assert!(text.contains("Worker Handoff Group"));
+    assert!(text.contains("Evidence And Findings Group"));
+    assert!(text.contains("Recovery Group"));
+    assert!(text.contains("Preloading is optional and host-specific"));
+    assert!(text.contains("if a host cannot preload schemas"));
     assert!(text.contains("host-specific"));
     assert!(text.contains("create_backlog_items"));
     assert!(text.contains("dispatch_ready_work"));
+    assert!(text.contains("complete_backlog_item"));
+    assert!(text.contains("update_finding_disposition"));
 
     client.cancel().await?;
     Ok(())
