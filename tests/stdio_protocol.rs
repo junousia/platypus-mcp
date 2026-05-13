@@ -2946,6 +2946,19 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
     .await?;
     assert_stage_status("complete_backlog_item", &completed, "completed");
     assert_eq!(completed["data"]["closed"], true);
+    assert_eq!(completed["data"]["auto_evidence_enabled"], true);
+    assert_eq!(
+        completed["data"]["generated_evidence"]
+            .as_array()
+            .expect("generated evidence")
+            .len(),
+        2
+    );
+    assert_eq!(completed["data"]["generated_evidence"][0]["kind"], "note");
+    assert_eq!(
+        completed["data"]["generated_evidence"][1]["kind"],
+        "verification"
+    );
 
     let queue = call_tool_json(
         &client,
@@ -2957,6 +2970,80 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
     assert_eq!(queue["data"]["items"].as_array().expect("items").len(), 0);
     assert_eq!(queue["data"]["inventory"]["total_count"], 1);
     assert_eq!(queue["data"]["inventory"]["closed_count"], 1);
+
+    let explicit = call_tool_json(
+        &client,
+        "record_evidence",
+        json!({
+            "source_item_id": "PROJ-002",
+            "kind": "note",
+            "summary": "Explicit evidence covers the second direct edit.",
+            "refs": ["file:SECOND.md"]
+        }),
+    )
+    .await?;
+    assert_stage_status("record_evidence explicit", &explicit, "completed");
+    let explicit_id = explicit["data"]["evidence"]["id"]
+        .as_str()
+        .expect("evidence id")
+        .to_string();
+
+    let second = call_tool_json(
+        &client,
+        "create_backlog_item",
+        json!({
+            "id": "PROJ-002",
+            "title": "Write second direct file",
+            "priority": "P1",
+            "type": "docs",
+            "area": "feedback",
+            "epic": "general",
+            "owned_surfaces": ["SECOND.md"],
+            "goal": "Create one second direct file.",
+            "implementation_contract": "Only edit SECOND.md.",
+            "acceptance": ["SECOND.md exists."]
+        }),
+    )
+    .await?;
+    assert_stage_status("create_backlog_item second", &second, "completed");
+
+    fs::write(project.path().join("SECOND.md"), "# Second\n")?;
+    let completed = call_tool_json(
+        &client,
+        "complete_backlog_item",
+        json!({
+            "item_id": "PROJ-002",
+            "summary": "Created second direct feedback file.",
+            "changed_files": ["SECOND.md"],
+            "verification_status": "skipped",
+            "verification_summary": "Explicit evidence covers verification.",
+            "verification_refs": ["manual:stdio-direct-second"],
+            "evidence_refs": [explicit_id],
+            "record_auto_evidence": false
+        }),
+    )
+    .await?;
+    assert_stage_status(
+        "complete_backlog_item no auto evidence",
+        &completed,
+        "completed",
+    );
+    assert_eq!(completed["data"]["auto_evidence_enabled"], false);
+    assert_eq!(
+        completed["data"]["generated_evidence"]
+            .as_array()
+            .expect("generated evidence")
+            .len(),
+        0
+    );
+    assert_eq!(completed["data"]["evidence"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        completed["data"]["event"]["payload"]["generated_evidence_refs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
 
     client.cancel().await?;
     Ok(())

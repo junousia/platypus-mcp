@@ -100,6 +100,36 @@ pub fn record_verification_evidence(
     result
 }
 
+pub fn inspect_evidence(
+    default_root: &Path,
+    root: Option<&str>,
+    evidence_id: &str,
+) -> ActionResult<EvidenceRecordData> {
+    let action = "inspect_evidence";
+    let state = match SqliteProjectState::open(default_root, root) {
+        Ok(state) => state,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not open evidence storage.",
+                error.to_string(),
+            )
+        }
+    };
+    match state.inspect_evidence(evidence_id) {
+        Ok(evidence) => ActionResult::completed(
+            action,
+            format!("Inspected evidence `{}`.", evidence.id),
+            EvidenceRecordData {
+                evidence: evidence_record(evidence),
+            },
+        ),
+        Err(error) => {
+            ActionResult::failed(action, "Could not inspect evidence.", error.to_string())
+        }
+    }
+}
+
 pub fn list_evidence(
     default_root: &Path,
     params: ListEvidenceParams,

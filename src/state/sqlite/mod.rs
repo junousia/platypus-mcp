@@ -786,6 +786,23 @@ impl ProjectState for SqliteProjectState {
             .map_err(|error| ProjectStateError::backend(error.to_string()))
     }
 
+    fn inspect_evidence(&self, id: &str) -> StateResult<EvidenceSnapshot> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(ProjectStateError::invalid_command(
+                "evidence id is required",
+            ));
+        }
+        get_evidence(&self.connection.connection, id)
+            .map(evidence_snapshot)
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    ProjectStateError::not_found(format!("evidence `{id}` not found"))
+                }
+                other => ProjectStateError::backend(other.to_string()),
+            })
+    }
+
     fn list_evidence(&self, query: EvidenceQuery) -> StateResult<EvidenceListSnapshot> {
         let evidence = query_evidence(
             &self.connection.connection,

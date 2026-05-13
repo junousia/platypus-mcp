@@ -1458,6 +1458,11 @@ pub struct CompleteBacklogItemParams {
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Existing finding identifiers or references reviewed for this completion.
     pub finding_refs: Vec<String>,
+    /// Whether complete_backlog_item should automatically record completion,
+    /// verification, and commit evidence. Defaults to true. Set false only when
+    /// explicit evidence_refs already cover the completion.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
+    pub record_auto_evidence: Option<bool>,
     /// Whether Platypus should create a Git commit for the supplied changed_files
     /// with Platypus-Closes and Platypus-Verification trailers.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
@@ -1951,6 +1956,11 @@ pub struct CompleteBacklogItemData {
     pub changed_files: Vec<String>,
     /// Evidence records returned or created by this operation.
     pub evidence: Vec<EvidenceRecord>,
+    /// Whether automatic completion, verification, and commit evidence recording
+    /// was enabled for this completion.
+    pub auto_evidence_enabled: bool,
+    /// Generated evidence IDs and summaries created by this completion call.
+    pub generated_evidence: Vec<GeneratedEvidenceSummary>,
     /// Project event recorded for the direct completion.
     pub event: Option<EventRecord>,
     /// Git commit hash when complete_backlog_item created a closure commit.
@@ -1960,6 +1970,16 @@ pub struct CompleteBacklogItemData {
     pub closed: bool,
     /// High-level action for the MCP host or human operator.
     pub host_action: HostAction,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GeneratedEvidenceSummary {
+    /// Stable local evidence identifier.
+    pub id: String,
+    /// Kind or category for this evidence record.
+    pub kind: String,
+    /// Human-readable summary of the evidence record.
+    pub summary: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

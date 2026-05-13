@@ -157,6 +157,10 @@ fn exercise_evidence_findings_and_reconcile_contract(state: &impl ProjectState) 
         })
         .expect("listed evidence");
     assert_eq!(listed.evidence.len(), 1);
+    let inspected = state
+        .inspect_evidence(&evidence.id)
+        .expect("inspected evidence");
+    assert_eq!(inspected.id, evidence.id);
 
     let finding = state
         .record_finding(RecordFindingCommand {
