@@ -48,7 +48,7 @@ struct PlannedBacklogWrite {
     preview: CreatedBacklogItemPreview,
 }
 
-const GENERATED_CONTRACT_PLACEHOLDER: &str = "No implementation contract was provided. Treat this generated section as a reminder to refine the contract before delegation or complex work.";
+const EMPTY_CONTRACT: &str = "";
 
 pub fn create_backlog_item(
     default_root: &Path,
@@ -201,10 +201,10 @@ pub fn create_backlog_item(
                 action,
                 "Could not create backlog item.",
                 format!(
-                    "missing required field(s): {}. Provide at least title or goal. implementation_contract/contract and acceptance can be supplied explicitly; when omitted, Platypus writes explicit generated placeholder guidance and a first acceptance criterion.",
+                    "missing required field(s): {}. Provide at least title or goal. implementation_contract/contract and acceptance can be supplied explicitly; when omitted, Platypus keeps the Implementation Contract section empty and writes a first acceptance criterion.",
                     missing_fields.join(", ")
                 ),
-                "Provide title or goal. Add implementation_contract/contract and acceptance when the work needs a real execution contract instead of generated placeholders.",
+                "Provide title or goal. Add implementation_contract/contract and acceptance when the work needs a real execution contract.",
             );
         }
     };
@@ -473,10 +473,10 @@ pub fn create_backlog_items(
                     planned_item.index,
                     planned_item.client_key.as_deref(),
                     format!(
-                        "missing required field(s): {}. Provide at least title or goal. implementation_contract/contract and acceptance can be supplied explicitly; when omitted, Platypus writes explicit generated placeholder guidance and a first acceptance criterion.",
+                        "missing required field(s): {}. Provide at least title or goal. implementation_contract/contract and acceptance can be supplied explicitly; when omitted, Platypus keeps the Implementation Contract section empty and writes a first acceptance criterion.",
                         missing_fields.join(", ")
                     ),
-                    "Provide title or goal. Add implementation_contract/contract and acceptance when the work needs a real execution contract instead of generated placeholders.",
+                    "Provide title or goal. Add implementation_contract/contract and acceptance when the work needs a real execution contract.",
                 )
             }
         };
@@ -1007,7 +1007,7 @@ fn normalize_backlog_input(
         .as_deref()
         .or(params.contract.as_deref())
         .and_then(clean_text)
-        .unwrap_or_else(|| GENERATED_CONTRACT_PLACEHOLDER.to_string());
+        .unwrap_or_else(|| EMPTY_CONTRACT.to_string());
     let mut acceptance = clean_vec(params.acceptance.clone());
     if acceptance.is_empty() {
         acceptance.push(format!(

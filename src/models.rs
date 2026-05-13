@@ -245,6 +245,23 @@ pub enum PreparationPersistenceSchema {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum CompletionCommitStatusSchema {
+    NotRequested,
+    Created,
+    Skipped,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionClosureSourceSchema {
+    RuntimeEvent,
+    GitTrailer,
+    RuntimeEventAndGitTrailer,
+    AlreadyClosed,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum EvidenceKindSchema {
     Commit,
     Verification,
@@ -794,8 +811,8 @@ pub struct CreateBacklogItemParams {
     #[schemars(example = example_goal())]
     pub goal: String,
     /// Implementation contract text for this backlog item. Provide this for
-    /// real execution guidance; when omitted, creation tools write an explicit
-    /// generated placeholder that says no contract was provided.
+    /// real execution guidance; when omitted, creation tools keep the required
+    /// Implementation Contract section empty.
     pub implementation_contract: Option<String>,
     /// Optional alias for implementation_contract. Provide only one of
     /// implementation_contract or contract.
@@ -946,8 +963,8 @@ pub struct CreateBacklogItemsEntry {
     #[schemars(example = example_goal())]
     pub goal: String,
     /// Implementation contract text for this backlog item. Provide this for
-    /// real execution guidance; when omitted, creation tools write an explicit
-    /// generated placeholder that says no contract was provided.
+    /// real execution guidance; when omitted, creation tools keep the required
+    /// Implementation Contract section empty.
     pub implementation_contract: Option<String>,
     /// Optional alias for implementation_contract. Provide only one of
     /// implementation_contract or contract.
@@ -2017,8 +2034,50 @@ pub struct CompleteBacklogItemData {
     /// Whether this item is now considered closed by runtime completion state
     /// or Git trailer policy.
     pub closed: bool,
+    /// Detailed closure state explaining what made the item closed and whether
+    /// that closure is portable through Git history.
+    pub closure: CompletionClosureState,
+    /// Detailed Git commit outcome for this completion request.
+    pub commit_outcome: CompletionCommitOutcome,
+    /// Compact queue state after completion, when it could be refreshed.
+    pub queue_status: Option<QueueStatusData>,
+    /// Non-fatal queue refresh error. A successful completion remains
+    /// successful even if this follow-up snapshot cannot be collected.
+    pub queue_status_error: Option<String>,
     /// High-level action for the MCP host or human operator.
     pub host_action: HostAction,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CompletionClosureState {
+    /// Whether the backlog item is considered closed after this operation.
+    pub closed: bool,
+    /// Source that made the item closed.
+    #[schemars(with = "CompletionClosureSourceSchema")]
+    pub source: String,
+    /// Whether this call recorded a local runtime completion event.
+    pub runtime_completion_recorded: bool,
+    /// Whether closure is portable through a Git Platypus-Closes trailer.
+    pub git_trailer_portable: bool,
+    /// Git commit hash that carries the closure trailer, when created by this call.
+    pub closure_commit: Option<String>,
+    /// Evidence references that support the direct completion.
+    pub evidence_refs: Vec<String>,
+    /// Human-readable closure explanation.
+    pub summary: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CompletionCommitOutcome {
+    /// Whether commit=true was requested.
+    pub requested: bool,
+    /// Commit outcome for this completion.
+    #[schemars(with = "CompletionCommitStatusSchema")]
+    pub status: String,
+    /// Git commit hash created by this operation.
+    pub commit: Option<String>,
+    /// Human-readable explanation of the commit outcome.
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2094,8 +2153,24 @@ pub struct WorkQueueData {
     pub reason: String,
     /// Suggested parameters for the recommended tool call.
     pub params: BTreeMap<String, Value>,
+    /// Bounded hints for MCP tool schemas likely needed in the next workflow
+    /// phase. Hosts may ignore this when their schema discovery is automatic.
+    pub schemas_likely_needed_next: Vec<SchemaDiscoveryHint>,
     /// Items or records in this response.
     pub items: Vec<WorkQueueItem>,
+}
+
+#[derive(Debug, Serialize, Clone, JsonSchema)]
+pub struct SchemaDiscoveryHint {
+    /// Platypus MCP tool whose schema is likely useful next.
+    pub tool_name: String,
+    /// Workflow phase or queue condition that makes this schema relevant.
+    pub phase: String,
+    /// Human-readable reason this tool schema is likely useful next.
+    pub reason: String,
+    /// Claude ToolSearch selector for this tool when the server is configured
+    /// as `platypus`. Other hosts should use tool_name and their own discovery UI.
+    pub claude_toolsearch_selector: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]
@@ -2420,6 +2495,9 @@ pub struct InspectSessionData {
     pub reason: String,
     /// Suggested parameters for the recommended tool call.
     pub params: BTreeMap<String, Value>,
+    /// Bounded hints for MCP tool schemas likely needed in the next workflow
+    /// phase. Hosts may ignore this when their schema discovery is automatic.
+    pub schemas_likely_needed_next: Vec<SchemaDiscoveryHint>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2846,9 +2924,8 @@ pub struct CreatedBacklogItemPreview {
     pub owned_surfaces: Vec<String>,
     /// Goal text that drives this request or record.
     pub goal: String,
-    /// Implementation contract text for this backlog item. Generated previews
-    /// may contain an explicit placeholder when the caller omitted a real
-    /// implementation contract.
+    /// Implementation contract text for this backlog item. This is empty when
+    /// the caller omitted a real implementation contract.
     pub implementation_contract: String,
     /// Acceptance criteria for this item.
     pub acceptance: Vec<String>,

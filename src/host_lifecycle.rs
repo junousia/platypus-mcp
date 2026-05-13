@@ -2,12 +2,13 @@ use crate::{
     assignments, backlog, dispatch, events, evidence, execution_mode, findings, guidance,
     models::{
         ActionResult, ActionStatus, CompleteBacklogItemData, CompleteBacklogItemParams,
-        CompleteWorkerExecutionParams, DispatchReadyWorkData, DispatchReadyWorkItem,
-        DispatchReadyWorkParams, EvidenceRecord, FinishWorkData, FinishWorkFindingInput,
-        FinishWorkParams, GeneratedEvidenceSummary, HostAction, IntegrateWorkerResultParams,
-        PrepareWorkData, PrepareWorkParams, ReconcileParams, RecordEvidenceParams,
-        RecordFindingParams, RecordVerificationEvidenceParams, WorkQueueData, WorkQueueItem,
-        WorkerAssignment, WorktreeDiffData, WorktreeDiffParams,
+        CompleteWorkerExecutionParams, CompletionClosureState, CompletionCommitOutcome,
+        DispatchReadyWorkData, DispatchReadyWorkItem, DispatchReadyWorkParams, EvidenceRecord,
+        FinishWorkData, FinishWorkFindingInput, FinishWorkParams, GeneratedEvidenceSummary,
+        HostAction, IntegrateWorkerResultParams, PrepareWorkData, PrepareWorkParams,
+        QueueStatusData, ReconcileParams, RecordEvidenceParams, RecordFindingParams,
+        RecordVerificationEvidenceParams, WorkQueueData, WorkQueueItem, WorkerAssignment,
+        WorktreeDiffData, WorktreeDiffParams,
     },
     reconcile, workspace,
 };
@@ -332,29 +333,44 @@ pub fn complete_backlog_item(
                 "Select the next safe action or inspect the backlog queue.".to_string(),
             ),
             recovery_action: None,
-            data: Some(CompleteBacklogItemData {
-                root,
-                item_id,
-                summary: summary.to_string(),
-                changed_files: params.changed_files,
-                evidence: Vec::new(),
-                auto_evidence_enabled: params.record_auto_evidence.unwrap_or(true),
-                generated_evidence: Vec::new(),
-                event: None,
-                commit: None,
-                closed: true,
-                host_action: HostAction {
-                    kind: "done".to_string(),
-                    summary: "Backlog item was already closed.".to_string(),
-                    instructions: vec!["inspect_work_queue can choose the next item.".to_string()],
-                    task_id: None,
-                    assignment_id: None,
-                    worker: None,
-                    worktree_path: None,
-                    bundle: None,
-                    next_tools: vec!["inspect_work_queue".to_string()],
-                },
-            }),
+            data: {
+                let (queue_status, queue_status_error) =
+                    completion_queue_status(default_root, &root);
+                let closure = already_closed_closure(Path::new(&root), &item_id);
+                Some(CompleteBacklogItemData {
+                    root,
+                    item_id,
+                    summary: summary.to_string(),
+                    changed_files: params.changed_files,
+                    evidence: Vec::new(),
+                    auto_evidence_enabled: params.record_auto_evidence.unwrap_or(true),
+                    generated_evidence: Vec::new(),
+                    event: None,
+                    commit: None,
+                    closed: true,
+                    closure,
+                    commit_outcome: completion_commit_outcome(
+                        params.commit.unwrap_or(false),
+                        None,
+                        true,
+                    ),
+                    queue_status,
+                    queue_status_error,
+                    host_action: HostAction {
+                        kind: "done".to_string(),
+                        summary: "Backlog item was already closed.".to_string(),
+                        instructions: vec![
+                            "inspect_work_queue can choose the next item.".to_string()
+                        ],
+                        task_id: None,
+                        assignment_id: None,
+                        worker: None,
+                        worktree_path: None,
+                        bundle: None,
+                        next_tools: vec!["inspect_work_queue".to_string()],
+                    },
+                })
+            },
             error: None,
         };
     }
@@ -466,7 +482,8 @@ pub fn complete_backlog_item(
         }
     }
 
-    let commit = if params.commit.unwrap_or(false) {
+    let commit_requested = params.commit.unwrap_or(false);
+    let commit = if commit_requested {
         match commit_direct_completion(
             root_path,
             &item_id,
@@ -535,6 +552,7 @@ pub fn complete_backlog_item(
         .collect::<Vec<_>>();
     let mut completion_evidence_refs = params.evidence_refs.clone();
     completion_evidence_refs.extend(generated_evidence_refs.clone());
+    let commit_outcome = completion_commit_outcome(commit_requested, commit.clone(), false);
 
     let event = match events::record_event(
         default_root,
@@ -586,6 +604,7 @@ pub fn complete_backlog_item(
             "reconcile_project".to_string(),
         ],
     };
+    let (queue_status, queue_status_error) = completion_queue_status(default_root, &root);
     let data = CompleteBacklogItemData {
         root,
         item_id: item_id.clone(),
@@ -597,6 +616,15 @@ pub fn complete_backlog_item(
         event,
         commit,
         closed: true,
+        closure: completion_closure(
+            true,
+            true,
+            commit_outcome.commit.clone(),
+            completion_evidence_refs,
+        ),
+        commit_outcome,
+        queue_status,
+        queue_status_error,
         host_action,
     };
     let mut result = ActionResult::completed(
@@ -606,6 +634,115 @@ pub fn complete_backlog_item(
     );
     result.next_action = Some("Run inspect_work_queue to continue with the next item.".to_string());
     result
+}
+
+fn completion_queue_status(
+    default_root: &Path,
+    root: &str,
+) -> (Option<QueueStatusData>, Option<String>) {
+    match guidance::inspect_queue_status(
+        default_root,
+        crate::models::InspectQueueStatusParams {
+            root: Some(root.to_string()),
+            limit: Some(5),
+        },
+    ) {
+        ActionResult {
+            data: Some(data), ..
+        } => (Some(data), None),
+        ActionResult { summary, error, .. } => (None, Some(error.unwrap_or(summary))),
+    }
+}
+
+fn completion_commit_outcome(
+    requested: bool,
+    commit: Option<String>,
+    skipped_already_closed: bool,
+) -> CompletionCommitOutcome {
+    if let Some(commit) = commit {
+        CompletionCommitOutcome {
+            requested,
+            status: "created".to_string(),
+            commit: Some(commit),
+            reason: "Created a closure commit with Platypus-Closes and verification trailers."
+                .to_string(),
+        }
+    } else if requested && skipped_already_closed {
+        CompletionCommitOutcome {
+            requested,
+            status: "skipped".to_string(),
+            commit: None,
+            reason: "Skipped commit because the backlog item was already closed before this call."
+                .to_string(),
+        }
+    } else {
+        CompletionCommitOutcome {
+            requested,
+            status: "not_requested".to_string(),
+            commit: None,
+            reason: "No Git closure commit was requested; closure is recorded in local runtime state unless an existing Git trailer also closes the item.".to_string(),
+        }
+    }
+}
+
+fn completion_closure(
+    closed: bool,
+    runtime_completion_recorded: bool,
+    closure_commit: Option<String>,
+    evidence_refs: Vec<String>,
+) -> CompletionClosureState {
+    let git_trailer_portable = closure_commit.is_some();
+    let source = match (runtime_completion_recorded, git_trailer_portable) {
+        (true, true) => "runtime_event_and_git_trailer",
+        (true, false) => "runtime_event",
+        (false, true) => "git_trailer",
+        (false, false) => "already_closed",
+    }
+    .to_string();
+    let summary = if git_trailer_portable {
+        "Item is closed by the recorded direct completion and a portable Git Platypus-Closes trailer."
+            .to_string()
+    } else if runtime_completion_recorded {
+        "Item is closed by local runtime completion state. Add or keep a Git Platypus-Closes trailer when closure must travel with repository history.".to_string()
+    } else {
+        "Item was already closed before this call.".to_string()
+    };
+    CompletionClosureState {
+        closed,
+        source,
+        runtime_completion_recorded,
+        git_trailer_portable,
+        closure_commit,
+        evidence_refs,
+        summary,
+    }
+}
+
+fn already_closed_closure(root: &Path, item_id: &str) -> CompletionClosureState {
+    let sources = backlog::closure_sources(root, item_id);
+    let source = match (sources.runtime_completion, sources.git_trailer) {
+        (true, true) => "runtime_event_and_git_trailer",
+        (true, false) => "runtime_event",
+        (false, true) => "git_trailer",
+        (false, false) => "already_closed",
+    }
+    .to_string();
+    let summary = match (sources.runtime_completion, sources.git_trailer) {
+        (true, true) => "Item was already closed by local runtime completion state and a reachable Git Platypus-Closes trailer.",
+        (true, false) => "Item was already closed by local runtime completion state.",
+        (false, true) => "Item was already closed by a reachable Git Platypus-Closes trailer.",
+        (false, false) => "Item was already closed before this call; inspect backlog inventory, evidence, or Git trailers for the closure source.",
+    }
+    .to_string();
+    CompletionClosureState {
+        closed: true,
+        source,
+        runtime_completion_recorded: sources.runtime_completion,
+        git_trailer_portable: sources.git_trailer,
+        closure_commit: None,
+        evidence_refs: Vec::new(),
+        summary,
+    }
 }
 
 pub fn finish_work(default_root: &Path, params: FinishWorkParams) -> ActionResult<FinishWorkData> {
@@ -1789,6 +1926,21 @@ mod tests {
 
         assert_eq!(completed.status, ActionStatus::Completed);
         assert!(data.closed);
+        assert_eq!(data.closure.source, "runtime_event");
+        assert!(data.closure.runtime_completion_recorded);
+        assert!(!data.closure.git_trailer_portable);
+        assert_eq!(data.commit_outcome.status, "not_requested");
+        assert!(!data.commit_outcome.requested);
+        assert!(data.queue_status.is_some());
+        assert!(data.queue_status_error.is_none());
+        assert_eq!(
+            data.queue_status
+                .as_ref()
+                .expect("queue status")
+                .counts
+                .closed_count,
+            1
+        );
         assert_eq!(data.host_action.kind, "done");
         assert!(data.event.is_some());
         assert_eq!(data.evidence.len(), 2);
@@ -1811,6 +1963,182 @@ mod tests {
         );
         let queue_data = queue.data.expect("queue data");
         assert!(queue_data.items.is_empty());
+    }
+
+    #[test]
+    fn complete_backlog_item_reports_commit_created_outcome() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Readme docs",
+            "docs",
+            "docs",
+            &["README.md"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+        fs::write(project.path().join("README.md"), "# Done\n").expect("readme");
+
+        let completed = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Updated the readme.".to_string(),
+                changed_files: vec!["README.md".to_string()],
+                verification_status: Some("passed".to_string()),
+                verification_summary: Some("Reviewed README.md manually.".to_string()),
+                verification_refs: vec!["manual:readme".to_string()],
+                evidence_refs: Vec::new(),
+                finding_refs: Vec::new(),
+                record_auto_evidence: None,
+                commit: Some(true),
+                commit_message: Some("Finish readme direct work".to_string()),
+            },
+        );
+        let data = completed.data.expect("complete data");
+
+        assert_eq!(completed.status, ActionStatus::Completed);
+        assert_eq!(data.commit_outcome.status, "created");
+        assert!(data.commit_outcome.requested);
+        assert!(data.commit_outcome.commit.is_some());
+        assert_eq!(
+            data.commit.as_deref(),
+            data.commit_outcome.commit.as_deref()
+        );
+        assert_eq!(data.closure.source, "runtime_event_and_git_trailer");
+        assert!(data.closure.git_trailer_portable);
+        assert_eq!(
+            data.closure.closure_commit.as_deref(),
+            data.commit.as_deref()
+        );
+
+        let output = Command::new("git")
+            .args(["log", "-1", "--format=%B"])
+            .current_dir(project.path())
+            .output()
+            .expect("git log");
+        assert!(output.status.success());
+        let message = String::from_utf8_lossy(&output.stdout);
+        assert!(message.contains("Platypus-Closes: PROJ-001"));
+        assert!(message.contains("Platypus-Verification: Reviewed README.md manually."));
+    }
+
+    #[test]
+    fn complete_backlog_item_reports_already_closed_skip_outcome() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Readme docs",
+            "docs",
+            "docs",
+            &["README.md"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+        fs::write(project.path().join("README.md"), "# Done\n").expect("readme");
+
+        let first = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Updated the readme.".to_string(),
+                changed_files: vec!["README.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: None,
+                verification_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                finding_refs: Vec::new(),
+                record_auto_evidence: None,
+                commit: Some(false),
+                commit_message: None,
+            },
+        );
+        assert_eq!(first.status, ActionStatus::Completed);
+
+        let skipped = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Already done.".to_string(),
+                changed_files: vec!["README.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: None,
+                verification_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                finding_refs: Vec::new(),
+                record_auto_evidence: None,
+                commit: Some(true),
+                commit_message: None,
+            },
+        );
+        let data = skipped.data.expect("skip data");
+
+        assert_eq!(skipped.status, ActionStatus::Skipped);
+        assert_eq!(data.closure.source, "runtime_event");
+        assert!(data.closure.runtime_completion_recorded);
+        assert!(!data.closure.git_trailer_portable);
+        assert_eq!(data.commit_outcome.status, "skipped");
+        assert!(data.commit_outcome.requested);
+        assert!(data.queue_status.is_some());
+    }
+
+    #[test]
+    fn complete_backlog_item_preserves_git_trailer_closure_on_skip() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Readme docs",
+            "docs",
+            "docs",
+            &["README.md"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+        git(
+            project.path(),
+            &[
+                "commit",
+                "--allow-empty",
+                "-m",
+                "Close direct item",
+                "-m",
+                "Platypus-Closes: PROJ-001\nPlatypus-Verification: checked",
+            ],
+        );
+
+        let skipped = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Already done.".to_string(),
+                changed_files: vec!["README.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: None,
+                verification_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                finding_refs: Vec::new(),
+                record_auto_evidence: None,
+                commit: Some(false),
+                commit_message: None,
+            },
+        );
+        let data = skipped.data.expect("skip data");
+
+        assert_eq!(skipped.status, ActionStatus::Skipped);
+        assert_eq!(data.closure.source, "git_trailer");
+        assert!(!data.closure.runtime_completion_recorded);
+        assert!(data.closure.git_trailer_portable);
+        assert_eq!(data.commit_outcome.status, "not_requested");
     }
 
     #[test]

@@ -99,7 +99,10 @@ alias.
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
 4. Inspect the executable queue: `inspect_queue_status` for compact triage,
    then `inspect_work_queue` when the host needs full item state and next-tool
-   parameters.
+   parameters. `inspect_session` and `inspect_work_queue` include
+   `schemas_likely_needed_next` with 1-4 likely next tool schemas. Claude hints
+   include literal ToolSearch selectors; Codex and opencode callers should use
+   the plain `tool_name` values with their own discovery UI.
 5. Prepare work: prefer `prepare_work`. It follows durable execution policy
    from `workflow.execution` and backlog item `execution_path`/`planning_gate`.
    It returns `direct_edit` guidance for manager-workspace work, or a
@@ -217,10 +220,10 @@ make smoke-storage
 Backlog schema quick reference:
 
 - Minimal `create_backlog_item` input: a meaningful `goal` or `title`.
-  Platypus derives conservative title, goal, an explicit generated placeholder
-  for the implementation contract, and first acceptance text when those fields
-  are omitted. Treat the generated contract placeholder as a prompt to refine
-  the item before delegation or complex work.
+  Platypus derives conservative title and goal, keeps the required
+  Implementation Contract section empty, and writes first acceptance text when
+  those fields are omitted. Add a real contract before delegation or complex
+  work.
 - Rich `create_backlog_item` input: provide explicit `title`, `goal`,
   `implementation_contract` or `contract`, and `acceptance` when the work is
   complex or the generated defaults would be too broad.
