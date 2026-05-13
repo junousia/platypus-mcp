@@ -202,6 +202,7 @@ pub enum HostActionKindSchema {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkQueueStateSchema {
+    EmptyBacklog,
     Ready,
     DirectReady,
     PlanningBlocked,
@@ -211,6 +212,7 @@ pub enum WorkQueueStateSchema {
     WorkspaceBlocked,
     Active,
     CompletedPendingIntegration,
+    Closed,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -2026,6 +2028,9 @@ pub struct ProjectStatusData {
 pub struct WorkQueueData {
     /// Project root that bounds all file, Git, and state operations.
     pub root: String,
+    /// Overall machine-readable queue state for this inspection.
+    #[schemars(with = "WorkQueueStateSchema")]
+    pub queue_state: String,
     /// Whether dispatch readiness should require task-plan artifacts for non-direct work.
     pub require_task_plan: bool,
     /// Number of queue items ready to dispatch.
@@ -2171,6 +2176,10 @@ pub struct WorkQueueInventorySummary {
     pub dependency_blocked_count: usize,
     /// Backlog items closed by Git trailers or recorded direct completion.
     pub closed_count: usize,
+    /// Closed backlog items that have at least one evidence record.
+    pub closed_with_evidence_count: usize,
+    /// Closed backlog items with no evidence record visible in local state.
+    pub closed_without_evidence_count: usize,
     /// Backlog items with active task lifecycle state.
     pub active_lifecycle_count: usize,
     /// Backlog items with completed task results waiting for integration.
@@ -2191,6 +2200,9 @@ pub struct WorkQueueInventorySummary {
 pub struct QueueStatusData {
     /// Project root that bounds all file, Git, and state operations.
     pub root: String,
+    /// Overall machine-readable queue state for this compact status.
+    #[schemars(with = "WorkQueueStateSchema")]
+    pub queue_state: String,
     /// Compact queue counts derived from the detailed work queue view.
     pub counts: QueueStatusCounts,
     /// Top ready backlog items in execution order.
@@ -2229,6 +2241,10 @@ pub struct QueueStatusCounts {
     pub pending_integration_count: usize,
     /// Backlog items closed by Git trailers or recorded direct completion.
     pub closed_count: usize,
+    /// Closed backlog items that have at least one evidence record.
+    pub closed_with_evidence_count: usize,
+    /// Closed backlog items with no evidence record visible in local state.
+    pub closed_without_evidence_count: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2490,6 +2506,10 @@ pub struct BacklogInventoryItem {
     pub closed: bool,
     /// Whether this backlog item is runnable now.
     pub runnable: bool,
+    /// Whether this item has one or more local evidence records.
+    pub has_evidence: bool,
+    /// Number of local evidence records visible for this item.
+    pub evidence_count: usize,
     /// Human-readable reason for the decision or result.
     pub reason: String,
 }

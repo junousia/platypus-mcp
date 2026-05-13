@@ -69,6 +69,24 @@ impl<'connection> Repository<'connection> {
             .map_err(RepositoryError::from)
     }
 
+    pub fn count_evidence_by_item(&self) -> RepositoryResult<BTreeMap<String, usize>> {
+        let mut statement = self.connection.prepare(
+            r#"
+            SELECT source_item_id, COUNT(*) AS evidence_count
+            FROM evidence
+            WHERE source_item_id IS NOT NULL
+            GROUP BY source_item_id
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| {
+            let item_id: String = row.get("source_item_id")?;
+            let count: i64 = row.get("evidence_count")?;
+            Ok((item_id, count.max(0) as usize))
+        })?;
+        rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()
+            .map_err(RepositoryError::from)
+    }
+
     pub fn list_findings_for_item(
         &self,
         item_id: &str,

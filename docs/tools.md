@@ -183,10 +183,11 @@ make smoke-storage
 - `list_backlog`: list runnable backlog candidates.
 - `inspect_queue_status`: compact queue summary for dashboards and chat
   replies. It returns counts, top ready items, top blocked items, active tasks,
-  state descriptions, and the recommended next tool without the full queue
-  inventory.
+  state descriptions, closed evidence counts, and the recommended next tool
+  without the full queue inventory.
 - `inspect_work_queue`: inspect executable backlog work and the whole queue
-  shape, including dependency-blocked and closed item summaries.
+  shape, including explicit `empty_backlog` state, dependency-blocked items,
+  and closed item summaries with `has_evidence` plus `evidence_count`.
 - `inspect_item`: inspect one backlog item with dependency, closure, task-plan,
   active lifecycle, findings, evidence, and recommended next-tool state.
 - `inspect_backlog_inventory`: compatibility inventory view. Prefer
@@ -310,11 +311,14 @@ trailers.
 - `inspect_work_queue`: inspect runnable backlog candidates with task-plan
   state, active task counts, setup blockers, and inventory context for
   dependency-blocked or closed items. Queue states are structured:
-  `direct_ready` means the host can edit in the manager workspace and complete
-  with `complete_backlog_item`; `ready` means worker/worktree preparation is
+  `empty_backlog` means no backlog item exists yet; `direct_ready` means the
+  host can edit in the manager workspace and complete with
+  `complete_backlog_item`; `ready` means worker/worktree preparation is
   possible; `planning_blocked`, `approval_blocked`, `config_blocked`, and
   `workspace_blocked` identify distinct remedies; `active` and
-  `completed_pending_integration` identify existing lifecycle state.
+  `completed_pending_integration` identify existing lifecycle state. Closed
+  item summaries expose `has_evidence` and `evidence_count`; call
+  `list_evidence` or `inspect_item` for full evidence records.
 - `prepare_work`: preferred high-level host flow for executable backlog work.
   It inspects the queue, returns direct-edit guidance for
   `execution_path=direct_edit`, and prepares safe manual-handoff assignments
