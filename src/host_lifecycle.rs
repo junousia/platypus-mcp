@@ -4,10 +4,10 @@ use crate::{
         ActionResult, ActionStatus, CompleteBacklogItemData, CompleteBacklogItemParams,
         CompleteWorkerExecutionParams, DispatchReadyWorkData, DispatchReadyWorkItem,
         DispatchReadyWorkParams, EvidenceRecord, FinishWorkData, FinishWorkFindingInput,
-        FinishWorkParams, HostAction, IntegrateWorkerResultParams, PrepareWorkData,
-        PrepareWorkParams, ReconcileParams, RecordEvidenceParams, RecordFindingParams,
-        RecordVerificationEvidenceParams, WorkQueueData, WorkQueueItem, WorkerAssignment,
-        WorktreeDiffData, WorktreeDiffParams,
+        FinishWorkParams, GeneratedEvidenceSummary, HostAction, IntegrateWorkerResultParams,
+        PrepareWorkData, PrepareWorkParams, ReconcileParams, RecordEvidenceParams,
+        RecordFindingParams, RecordVerificationEvidenceParams, WorkQueueData, WorkQueueItem,
+        WorkerAssignment, WorktreeDiffData, WorktreeDiffParams,
     },
     reconcile, workspace,
 };
@@ -322,6 +322,8 @@ pub fn complete_backlog_item(
                 summary: summary.to_string(),
                 changed_files: params.changed_files,
                 evidence: Vec::new(),
+                auto_evidence_enabled: params.record_auto_evidence.unwrap_or(true),
+                generated_evidence: Vec::new(),
                 event: None,
                 commit: None,
                 closed: true,
@@ -348,55 +350,69 @@ pub fn complete_backlog_item(
         }
     };
     let root_path = Path::new(&root);
+    let record_auto_evidence = params.record_auto_evidence.unwrap_or(true);
+    if !record_auto_evidence {
+        if let Err(error) = validate_explicit_completion_evidence(
+            default_root,
+            &root,
+            &item_id,
+            &params.evidence_refs,
+        ) {
+            return ActionResult::failed(action, "Could not complete backlog item.", error);
+        }
+    }
     let mut evidence_records = Vec::new();
-    let completion_evidence = evidence::record_evidence(
-        default_root,
-        RecordEvidenceParams {
-            root: Some(root.clone()),
-            id: None,
-            source_item_id: Some(item_id.clone()),
-            source_task_id: None,
-            kind: "note".to_string(),
-            summary: summary.to_string(),
-            refs: completion_refs(&changed_files, &params.evidence_refs, &params.finding_refs),
-            metadata: BTreeMap::from([
-                (
-                    "completion_kind".to_string(),
-                    Value::String("direct".to_string()),
-                ),
-                (
-                    "verification_status".to_string(),
-                    Value::String(
-                        params
-                            .verification_status
-                            .clone()
-                            .unwrap_or_else(|| "not_run".to_string()),
+    if record_auto_evidence {
+        let completion_evidence = evidence::record_evidence(
+            default_root,
+            RecordEvidenceParams {
+                root: Some(root.clone()),
+                id: None,
+                source_item_id: Some(item_id.clone()),
+                source_task_id: None,
+                kind: "note".to_string(),
+                summary: summary.to_string(),
+                refs: completion_refs(&changed_files, &params.evidence_refs, &params.finding_refs),
+                metadata: BTreeMap::from([
+                    (
+                        "completion_kind".to_string(),
+                        Value::String("direct".to_string()),
                     ),
-                ),
-            ]),
-        },
-    );
-    match completion_evidence {
-        ActionResult {
-            status: ActionStatus::Completed,
-            data: Some(data),
-            ..
-        } => evidence_records.push(data.evidence),
-        ActionResult { summary, error, .. } => {
-            return ActionResult::failed(
-                action,
-                "Could not record direct completion evidence.",
-                error.unwrap_or(summary),
-            )
+                    (
+                        "verification_status".to_string(),
+                        Value::String(
+                            params
+                                .verification_status
+                                .clone()
+                                .unwrap_or_else(|| "not_run".to_string()),
+                        ),
+                    ),
+                ]),
+            },
+        );
+        match completion_evidence {
+            ActionResult {
+                status: ActionStatus::Completed,
+                data: Some(data),
+                ..
+            } => evidence_records.push(data.evidence),
+            ActionResult { summary, error, .. } => {
+                return ActionResult::failed(
+                    action,
+                    "Could not record direct completion evidence.",
+                    error.unwrap_or(summary),
+                )
+            }
         }
     }
 
-    if params.verification_summary.is_some()
-        || !params.verification_refs.is_empty()
-        || matches!(
-            params.verification_status.as_deref(),
-            Some("passed" | "failed" | "skipped")
-        )
+    if record_auto_evidence
+        && (params.verification_summary.is_some()
+            || !params.verification_refs.is_empty()
+            || matches!(
+                params.verification_status.as_deref(),
+                Some("passed" | "failed" | "skipped")
+            ))
     {
         let verification = evidence::record_verification_evidence(
             default_root,
@@ -434,18 +450,18 @@ pub fn complete_backlog_item(
         }
     }
 
-    let commit =
-        if params.commit.unwrap_or(false) {
-            match commit_direct_completion(
-                root_path,
-                &item_id,
-                params.commit_message.as_deref(),
-                summary,
-                params.verification_summary.as_deref(),
-                params.verification_status.as_deref(),
-                &changed_files,
-            ) {
-                Ok(commit) => {
+    let commit = if params.commit.unwrap_or(false) {
+        match commit_direct_completion(
+            root_path,
+            &item_id,
+            params.commit_message.as_deref(),
+            summary,
+            params.verification_summary.as_deref(),
+            params.verification_status.as_deref(),
+            &changed_files,
+        ) {
+            Ok(commit) => {
+                if record_auto_evidence {
                     let commit_evidence = evidence::record_evidence(
                         default_root,
                         RecordEvidenceParams {
@@ -474,19 +490,35 @@ pub fn complete_backlog_item(
                             error.unwrap_or(summary),
                         ),
                     }
-                    Some(commit)
                 }
-                Err(error) => {
-                    return ActionResult::failed(
-                        action,
-                        "Could not create direct completion commit.",
-                        error,
-                    )
-                }
+                Some(commit)
             }
-        } else {
-            None
-        };
+            Err(error) => {
+                return ActionResult::failed(
+                    action,
+                    "Could not create direct completion commit.",
+                    error,
+                )
+            }
+        }
+    } else {
+        None
+    };
+
+    let generated_evidence = evidence_records
+        .iter()
+        .map(|evidence| GeneratedEvidenceSummary {
+            id: evidence.id.clone(),
+            kind: evidence.kind.clone(),
+            summary: evidence.summary.clone(),
+        })
+        .collect::<Vec<_>>();
+    let generated_evidence_refs = generated_evidence
+        .iter()
+        .map(|evidence| evidence.id.clone())
+        .collect::<Vec<_>>();
+    let mut completion_evidence_refs = params.evidence_refs.clone();
+    completion_evidence_refs.extend(generated_evidence_refs.clone());
 
     let event = match events::record_event(
         default_root,
@@ -500,7 +532,9 @@ pub fn complete_backlog_item(
                 "item_id": item_id,
                 "summary": summary,
                 "changed_files": changed_files,
-                "evidence_refs": evidence_records.iter().map(|evidence| evidence.id.clone()).collect::<Vec<_>>(),
+                "evidence_refs": completion_evidence_refs,
+                "generated_evidence_refs": generated_evidence_refs,
+                "auto_evidence_enabled": record_auto_evidence,
                 "finding_refs": params.finding_refs,
                 "commit": commit,
                 "completion_kind": "direct"
@@ -542,6 +576,8 @@ pub fn complete_backlog_item(
         summary: summary.to_string(),
         changed_files,
         evidence: evidence_records,
+        auto_evidence_enabled: record_auto_evidence,
+        generated_evidence,
         event,
         commit,
         closed: true,
@@ -1382,6 +1418,55 @@ fn validate_changed_files(paths: &[String]) -> Result<Vec<String>, String> {
     Ok(validated)
 }
 
+fn validate_explicit_completion_evidence(
+    default_root: &Path,
+    root: &str,
+    item_id: &str,
+    evidence_refs: &[String],
+) -> Result<(), String> {
+    let requested = evidence_refs
+        .iter()
+        .map(|reference| reference.trim())
+        .filter(|reference| !reference.is_empty())
+        .collect::<Vec<_>>();
+    if requested.is_empty() {
+        return Err(
+            "record_auto_evidence=false requires evidence_refs for existing evidence records"
+                .to_string(),
+        );
+    }
+
+    let mut unknown = Vec::new();
+    let mut wrong_item = Vec::new();
+    for reference in &requested {
+        match evidence::inspect_evidence(default_root, Some(root), reference) {
+            ActionResult {
+                status: ActionStatus::Completed,
+                data: Some(data),
+                ..
+            } if data.evidence.source_item_id.as_deref() == Some(item_id) => {}
+            ActionResult {
+                status: ActionStatus::Completed,
+                ..
+            } => wrong_item.push(*reference),
+            ActionResult { .. } => unknown.push(*reference),
+        }
+    }
+    if !unknown.is_empty() {
+        return Err(format!(
+            "record_auto_evidence=false requires evidence_refs to reference existing evidence for `{item_id}`; unknown: {}",
+            unknown.join(", ")
+        ));
+    }
+    if !wrong_item.is_empty() {
+        return Err(format!(
+            "record_auto_evidence=false requires evidence_refs to belong to `{item_id}`; wrong item: {}",
+            wrong_item.join(", ")
+        ));
+    }
+    Ok(())
+}
+
 fn completion_refs(
     changed_files: &[String],
     evidence_refs: &[String],
@@ -1651,6 +1736,7 @@ mod tests {
                 verification_refs: vec!["manual:readme".to_string()],
                 evidence_refs: Vec::new(),
                 finding_refs: Vec::new(),
+                record_auto_evidence: None,
                 commit: Some(false),
                 commit_message: None,
             },
@@ -1662,6 +1748,10 @@ mod tests {
         assert_eq!(data.host_action.kind, "done");
         assert!(data.event.is_some());
         assert_eq!(data.evidence.len(), 2);
+        assert!(data.auto_evidence_enabled);
+        assert_eq!(data.generated_evidence.len(), 2);
+        assert_eq!(data.generated_evidence[0].kind, "note");
+        assert_eq!(data.generated_evidence[1].kind, "verification");
 
         let queue = guidance::inspect_work_queue(
             project.path(),
@@ -1674,6 +1764,124 @@ mod tests {
         );
         let queue_data = queue.data.expect("queue data");
         assert!(queue_data.items.is_empty());
+    }
+
+    #[test]
+    fn complete_backlog_item_can_disable_auto_evidence_with_explicit_refs() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Readme docs",
+            "docs",
+            "docs",
+            &["README.md"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+        fs::write(project.path().join("README.md"), "# Done\n").expect("readme");
+
+        let mut explicit = None;
+        for index in 0..205 {
+            explicit = Some(
+                evidence::record_evidence(
+                    project.path(),
+                    RecordEvidenceParams {
+                        root: None,
+                        id: None,
+                        source_item_id: Some("PROJ-001".to_string()),
+                        source_task_id: None,
+                        kind: "note".to_string(),
+                        summary: format!("Explicit evidence #{index} covers the direct edit."),
+                        refs: vec!["file:README.md".to_string()],
+                        metadata: BTreeMap::new(),
+                    },
+                )
+                .data
+                .expect("explicit evidence")
+                .evidence,
+            );
+        }
+        let explicit = explicit.expect("explicit evidence");
+
+        let completed = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Updated the readme.".to_string(),
+                changed_files: vec!["README.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: Some("Explicit evidence covers verification.".to_string()),
+                verification_refs: vec!["manual:readme".to_string()],
+                evidence_refs: vec![explicit.id.clone()],
+                finding_refs: Vec::new(),
+                record_auto_evidence: Some(false),
+                commit: Some(false),
+                commit_message: None,
+            },
+        );
+        let data = completed.data.expect("complete data");
+
+        assert_eq!(completed.status, ActionStatus::Completed);
+        assert!(data.closed);
+        assert!(!data.auto_evidence_enabled);
+        assert!(data.evidence.is_empty());
+        assert!(data.generated_evidence.is_empty());
+        let payload = data.event.expect("event").payload.expect("payload");
+        assert_eq!(payload["auto_evidence_enabled"], false);
+        assert_eq!(
+            payload["generated_evidence_refs"].as_array().unwrap().len(),
+            0
+        );
+        assert!(payload["evidence_refs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == &explicit.id));
+    }
+
+    #[test]
+    fn complete_backlog_item_rejects_auto_evidence_opt_out_without_existing_evidence() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Readme docs",
+            "docs",
+            "docs",
+            &["README.md"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+        fs::write(project.path().join("README.md"), "# Done\n").expect("readme");
+
+        let completed = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Updated the readme.".to_string(),
+                changed_files: vec!["README.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: None,
+                verification_refs: Vec::new(),
+                evidence_refs: vec!["EVD-999".to_string()],
+                finding_refs: Vec::new(),
+                record_auto_evidence: Some(false),
+                commit: Some(false),
+                commit_message: None,
+            },
+        );
+
+        assert_eq!(completed.status, ActionStatus::Failed);
+        assert!(completed
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("unknown: EVD-999"));
     }
 
     #[test]

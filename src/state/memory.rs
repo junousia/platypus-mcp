@@ -643,6 +643,20 @@ impl ProjectState for MemoryProjectState {
         Ok(evidence)
     }
 
+    fn inspect_evidence(&self, id: &str) -> StateResult<EvidenceSnapshot> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(ProjectStateError::invalid_command(
+                "evidence id is required",
+            ));
+        }
+        self.lock()?
+            .evidence
+            .get(id)
+            .cloned()
+            .ok_or_else(|| ProjectStateError::not_found(format!("evidence `{id}` not found")))
+    }
+
     fn list_evidence(&self, query: EvidenceQuery) -> StateResult<EvidenceListSnapshot> {
         let limit = query.limit.unwrap_or(50).clamp(1, 200);
         let evidence = self

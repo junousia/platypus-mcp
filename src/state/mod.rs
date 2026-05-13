@@ -81,6 +81,9 @@ pub trait ProjectState {
     /// Record verification, integration, or audit evidence.
     fn record_evidence(&self, command: RecordEvidenceCommand) -> StateResult<EvidenceSnapshot>;
 
+    /// Inspect one evidence record by stable identifier.
+    fn inspect_evidence(&self, id: &str) -> StateResult<EvidenceSnapshot>;
+
     /// List verification, integration, or audit evidence.
     fn list_evidence(&self, query: EvidenceQuery) -> StateResult<EvidenceListSnapshot>;
 

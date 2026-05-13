@@ -300,8 +300,11 @@ trailers.
 - `complete_backlog_item`: complete a direct host-work item without a worker
   task. It records direct completion evidence, a replayable backlog event, and
   can optionally create a closure commit for explicit `changed_files` with
-  `commit=true`. Use this for `prepare_work` host actions of kind
-  `direct_edit`.
+  `commit=true`. The response includes `generated_evidence` IDs and summaries
+  for records created by the completion call. Leave `record_auto_evidence`
+  omitted to preserve default traceability, or set `record_auto_evidence=false`
+  only when `evidence_refs` already point to explicit evidence records managed
+  by the host. Use this for `prepare_work` host actions of kind `direct_edit`.
 - `dispatch_ready_work`: lower-level batch dispatch for executable backlog
   work. It only accepts durable `worker_handoff` items whose planning gates are
   satisfied. It checks Git readiness, dispatches up to `max_tasks` runnable
