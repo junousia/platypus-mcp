@@ -4,15 +4,21 @@ use crate::{
     models::{
         ActionResult, ActionStatus, BacklogCandidate, BacklogInventoryData, BacklogInventoryItem,
         BacklogItemMarkdownState, BacklogListData, EffectiveExecutionPolicy, EvidenceRecord,
-        FindingRecord, InspectItemData, InspectItemParams, InspectSessionData,
-        InspectSessionParams, InspectWorkQueueParams, PlanningApprovalState,
-        PlanningClassification, TaskPlanQueryParams, WorkQueueData, WorkQueueInventorySummary,
-        WorkQueueItem, WorkQueuePlanState, WorkflowConfigParams, WorkflowExecutionConfig,
+        FindingRecord, InspectItemData, InspectItemParams, InspectQueueStatusParams,
+        InspectSessionData, InspectSessionParams, InspectWorkQueueParams, PlanningApprovalState,
+        PlanningClassification, QueueStateDescription, QueueStatusCounts, QueueStatusData,
+        QueueStatusItem, QueueTaskSummary, TaskPlanQueryParams, WorkQueueData,
+        WorkQueueInventorySummary, WorkQueueItem, WorkQueuePlanState, WorkflowConfigParams,
+        WorkflowExecutionConfig,
     },
     project,
 };
 use serde_json::Value;
-use std::{collections::BTreeMap, path::Path, process::Command};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    process::Command,
+};
 
 pub fn inspect_session(
     default_root: &Path,
@@ -398,6 +404,307 @@ pub fn inspect_work_queue(
             items,
         }),
         error: None,
+    }
+}
+
+pub fn inspect_queue_status(
+    default_root: &Path,
+    params: InspectQueueStatusParams,
+) -> ActionResult<QueueStatusData> {
+    let action = "inspect_queue_status";
+    let requested_limit = params.limit.unwrap_or(5).clamp(1, 50);
+    let queue_result = inspect_work_queue(
+        default_root,
+        InspectWorkQueueParams {
+            root: params.root,
+            limit: Some(requested_limit),
+            require_task_plan: None,
+            require_planning_approval: None,
+        },
+    );
+    let ActionResult {
+        status,
+        summary,
+        next_action,
+        data,
+        error,
+        ..
+    } = queue_result;
+    let queue = match data {
+        Some(data) => data,
+        None => {
+            return ActionResult {
+                action: action.to_string(),
+                status,
+                summary,
+                next_action,
+                recovery_action: None,
+                data: None,
+                error,
+            };
+        }
+    };
+
+    let dispatch_blockers = source_item_dispatch_blockers(Path::new(&queue.root));
+    let data = compact_queue_status(&queue, requested_limit, &dispatch_blockers);
+    ActionResult {
+        action: action.to_string(),
+        status,
+        summary: data_summary(&data),
+        next_action: Some(data.reason.clone()),
+        recovery_action: None,
+        data: Some(data),
+        error,
+    }
+}
+
+fn compact_queue_status(
+    queue: &WorkQueueData,
+    limit: usize,
+    dispatch_blockers: &BTreeMap<String, QueueDispatchBlocker>,
+) -> QueueStatusData {
+    let mut blocked_item_ids = BTreeSet::new();
+    for item in queue.items.iter().filter(|item| !item.ready_to_dispatch) {
+        blocked_item_ids.insert(item.candidate.item_id.clone());
+    }
+    for item in &queue.inventory.dependency_blocked_items {
+        blocked_item_ids.insert(item.item_id.clone());
+    }
+    for item_id in &queue.inventory.active_lifecycle_item_ids {
+        blocked_item_ids.insert(item_id.clone());
+    }
+    for (item_id, blocker) in dispatch_blockers {
+        if blocker.queue_state == "completed_pending_integration" {
+            blocked_item_ids.insert(item_id.clone());
+        }
+    }
+    let counts = QueueStatusCounts {
+        total_count: queue.inventory.total_count,
+        runnable_count: queue.inventory.runnable_count,
+        ready_count: queue.ready_count,
+        blocked_count: blocked_item_ids.len(),
+        dependency_blocked_count: queue.inventory.dependency_blocked_count,
+        active_count: queue.inventory.active_lifecycle_count,
+        pending_integration_count: queue.inventory.pending_integration_count,
+        closed_count: queue.inventory.closed_count,
+    };
+    let top_ready_items = queue
+        .items
+        .iter()
+        .filter(|item| item.ready_to_dispatch)
+        .take(limit)
+        .map(queue_status_item_from_work_item)
+        .collect::<Vec<_>>();
+
+    let mut seen_blocked = BTreeSet::new();
+    let mut top_blocked_items = Vec::new();
+    for item in queue.items.iter().filter(|item| !item.ready_to_dispatch) {
+        seen_blocked.insert(item.candidate.item_id.clone());
+        top_blocked_items.push(queue_status_item_from_work_item(item));
+        if top_blocked_items.len() >= limit {
+            break;
+        }
+    }
+    if top_blocked_items.len() < limit {
+        for item in &queue.inventory.dependency_blocked_items {
+            if seen_blocked.insert(item.item_id.clone()) {
+                top_blocked_items.push(queue_status_item_from_inventory_item(item));
+            }
+            if top_blocked_items.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    let active_tasks = compact_active_tasks(queue, dispatch_blockers, limit);
+    let truncated = queue.items.len() > limit
+        || queue.inventory.truncated
+        || queue.ready_count > top_ready_items.len()
+        || counts.blocked_count > top_blocked_items.len()
+        || queue.active_task_ids.len() > active_tasks.len()
+        || queue.inventory.pending_integration_task_ids.len()
+            > active_tasks
+                .iter()
+                .filter(|task| task.queue_state == "completed_pending_integration")
+                .count();
+    QueueStatusData {
+        root: queue.root.clone(),
+        counts,
+        top_ready_items,
+        top_blocked_items,
+        active_tasks,
+        state_descriptions: queue_state_descriptions(),
+        preflight_warnings: queue.preflight_warnings.clone(),
+        recommended_tool: queue.recommended_tool.clone(),
+        reason: queue.reason.clone(),
+        truncated,
+    }
+}
+
+fn data_summary(data: &QueueStatusData) -> String {
+    if data.counts.total_count == 0 {
+        "No backlog items.".to_string()
+    } else {
+        format!(
+            "{} total backlog item(s): {} runnable, {} ready, {} blocked, {} active, {} pending integration, {} closed.",
+            data.counts.total_count,
+            data.counts.runnable_count,
+            data.counts.ready_count,
+            data.counts.blocked_count,
+            data.counts.active_count,
+            data.counts.pending_integration_count,
+            data.counts.closed_count
+        )
+    }
+}
+
+fn queue_status_item_from_work_item(item: &WorkQueueItem) -> QueueStatusItem {
+    QueueStatusItem {
+        item_id: item.candidate.item_id.clone(),
+        title: item.candidate.title.clone(),
+        priority: item.candidate.priority.clone(),
+        area: item.candidate.area.clone(),
+        queue_state: item.queue_state.clone(),
+        state_description: queue_state_description(&item.queue_state).to_string(),
+        recommended_tool: item.recommended_tool.clone(),
+        reason: item.reason.clone(),
+    }
+}
+
+fn queue_status_item_from_inventory_item(item: &BacklogInventoryItem) -> QueueStatusItem {
+    QueueStatusItem {
+        item_id: item.item_id.clone(),
+        title: item.title.clone(),
+        priority: item.priority.clone(),
+        area: item.area.clone(),
+        queue_state: "dependency_blocked".to_string(),
+        state_description: queue_state_description("dependency_blocked").to_string(),
+        recommended_tool: "inspect_item".to_string(),
+        reason: if item.open_dependencies.is_empty() {
+            "Inspect this backlog item before choosing an execution path.".to_string()
+        } else {
+            format!(
+                "Blocked by open dependencies: {}.",
+                item.open_dependencies.join(", ")
+            )
+        },
+    }
+}
+
+fn compact_active_tasks(
+    queue: &WorkQueueData,
+    dispatch_blockers: &BTreeMap<String, QueueDispatchBlocker>,
+    limit: usize,
+) -> Vec<QueueTaskSummary> {
+    let mut tasks = Vec::new();
+    let mut seen = BTreeSet::new();
+    for item in &queue.items {
+        if let Some(task_id) = &item.task_id {
+            if seen.insert(task_id.clone()) {
+                tasks.push(QueueTaskSummary {
+                    item_id: Some(item.candidate.item_id.clone()),
+                    task_id: task_id.clone(),
+                    queue_state: item.queue_state.clone(),
+                    recommended_tool: item.recommended_tool.clone(),
+                });
+            }
+        }
+        if tasks.len() >= limit {
+            return tasks;
+        }
+    }
+    for (item_id, blocker) in dispatch_blockers {
+        if seen.insert(blocker.task_id.clone()) {
+            tasks.push(QueueTaskSummary {
+                item_id: Some(item_id.clone()),
+                task_id: blocker.task_id.clone(),
+                queue_state: blocker.queue_state.clone(),
+                recommended_tool: task_summary_tool(blocker).to_string(),
+            });
+        }
+        if tasks.len() >= limit {
+            return tasks;
+        }
+    }
+    for (index, task_id) in queue.active_task_ids.iter().enumerate() {
+        if seen.insert(task_id.clone()) {
+            tasks.push(QueueTaskSummary {
+                item_id: queue.active_item_ids.get(index).cloned(),
+                task_id: task_id.clone(),
+                queue_state: "active".to_string(),
+                recommended_tool: "inspect_task".to_string(),
+            });
+        }
+        if tasks.len() >= limit {
+            return tasks;
+        }
+    }
+    for task_id in &queue.inventory.pending_integration_task_ids {
+        if seen.insert(task_id.clone()) {
+            tasks.push(QueueTaskSummary {
+                item_id: None,
+                task_id: task_id.clone(),
+                queue_state: "completed_pending_integration".to_string(),
+                recommended_tool: "inspect_integration_gates".to_string(),
+            });
+        }
+        if tasks.len() >= limit {
+            break;
+        }
+    }
+    tasks
+}
+
+fn task_summary_tool(blocker: &QueueDispatchBlocker) -> &'static str {
+    match blocker.queue_state.as_str() {
+        "completed_pending_integration" => "inspect_integration_gates",
+        "active" if blocker.assignment_status.as_deref() == Some("prepared") => "start_worker_task",
+        "active" if blocker.assignment_status.as_deref() == Some("running") => {
+            "record_worker_progress"
+        }
+        "active" if matches!(blocker.task_status.as_str(), "queued" | "claimed") => {
+            "prepare_worker_handoff"
+        }
+        _ => "inspect_task",
+    }
+}
+
+fn queue_state_descriptions() -> Vec<QueueStateDescription> {
+    [
+        "direct_ready",
+        "ready",
+        "planning_blocked",
+        "approval_blocked",
+        "dependency_blocked",
+        "config_blocked",
+        "workspace_blocked",
+        "active",
+        "completed_pending_integration",
+    ]
+    .into_iter()
+    .map(|queue_state| QueueStateDescription {
+        queue_state: queue_state.to_string(),
+        description: queue_state_description(queue_state).to_string(),
+    })
+    .collect()
+}
+
+fn queue_state_description(queue_state: &str) -> &'static str {
+    match queue_state {
+        "direct_ready" => "Ready for host-managed direct edits in the current workspace.",
+        "ready" => "Ready for a worker handoff in an isolated worktree.",
+        "planning_blocked" => "Requires a valid task plan before work can start.",
+        "approval_blocked" => "Requires planning approval before work can start.",
+        "dependency_blocked" => "Blocked until listed backlog dependencies are closed.",
+        "config_blocked" => "Project setup blocks dispatch until doctor guidance is resolved.",
+        "workspace_blocked" => {
+            "Manager workspace changes must be handled before worktree dispatch."
+        }
+        "active" => {
+            "An existing task lifecycle must continue before this item can be dispatched again."
+        }
+        "completed_pending_integration" => "Worker output is complete and awaiting integration.",
+        _ => "Inspect the item before choosing the next execution step.",
     }
 }
 
@@ -1792,6 +2099,80 @@ tasks:
             data.inventory.dependency_blocked_items[0].item_id,
             "PROJ-002"
         );
+    }
+
+    #[test]
+    fn inspect_queue_status_returns_compact_counts_and_top_items() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "First item");
+        write_item(project.path(), "PROJ-002", "Second item");
+        write_item_with_deps(project.path(), "PROJ-003", "Third item", &["PROJ-002"]);
+        git(project.path(), &["add", "backlog"]);
+        git(project.path(), &["commit", "-m", "Add queue items"]);
+
+        let result = inspect_queue_status(
+            project.path(),
+            InspectQueueStatusParams {
+                root: None,
+                limit: Some(2),
+            },
+        );
+        let data = result.data.expect("queue status");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.counts.total_count, 3);
+        assert_eq!(data.counts.runnable_count, 2);
+        assert_eq!(data.counts.ready_count, 2);
+        assert_eq!(data.counts.dependency_blocked_count, 1);
+        assert_eq!(data.counts.blocked_count, 1);
+        assert_eq!(data.top_ready_items.len(), 2);
+        assert_eq!(data.top_ready_items[0].item_id, "PROJ-001");
+        assert_eq!(data.top_ready_items[0].queue_state, "direct_ready");
+        assert_eq!(data.top_blocked_items.len(), 1);
+        assert_eq!(data.top_blocked_items[0].item_id, "PROJ-003");
+        assert_eq!(data.top_blocked_items[0].queue_state, "dependency_blocked");
+        assert!(data
+            .state_descriptions
+            .iter()
+            .any(|state| state.queue_state == "planning_blocked"));
+        assert!(data.active_tasks.is_empty());
+    }
+
+    #[test]
+    fn inspect_queue_status_includes_active_tasks() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "First item");
+        git(project.path(), &["add", "backlog"]);
+        git(project.path(), &["commit", "-m", "Add queue item"]);
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Active item".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+
+        let result = inspect_queue_status(
+            project.path(),
+            InspectQueueStatusParams {
+                root: None,
+                limit: Some(5),
+            },
+        );
+        let data = result.data.expect("queue status");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.counts.active_count, 1);
+        assert_eq!(data.active_tasks.len(), 1);
+        assert_eq!(data.active_tasks[0].item_id.as_deref(), Some("PROJ-001"));
+        assert_eq!(data.active_tasks[0].task_id, task.id);
+        assert_eq!(data.active_tasks[0].queue_state, "active");
+        assert_eq!(data.top_blocked_items[0].queue_state, "active");
     }
 
     #[test]

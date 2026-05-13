@@ -34,6 +34,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(!tool_names.contains(&"next_safe_action"));
     assert!(tool_names.contains(&"inspect_session"));
     assert!(tool_names.contains(&"inspect_work_queue"));
+    assert!(tool_names.contains(&"inspect_queue_status"));
     assert!(tool_names.contains(&"inspect_item"));
     assert!(!tool_names.contains(&"classify_planning_needs"));
     assert!(!tool_names.contains(&"classify_workflow_fit"));
@@ -752,6 +753,62 @@ area: general
     assert_eq!(item["data"]["queue_state"], "dependency_blocked");
     assert_eq!(item["data"]["item"]["open_dependencies"][0], "PROJ-002");
     assert_eq!(item["data"]["recommended_tool"], "inspect_item");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_inspects_compact_queue_status() -> anyhow::Result<()> {
+    let project = TempDir::new().expect("temp dir");
+    git(project.path(), &["init"]);
+    git(project.path(), &["config", "user.name", "Platypus Test"]);
+    git(
+        project.path(),
+        &["config", "user.email", "platypus@example.invalid"],
+    );
+    fs::write(project.path().join("platy.yaml"), "project: test\n")?;
+    fs::create_dir_all(project.path().join("backlog/items"))?;
+    fs::create_dir_all(project.path().join("backlog/epics"))?;
+    fs::write(
+        project.path().join("backlog/epics/general.md"),
+        r#"---
+id: general
+title: General
+status: active
+priority: P1
+area: general
+---
+
+# General
+"#,
+    )?;
+    write_backlog_item(project.path(), "PROJ-001", "First item", &[])?;
+    write_backlog_item(project.path(), "PROJ-002", "Second item", &["PROJ-001"])?;
+    git(project.path(), &["add", "--all"]);
+    git(project.path(), &["commit", "-m", "Add queue items"]);
+    let client = start_client(Some(project.path().to_string_lossy().as_ref())).await?;
+
+    let response = call_tool_json(&client, "inspect_queue_status", json!({ "limit": 5 })).await?;
+
+    assert_eq!(response["action"], "inspect_queue_status");
+    assert_eq!(response["status"], "completed");
+    assert_eq!(response["data"]["counts"]["total_count"], 2);
+    assert_eq!(response["data"]["counts"]["runnable_count"], 1);
+    assert_eq!(response["data"]["counts"]["dependency_blocked_count"], 1);
+    assert_eq!(
+        response["data"]["top_ready_items"][0]["item_id"],
+        "PROJ-001"
+    );
+    assert_eq!(
+        response["data"]["top_blocked_items"][0]["queue_state"],
+        "dependency_blocked"
+    );
+    assert!(response["data"]["state_descriptions"]
+        .as_array()
+        .expect("states")
+        .iter()
+        .any(|state| state["queue_state"] == "direct_ready"));
 
     client.cancel().await?;
     Ok(())

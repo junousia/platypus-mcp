@@ -45,8 +45,9 @@ requires them.
 
 - Start with `doctor_snapshot` or `inspect_status` when the project state is
   unclear.
-- Prefer `inspect_work_queue` for executable backlog selection and lifecycle
-  routing instead of guessing the next command.
+- Prefer `inspect_queue_status` for quick queue triage and `inspect_work_queue`
+  for executable backlog selection and lifecycle routing instead of guessing
+  the next command.
 - Keep backlog markdown declarative; runtime state belongs in
   `.platy/platypus.sqlite3`.
 - Treat worker worktrees as isolated execution spaces until reviewed and
@@ -133,12 +134,15 @@ mechanism is verified.
    exists. Do this instead of hand-editing markdown when the change is a
    supported schema or section update.
 4. Run `validate_backlog`.
-5. Use `inspect_work_queue` to see runnable candidates, active task state,
-   dependency-blocked items, closed items, task-plan state, and setup blockers.
-6. Use `inspect_item` when one backlog item needs full state: markdown
+5. Use `inspect_queue_status` for compact queue counts, top ready work, top
+   blocked work, active tasks, and one-line queue-state descriptions.
+6. Use `inspect_work_queue` when the host needs full runnable candidates,
+   active task state, dependency-blocked items, closed items, task-plan state,
+   setup blockers, and recommended tool parameters.
+7. Use `inspect_item` when one backlog item needs full state: markdown
    sections, dependencies, closure state, task plan, findings, evidence, and
    the recommended next tool.
-7. Use `list_backlog` only when a compact runnable-candidate list is enough.
+8. Use `list_backlog` only when a compact runnable-candidate list is enough.
    Use `queue_state` as the authoritative routing signal: `direct_ready` means
    the host can proceed through `prepare_work` and complete with
    `complete_backlog_item`; `ready` means worker/worktree preparation is
