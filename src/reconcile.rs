@@ -50,18 +50,21 @@ pub fn reconcile_project(
     if data.ok {
         ActionResult::completed(action, "Reconciliation found no required gaps.", data)
     } else {
+        let recovery_action = reconciliation_recovery_action();
         ActionResult {
             action: action.to_string(),
             status: crate::models::ActionStatus::Failed,
             summary: format!("Reconciliation found {} gap(s).", data.gaps.len()),
-            next_action: Some(
-                "Address each reconciliation gap before claiming completion.".to_string(),
-            ),
-            recovery_action: None,
+            next_action: Some(recovery_action.clone()),
+            recovery_action: Some(recovery_action),
             data: Some(data),
             error: None,
         }
     }
+}
+
+fn reconciliation_recovery_action() -> String {
+    "Inspect data.gaps, apply each gap.next_action, then rerun reconcile_project. Common fixes: record_verification_evidence or run_task_verification for missing verification; inspect_integration_gates then integrate_worker_result for missing integration; update_finding_disposition for unresolved required findings; create a corrected integration commit for missing Platypus-Closes or Platypus-Verification trailers.".to_string()
 }
 
 #[cfg(test)]
@@ -151,6 +154,16 @@ mod tests {
             reconciled.status,
             crate::models::ActionStatus::Failed
         ));
+        assert!(reconciled
+            .recovery_action
+            .as_deref()
+            .expect("recovery action")
+            .contains("inspect_integration_gates"));
+        assert!(reconciled
+            .recovery_action
+            .as_deref()
+            .expect("recovery action")
+            .contains("update_finding_disposition"));
         assert!(data
             .gaps
             .iter()

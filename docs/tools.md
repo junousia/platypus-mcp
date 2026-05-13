@@ -96,7 +96,10 @@ flowchart LR
 - `ping`: health check.
 - `init_project`: create missing project scaffold files. Fresh CLI bootstrap
   can also run this through `bootstrap <host> --init-project`.
-- `doctor_snapshot`: inspect setup issues and recovery guidance.
+- `doctor_snapshot`: read-only setup recovery preflight. It checks scaffold
+  files, backlog directories, Git repository readiness, and backlog presence.
+  Failed checks return exact next actions such as `init_project`, `git init`,
+  or creating an initial commit before worktree-based tasks.
 - `inspect_status` / `project_status`: inspect project shape and runnable work.
 - `inspect_workflow_config`: inspect effective workflow integration defaults.
 
@@ -333,8 +336,10 @@ trailers.
   changes.
 - `worktree_cleanup`: remove a clean or explicitly forced task worktree.
 - `inspect_integration_gates`: read-only preflight for one task. It reports the
-  lifecycle, worktree, manager workspace, verification, findings, and branch
-  change gates that decide whether `integrate_worker_result` can run.
+  lifecycle, worktree, manager workspace cleanliness, verification evidence,
+  required findings, branch, and merge gates that decide whether
+  `integrate_worker_result` can run. It does not mutate task, Git, or worktree
+  state.
 - `integrate_worker_result`: merge, fast-forward, or squash a completed
   verified task branch into the manager workspace. Integration is blocked
   while required findings for the item/task remain undispositioned. Required
@@ -377,8 +382,12 @@ trailers.
 - `inspect_task_events`: replay task-scoped events.
 - `record_evidence` / `record_verification_evidence`: persist audit evidence.
 - `list_evidence`: inspect evidence records.
-- `reconcile_project`: report required gaps across tasks, findings, evidence,
-  and closure trailers.
+- `reconcile_project`: read-only recovery audit after direct completion or
+  worker integration. It reports orphaned task evidence, evidence attached to
+  incomplete tasks, missing verification evidence, missing integration
+  evidence, missing `Platypus-Closes` or `Platypus-Verification` trailers,
+  stale unapproved task lifecycles, and unresolved required findings. Each gap
+  includes the next tool or commit action to run.
 - `record_finding`: persist a follow-up finding.
 - `list_findings`: list stored findings.
 - `validate_findings`: fail when required findings remain open.

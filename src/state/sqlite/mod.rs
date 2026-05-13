@@ -995,7 +995,7 @@ impl ProjectState for SqliteProjectState {
                     task.id, task.source_item_id
                 ),
                 next_action:
-                    "Request planning approval, approve it, then record the approval before relying on this task lifecycle."
+                    "Call request_planning_approval for the source item, approve it with approval_respond, then rerun reconcile_project before relying on this task lifecycle."
                         .to_string(),
             });
         }
@@ -1014,7 +1014,7 @@ impl ProjectState for SqliteProjectState {
                         evidence.id, evidence.kind
                     ),
                     next_action:
-                        "Complete the worker lifecycle before relying on verification or integration evidence."
+                        "Call inspect_task for this task, then finish_work or complete_worker_task to reach a completed lifecycle before relying on its evidence."
                             .to_string(),
                 });
             } else {
@@ -1027,7 +1027,7 @@ impl ProjectState for SqliteProjectState {
                         evidence.id, evidence.kind
                     ),
                     next_action:
-                        "Record evidence against a valid lifecycle task or replace the orphaned evidence."
+                        "Call list_evidence for this item, then record replacement evidence against an existing task or ignore the orphaned record in the next completion."
                             .to_string(),
                 });
             }
@@ -1051,7 +1051,10 @@ impl ProjectState for SqliteProjectState {
                         "Completed task `{}` for `{}` has no verification evidence.",
                         task.id, task.source_item_id
                     ),
-                    next_action: "Record verification evidence or rerun verification.".to_string(),
+                    next_action: format!(
+                        "Call record_verification_evidence for task `{}` or run_task_verification if an assignment exists, then rerun reconcile_project.",
+                        task.id
+                    ),
                 });
             }
 
@@ -1075,8 +1078,10 @@ impl ProjectState for SqliteProjectState {
                         "Completed task `{}` for `{}` has not been integrated.",
                         task.id, task.source_item_id
                     ),
-                    next_action: "Integrate the worker result with integrate_worker_result."
-                        .to_string(),
+                    next_action: format!(
+                        "Call inspect_integration_gates for task `{}`, resolve any blocking gates, then call integrate_worker_result.",
+                        task.id
+                    ),
                 });
                 continue;
             }
@@ -1120,7 +1125,7 @@ impl ProjectState for SqliteProjectState {
                         task.id, task.source_item_id
                     ),
                     next_action:
-                        "Create or fix an integration commit with Platypus-Closes for the source item."
+                        "Create a corrected integration commit containing a Platypus-Closes trailer for the source item, then rerun reconcile_project."
                             .to_string(),
                 });
             }
@@ -1134,7 +1139,7 @@ impl ProjectState for SqliteProjectState {
                         task.id, task.source_item_id
                     ),
                     next_action:
-                        "Create or fix an integration commit with a Platypus-Verification trailer."
+                        "Create a corrected integration commit containing a Platypus-Verification trailer, then rerun reconcile_project."
                             .to_string(),
                 });
             }
@@ -1149,8 +1154,10 @@ impl ProjectState for SqliteProjectState {
                     "Required finding `{}` is unresolved: {}.",
                     finding.id, finding.title
                 ),
-                next_action: "Accept, defer, resolve, reject, or mark the finding duplicate."
-                    .to_string(),
+                next_action: format!(
+                    "Call update_finding_disposition for finding `{}` with accepted, deferred, resolved, rejected, or duplicate.",
+                    finding.id
+                ),
             });
         }
 

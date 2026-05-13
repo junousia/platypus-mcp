@@ -641,6 +641,18 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("verification evidence"));
     assert!(text.contains("may replace separate startup calls"));
 
+    let recovery = client
+        .read_resource(ReadResourceRequestParams {
+            meta: None,
+            uri: "platypus://guidance/recovery".to_string(),
+        })
+        .await?;
+    let text = resource_text(&recovery.contents[0]);
+    assert!(text.contains("Concrete recovery paths"));
+    assert!(text.contains("orphaned task evidence"));
+    assert!(text.contains("inspect_integration_gates"));
+    assert!(text.contains("update_finding_disposition"));
+
     let spec = client
         .read_resource(ReadResourceRequestParams {
             meta: None,
@@ -712,6 +724,18 @@ async fn stdio_server_lists_and_returns_host_guidance_prompts() -> anyhow::Resul
     assert!(text.contains("controlled loop"));
     assert!(text.contains("validate_backlog"));
     assert!(text.contains("reconcile_project"));
+
+    let prompt = client
+        .get_prompt(GetPromptRequestParams {
+            meta: None,
+            name: "platypus-recovery".to_string(),
+            arguments: None,
+        })
+        .await?;
+    let text = prompt_text(&prompt.messages[0]);
+    assert!(text.contains("Concrete recovery paths"));
+    assert!(text.contains("Platypus-Verification"));
+    assert!(text.contains("record_verification_evidence"));
 
     client.cancel().await?;
     Ok(())

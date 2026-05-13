@@ -19,19 +19,19 @@ pub fn doctor_snapshot(
         "project_config",
         &root.join("platy.yaml"),
         "platy.yaml exists.",
-        "Create project config or run Platypus initialization.",
+        "Call init_project with this root to create platy.yaml and standard scaffold files, then rerun doctor_snapshot.",
     ));
     checks.push(directory_check(
         "backlog_items",
         &root.join("backlog/items"),
         "backlog/items exists.",
-        "Create backlog directory structure before using backlog tools.",
+        "Call init_project with this root to create backlog/items and templates, then rerun doctor_snapshot.",
     ));
     checks.push(directory_check(
         "backlog_epics",
         &root.join("backlog/epics"),
         "backlog/epics exists.",
-        "Create at least the general epic before creating backlog items.",
+        "Call init_project with this root to create backlog/epics/general.md, then rerun doctor_snapshot.",
     ));
     checks.push(git_check(&root));
     checks.push(backlog_count_check(&root));
@@ -57,8 +57,7 @@ pub fn doctor_snapshot(
         };
         ActionResult::completed(action, summary, data)
     } else {
-        let recovery_action =
-            "Inspect failed checks and apply the suggested next action.".to_string();
+        let recovery_action = doctor_recovery_action(&data.checks);
         ActionResult {
             action: action.to_string(),
             status: crate::models::ActionStatus::Failed,
@@ -69,6 +68,27 @@ pub fn doctor_snapshot(
             error: None,
         }
     }
+}
+
+fn doctor_recovery_action(checks: &[DoctorCheck]) -> String {
+    let failed = checks
+        .iter()
+        .filter(|check| matches!(check.status, DoctorCheckStatus::Fail))
+        .collect::<Vec<_>>();
+    if failed.is_empty() {
+        return "Rerun doctor_snapshot after resolving reported warnings.".to_string();
+    }
+
+    let names = failed
+        .iter()
+        .map(|check| check.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let first_action = failed
+        .iter()
+        .find_map(|check| check.next_action.as_deref())
+        .unwrap_or("Resolve the first failed check, then rerun doctor_snapshot.");
+    format!("Resolve failed doctor checks ({names}). Start with: {first_action}")
 }
 
 fn file_check(name: &str, path: &Path, pass_summary: &str, next_action: &str) -> DoctorCheck {
@@ -186,6 +206,16 @@ mod tests {
         let result = doctor_snapshot(temp.path(), Some(root.as_str()));
 
         assert!(matches!(result.status, ActionStatus::Failed));
+        assert!(result
+            .recovery_action
+            .as_deref()
+            .expect("recovery action")
+            .contains("Resolve failed doctor checks"));
+        assert!(result
+            .recovery_action
+            .as_deref()
+            .expect("recovery action")
+            .contains("init_project"));
         let data = result.data.expect("data");
         assert!(!data.ok);
         assert!(data.checks.iter().any(|check| {
