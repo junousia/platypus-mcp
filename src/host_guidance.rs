@@ -39,11 +39,47 @@ detecting tool and do not infer hidden state from chat history.
 | `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `validate_backlog` | backlog validates and queue is inspected again |
 | `dependency_blocked` | `inspect_work_queue` | `inventory.dependency_blocked_count > 0` and no runnable item is selected | call `inspect_item` on the first blocked item; close or create required dependencies | blocked dependencies are resolved |
 | `plan_missing` | `inspect_work_queue` | an item recommends `write_task_plan` | host model writes an explicit plan with `write_task_plan`, then calls `validate_task_plan` | task plan validates cleanly |
+| `approval_blocked` | `inspect_work_queue` | `queue_state == "approval_blocked"` | call `request_planning_approval`, then `approval_respond` | planning approval is recorded |
+| `config_blocked` | `inspect_work_queue` | `queue_state == "config_blocked"` | call `doctor_snapshot` and follow the reported recovery action | setup blocker is resolved |
+| `workspace_blocked` | `inspect_work_queue` | `queue_state == "workspace_blocked"` | commit, stash, or finish current manager-workspace changes | worker dispatch can safely create a worktree |
 | `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | call `prepare_work`, edit the manager workspace, then call `complete_backlog_item` | direct completion evidence or closure commit exists |
 | `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` for one item or `dispatch_ready_work` for a batch | `run_in_worktree` handoff exists |
 | `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree; call `finish_work` | `finish_work.host_action` is returned |
 | `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` | work is integrated or a specific blocker is reported |
 | `failed_or_unclear` | any tool result | `status == "failed"` or `recovery_action` is present | follow `recovery_action`; if still unclear call `inspect_session` | a known state above matches |
+
+## Lifecycle Output States
+
+Every structured state below has a single meaning. Hosts should render the
+state name and follow the paired tool instead of inventing a hidden lifecycle.
+
+| Output | Emitted by | Meaning | Follow-up |
+| --- | --- | --- | --- |
+| `direct_ready` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | direct manager-workspace work is executable | `prepare_work`, edit, `complete_backlog_item` |
+| `ready` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | worker handoff can be prepared | `prepare_work` or `dispatch_ready_work` |
+| `planning_blocked` | queue tools | a required task plan is missing or invalid | `write_task_plan`, then `validate_task_plan` |
+| `approval_blocked` | queue tools | planning approval is required before execution | `request_planning_approval`, then `approval_respond` |
+| `dependency_blocked` | queue tools | backlog dependencies are still open | `inspect_item` and close or create the dependencies |
+| `config_blocked` | queue tools | project setup blocks worktree dispatch | `doctor_snapshot` and the reported recovery action |
+| `workspace_blocked` | queue tools | manager workspace changes block worker dispatch | commit, stash, or finish the current manager-workspace change |
+| `active` | queue tools | a task lifecycle already exists | `inspect_task`, `inspect_task_events`, or the recommended active-task tool |
+| `completed_pending_integration` | queue tools | worker output is complete and waiting for integration | `inspect_integration_gates`, then `integrate_worker_result` |
+| `direct_guidance` | `prepare_work.prepared_state` | response-local direct-edit guidance; no task, assignment, event, or worktree was created | edit manager workspace and call `complete_backlog_item` |
+| `worktree_prepared` | `prepare_work.prepared_state` | durable worker handoff state exists with assignment and worktree | run the external worker, then `finish_work` |
+| `not_prepared` | `prepare_work.prepared_state` | no selected item could be prepared | follow `next_action` or inspect the queue |
+| `direct_edit` | `prepare_work.host_actions[].kind` | host should edit the manager workspace | `complete_backlog_item` |
+| `run_in_worktree` | `prepare_work.host_actions[].kind` | host or external harness should work in the assigned worktree | `finish_work` |
+| `verify_or_record_risk` | `finish_work.host_action.kind` | verification is missing, failed, or explicitly waived | `run_task_verification`, `record_verification_evidence`, or `record_finding` |
+| `resolve_findings` | `finish_work.host_action.kind` | findings must be recorded or dispositioned | `record_finding`, `validate_findings`, `update_finding_disposition` |
+| `integrate_result` | `finish_work.host_action.kind` | worker result is ready for integration review | `inspect_integration_gates`, then `integrate_worker_result` |
+| `inspect_or_recover` | lifecycle tools | the tool cannot safely continue without inspection | follow `recovery_action`, then inspect again |
+| `done` | completion tools | direct or worker work is complete | `reconcile_project`, then inspect the queue |
+
+`inspect_session` may replace separate startup calls to `doctor_snapshot`,
+`inspect_status`, `inspect_workflow_config`, `inspect_queue_status`, and
+`inspect_work_queue` when it succeeds in a fresh session. Call the narrower
+tools after mutations, when a detailed payload is needed, or when the session
+snapshot is stale.
 
 Safety gates: keep runtime state in `.platy/platypus.sqlite3`, keep backlog
 markdown declarative, operate workers in task worktrees, and do not bypass
@@ -90,6 +126,14 @@ straight to broad edits. Convert the goal into a controlled loop:
     integrate with `integrate_worker_result`, recover, run
     `reconcile_project`, or move to the next item.
 
+Minimum viable direct-edit loop for tiny, user-approved work:
+`inspect_session`, `inspect_queue_status` or `inspect_work_queue`,
+`prepare_work`, edit the manager workspace, run relevant verification, then
+`complete_backlog_item`. This is a traceability tradeoff: it avoids worktree
+overhead for small tasks but still records the durable completion. Use task
+plans, worker handoff, findings, and integration gates for long-lived or
+parallel product development.
+
 The host should present this as natural assistance, not as a manual ceremony:
 explain what is being structured, ask for approval only when choices matter,
 and use tool results as the source of truth. Backlog markdown and task-plan
@@ -103,6 +147,10 @@ Use status tools before making assumptions about the repository or task queue.
 
 - `inspect_session` is the preferred startup tool. It combines setup checks,
   project status, workflow config, and queue state in one read-only snapshot.
+  When it succeeds at session start, it replaces separate startup detector
+  calls to `doctor_snapshot`, `inspect_status`, `inspect_workflow_config`,
+  `inspect_queue_status`, and `inspect_work_queue` unless a detailed payload
+  is needed.
 - `doctor_snapshot` checks scaffold files, Git metadata, backlog directories,
   and recovery guidance.
 - `inspect_status` summarizes project shape, backlog counts, and runnable work.

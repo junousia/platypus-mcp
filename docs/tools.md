@@ -280,6 +280,9 @@ trailers.
   assignment, event, worktree, or durable prepared marker is created. For worker
   handoff, the MCP server records state and creates worktrees; it does not
   launch Codex, Claude, or any other worker process.
+  `prepared_state` is one of `direct_guidance`, `worktree_prepared`, or
+  `not_prepared`. Host action kind is `direct_edit` for manager-workspace
+  edits or `run_in_worktree` for worker handoff.
 - `complete_backlog_item`: complete a direct host-work item without a worker
   task. It records direct completion evidence, a replayable backlog event, and
   can optionally create a closure commit for explicit `changed_files` with
@@ -341,6 +344,8 @@ trailers.
   return a structured `host_action` for the next step. If called for direct
   work without a task or assignment, it redirects the host to
   `complete_backlog_item`.
+  `host_action.kind` is one of `verify_or_record_risk`, `resolve_findings`,
+  `integrate_result`, `inspect_or_recover`, or `done`.
 - `run_task_verification`: execute the assignment verification command in the
   task worktree and persist a verification run event/evidence record.
 - `send_worker_guidance`: persist steering messages for active tasks.

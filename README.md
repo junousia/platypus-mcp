@@ -19,6 +19,10 @@ blockers. Use `inspect_item` for the full state of one backlog item. Use
 handoff. Direct edits finish with `complete_backlog_item`; worker handoffs
 finish with `finish_work` so worker completion, verification, findings,
 integration guidance, and reconciliation stay connected.
+For tiny user-approved edits, the minimum tracked loop is `inspect_session`,
+queue inspection, `prepare_work`, edit the manager workspace, verify, and
+`complete_backlog_item`; use task plans and worker handoff when traceability,
+parallelism, or review gates matter.
 The preferred workflow is documented in [docs/workflow.md](docs/workflow.md),
 client setup is documented in [docs/install.md](docs/install.md), and the full
 tool surface is documented in [docs/tools.md](docs/tools.md).

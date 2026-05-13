@@ -546,10 +546,21 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("The first matching state wins"));
     assert!(text.contains("queue_state == \"direct_ready\""));
     assert!(text.contains("completed_pending_integration"));
+    assert!(text.contains("approval_blocked"));
+    assert!(text.contains("config_blocked"));
+    assert!(text.contains("workspace_blocked"));
+    assert!(text.contains("direct_guidance"));
+    assert!(text.contains("worktree_prepared"));
+    assert!(text.contains("not_prepared"));
+    assert!(text.contains("direct_edit"));
+    assert!(text.contains("run_in_worktree"));
+    assert!(text.contains("verify_or_record_risk"));
+    assert!(text.contains("resolve_findings"));
     assert!(text.contains("prepare_work"));
     assert!(text.contains("integrate_worker_result"));
     assert!(text.contains("reconcile_project"));
     assert!(text.contains("verification evidence"));
+    assert!(text.contains("may replace separate startup calls"));
 
     let spec = client
         .read_resource(ReadResourceRequestParams {
@@ -561,6 +572,8 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("coding host"));
     assert!(text.contains("create_backlog_items"));
     assert!(text.contains("write_task_plan"));
+    assert!(text.contains("Minimum viable direct-edit loop"));
+    assert!(text.contains("traceability tradeoff"));
 
     let preload = client
         .read_resource(ReadResourceRequestParams {
