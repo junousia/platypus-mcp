@@ -372,6 +372,16 @@ pub struct InspectWorkQueueParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct InspectQueueStatusParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Maximum number of top ready and blocked records to return.
+    #[schemars(range(min = 1, max = 50))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct InspectSessionParams {
     /// Project root that bounds all file, Git, and state operations.
     pub root: Option<String>,
@@ -2073,6 +2083,98 @@ pub struct WorkQueueInventorySummary {
     pub pending_integration_task_ids: Vec<String>,
     /// Whether any inventory lists were truncated by the queue limit.
     pub truncated: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct QueueStatusData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Compact queue counts derived from the detailed work queue view.
+    pub counts: QueueStatusCounts,
+    /// Top ready backlog items in execution order.
+    pub top_ready_items: Vec<QueueStatusItem>,
+    /// Top blocked backlog items in execution or dependency order.
+    pub top_blocked_items: Vec<QueueStatusItem>,
+    /// Active or pending lifecycle tasks that need attention.
+    pub active_tasks: Vec<QueueTaskSummary>,
+    /// Human-readable descriptions for known queue states.
+    pub state_descriptions: Vec<QueueStateDescription>,
+    /// Warnings that should be resolved before dispatching work.
+    pub preflight_warnings: Vec<String>,
+    /// Recommended Platypus MCP tool to call next.
+    pub recommended_tool: String,
+    /// Human-readable reason for the decision or result.
+    pub reason: String,
+    /// Whether compact lists were truncated by the request limit.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct QueueStatusCounts {
+    /// Total number of backlog items before queue filtering.
+    pub total_count: usize,
+    /// Backlog items that are open and have all dependencies closed.
+    pub runnable_count: usize,
+    /// Queue items currently ready for direct work or worker handoff.
+    pub ready_count: usize,
+    /// Queue items currently blocked by planning, setup, lifecycle, or dependencies.
+    pub blocked_count: usize,
+    /// Backlog items blocked by open dependencies.
+    pub dependency_blocked_count: usize,
+    /// Backlog items with active task lifecycle state.
+    pub active_count: usize,
+    /// Backlog items with completed task results waiting for integration.
+    pub pending_integration_count: usize,
+    /// Backlog items closed by Git trailers or recorded direct completion.
+    pub closed_count: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct QueueStatusItem {
+    /// Backlog item identifier.
+    #[schemars(regex(pattern = "^[A-Z][A-Z0-9]+-[0-9]+$"), example = example_item_id())]
+    pub item_id: String,
+    /// Human-readable backlog item title.
+    #[schemars(example = example_title())]
+    pub title: String,
+    /// Backlog priority such as P0, P1, or P2.
+    #[schemars(with = "BacklogPrioritySchema")]
+    pub priority: String,
+    /// Backlog area or subsystem.
+    pub area: String,
+    /// Queue state for this item.
+    #[schemars(with = "WorkQueueStateSchema")]
+    pub queue_state: String,
+    /// Short human-readable description for the queue state.
+    pub state_description: String,
+    /// Recommended Platypus MCP tool to call next for this item.
+    pub recommended_tool: String,
+    /// Human-readable reason for the decision or result.
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct QueueTaskSummary {
+    /// Backlog item identifier associated with this task, when known.
+    #[schemars(regex(pattern = "^[A-Z][A-Z0-9]+-[0-9]+$"), example = example_item_id())]
+    pub item_id: Option<String>,
+    /// Durable task identifier.
+    #[schemars(example = example_task_id())]
+    pub task_id: String,
+    /// Queue state for this task.
+    #[schemars(with = "WorkQueueStateSchema")]
+    pub queue_state: String,
+    /// Recommended Platypus MCP tool to call next for this task.
+    pub recommended_tool: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct QueueStateDescription {
+    /// Queue state value.
+    #[schemars(with = "WorkQueueStateSchema")]
+    pub queue_state: String,
+    /// Short human-readable description for the queue state.
+    pub description: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

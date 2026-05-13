@@ -11,10 +11,11 @@ Platypus tools return typed JSON with a shared envelope:
 - `error`: optional failure detail
 
 Hosts should prefer `inspect_session` at startup and after stale chat context.
-Use `inspect_work_queue` when inspecting runnable backlog work, task-plan
-state, active lifecycle state, setup blockers, and the recommended next
-lifecycle command. The lower-level tools remain available for precise control
-and testing.
+Use `inspect_queue_status` for compact dashboards and chat summaries. Use
+`inspect_work_queue` when inspecting runnable backlog work, task-plan state,
+active lifecycle state, setup blockers, and the recommended next lifecycle
+command. The lower-level tools remain available for precise control and
+testing.
 
 ## Host Guidance Resources And Prompts
 
@@ -39,7 +40,8 @@ deterministic and references the current public tool names.
 
 `platypus://guidance/tool-preload` names two optional startup groups:
 planning-session tools such as `doctor_snapshot`, `create_backlog_items`,
-`inspect_session`, `inspect_work_queue`, and `write_task_plan`; and
+`inspect_session`, `inspect_queue_status`, `inspect_work_queue`, and
+`write_task_plan`; and
 execution-session tools such as `dispatch_ready_work`, `inspect_worktree_changes`,
 `commit_planning_artifacts`, `complete_backlog_item`, `complete_worker_task`, `finish_work`,
 `record_verification_evidence`, `integrate_worker_result`, and
@@ -56,7 +58,9 @@ schemas, call the same tools normally when they are needed.
    `import_github_issues`.
 3. Plan non-trivial work: `write_task_plan`,
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
-4. Inspect the executable queue: `inspect_work_queue`.
+4. Inspect the executable queue: `inspect_queue_status` for compact triage,
+   then `inspect_work_queue` when the host needs full item state and next-tool
+   parameters.
 5. Prepare work: prefer `prepare_work`. It follows durable execution policy
    from `workflow.execution` and backlog item `execution_path`/`planning_gate`.
    It returns `direct_edit` guidance for manager-workspace work, or a
@@ -141,6 +145,10 @@ make smoke-storage
 - `list_epics`: list existing backlog epics and their metadata.
 - `validate_backlog`: validate backlog item and epic files.
 - `list_backlog`: list runnable backlog candidates.
+- `inspect_queue_status`: compact queue summary for dashboards and chat
+  replies. It returns counts, top ready items, top blocked items, active tasks,
+  state descriptions, and the recommended next tool without the full queue
+  inventory.
 - `inspect_work_queue`: inspect executable backlog work and the whole queue
   shape, including dependency-blocked and closed item summaries.
 - `inspect_item`: inspect one backlog item with dependency, closure, task-plan,

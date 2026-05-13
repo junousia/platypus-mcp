@@ -15,13 +15,14 @@ use crate::{
         FindingListData, FindingRecordData, FindingValidationData, FinishWorkData,
         FinishWorkParams, GenerateTaskBundleParams, GitHubIssueImportData,
         ImportGitHubIssuesParams, InitProjectParams, InspectDependencyGraphParams,
-        InspectIntegrationGatesParams, InspectItemData, InspectItemParams, InspectSessionData,
-        InspectSessionParams, InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
+        InspectIntegrationGatesParams, InspectItemData, InspectItemParams,
+        InspectQueueStatusParams, InspectSessionData, InspectSessionParams,
+        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
         InspectWorkerAssignmentParams, IntegrateWorkerResultParams, IntegrationGateData,
         LeaseListData, LeaseRecordData, LimitParams, ListEpicsData, ListEvidenceParams,
         ListFindingsParams, ListLeasesParams, PingData, PingParams, PrepareWorkData,
         PrepareWorkParams, PrepareWorkerAssignmentParams, ProjectScaffoldData, ProjectStatusData,
-        ReconcileParams, ReconciliationData, RecordEvidenceParams,
+        QueueStatusData, ReconcileParams, ReconciliationData, RecordEvidenceParams,
         RecordExternalReportDispatchParams, RecordFindingParams, RecordVerificationEvidenceParams,
         RecordWorkerEventParams, ReleaseLeaseParams, RenewLeaseParams,
         RequestExternalReportApprovalParams, RequestPlanningApprovalParams, RootParams,
@@ -313,6 +314,25 @@ impl PlatypusMcp {
         Parameters(params): Parameters<InspectWorkQueueParams>,
     ) -> Json<ActionResult<WorkQueueData>> {
         Json(guidance::inspect_work_queue(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Inspect Queue Status",
+        description = "Inspect a compact queue summary with counts, top ready and blocked work, and active tasks.",
+        annotations(
+            title = "Inspect Queue Status",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn inspect_queue_status(
+        &self,
+        Parameters(params): Parameters<InspectQueueStatusParams>,
+    ) -> Json<ActionResult<QueueStatusData>> {
+        Json(guidance::inspect_queue_status(&self.default_root, params))
     }
 
     #[tool(
@@ -1709,6 +1729,7 @@ mod tests {
             "project_status",
             "inspect_session",
             "inspect_work_queue",
+            "inspect_queue_status",
             "inspect_item",
             "list_backlog",
             "inspect_backlog_inventory",

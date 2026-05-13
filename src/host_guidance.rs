@@ -68,8 +68,9 @@ straight to broad edits. Convert the goal into a controlled loop:
    `create_backlog_item` or `create_backlog_items`. Keep items independently
    reviewable and executable.
 5. Run `validate_backlog` after backlog writes.
-6. Use `inspect_work_queue` to inspect readiness, task-plan state, active work,
-   and setup blockers.
+6. Use `inspect_queue_status` for compact queue counts and top ready/blocked
+   work. Use `inspect_work_queue` when full readiness, task-plan state, active
+   work, setup blockers, and next-tool parameters are needed.
 7. When planning is required by the user or team, create a strict task plan
    with `write_task_plan` and `validate_task_plan`.
 8. Prepare execution with `prepare_work`. Direct items may return a
@@ -102,6 +103,8 @@ Use status tools before making assumptions about the repository or task queue.
 - `inspect_status` summarizes project shape, backlog counts, and runnable work.
 - `inspect_workflow_config` reports integration policy such as merge style and
   verification gates.
+- `inspect_queue_status` returns compact queue counts, top ready items, top
+  blocked items, active tasks, and one-line queue-state descriptions.
 - `inspect_work_queue` combines runnable backlog candidates with active task
   counts, explicit task-plan requirements, and task-plan readiness.
 - `inspect_work_queue` returns the current queue shape, direct/worktree
@@ -183,13 +186,15 @@ const BACKLOG_AUTHORING_TEXT: &str = r#"# Backlog Authoring Guidance
 Create concise, agent-readable backlog items with `create_backlog_item` for one
 item or `create_backlog_items` for an atomic related set. Use the host model's
 own judgment to choose item boundaries and call the write tools directly.
-Validate with `validate_backlog`, inspect queue shape with `inspect_work_queue`,
+Validate with `validate_backlog`, inspect compact queue shape with
+`inspect_queue_status`, inspect full queue routing with `inspect_work_queue`,
 and use `inspect_item` when the host needs the full state for one closed,
 blocked, active, or runnable item. `inspect_backlog_inventory` remains a
 compatibility tool; normal flows should not need it.
 
 Backlog markdown should contain goal, implementation contract, acceptance
-criteria, dependencies, suggested worker, and owned surfaces. It should not
+criteria, dependencies, explicit execution policy when needed, and owned
+surfaces. It should not
 contain runtime status, assignment attempts, task IDs, PR metadata, closure
 state, or blocked/done fields. Closure is derived from Git trailers such as
 `Platypus-Closes` and `Platypus-Verification`, or from recorded direct

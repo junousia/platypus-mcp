@@ -274,13 +274,17 @@ Use the Platypus MCP tools to keep planning reproducible:
 - `create_backlog_items` atomically writes a related set and resolves
   `depends_on_keys`.
 - `validate_backlog` checks item and epic schema.
-- `inspect_work_queue` shows runnable items and task-plan requirements.
+- `inspect_queue_status` shows compact queue counts, top ready work, top
+  blocked work, and active tasks.
+- `inspect_work_queue` shows runnable items, full routing state, and task-plan
+  requirements.
 - `write_task_plan` and `validate_task_plan` make non-trivial work executable.
 - `prepare_work` returns either direct manager-workspace guidance or a
   worker/worktree handoff.
 - `complete_backlog_item` closes direct manager-workspace work.
 - `finish_work` closes worker assignments and returns integration guidance.
-- `inspect_work_queue` computes queue state and the recommended next tool.
+- `inspect_work_queue` computes detailed queue state and the recommended next
+  tool.
 
 Do not manually maintain queue indexes or runtime status in markdown. Queue
 state is computed from backlog metadata, task-plan readiness, Platypus runtime
@@ -332,13 +336,13 @@ planning group at session start:
 `inspect_session`, `doctor_snapshot`, `inspect_status`, `inspect_workflow_config`,
 `create_backlog_item`, `create_backlog_items`, `create_epic`,
 `validate_backlog`, `list_backlog`, `inspect_backlog_inventory`,
-`inspect_work_queue`, `write_task_plan`, `validate_task_plan`,
+`inspect_queue_status`, `inspect_work_queue`, `write_task_plan`, `validate_task_plan`,
 `inspect_task_plan`, `request_planning_approval`, `approval_respond`.
 
 Before dispatch, handoff, verification, or integration work, load the execution
 group:
 
-`inspect_work_queue`, `prepare_work`, `dispatch_ready_work`,
+`inspect_queue_status`, `inspect_work_queue`, `prepare_work`, `dispatch_ready_work`,
 `commit_planning_artifacts`, `generate_task_bundle`,
 `inspect_task_events`, `events_replay`, `worktree_status`,
 `inspect_worktree_changes`, `send_worker_guidance`, `start_worker_task`,
@@ -423,6 +427,7 @@ mod tests {
         assert!(config.contains("merge_style: merge_commit"));
         let agents = fs::read_to_string(temp.path().join("AGENTS.md")).expect("agents");
         assert!(agents.contains("spec-driven development"));
+        assert!(agents.contains("inspect_queue_status"));
         assert!(agents.contains("inspect_work_queue"));
         assert!(agents.contains("first matching state"));
         assert!(agents.contains("queue_state == \"direct_ready\""));
@@ -439,6 +444,7 @@ mod tests {
         assert!(agents.contains("finish_work"));
         let claude = fs::read_to_string(temp.path().join("CLAUDE.md")).expect("claude");
         assert!(claude.contains("spec-driven development"));
+        assert!(claude.contains("inspect_queue_status"));
         assert!(claude.contains("inspect_work_queue"));
         assert!(claude.contains("first matching state"));
         assert!(claude.contains("queue_state == \"direct_ready\""));
@@ -466,8 +472,9 @@ mod tests {
         assert!(workflow.contains("complete_backlog_item"));
         let backlog_readme =
             fs::read_to_string(temp.path().join("backlog/README.md")).expect("backlog readme");
+        assert!(backlog_readme.contains("inspect_queue_status"));
         assert!(backlog_readme.contains("inspect_work_queue"));
-        assert!(backlog_readme.contains("task-plan requirements"));
+        assert!(backlog_readme.contains("task-plan"));
         assert!(backlog_readme.contains("complete_backlog_item"));
         assert!(temp.path().join("backlog/items").is_dir());
         assert!(temp.path().join("backlog/plans").is_dir());
