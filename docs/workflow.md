@@ -73,12 +73,16 @@ stateDiagram-v2
 
     QueueInspection --> DirectReady: inspect_work_queue returns direct_ready
     QueueInspection --> PlanMissing: inspect_work_queue returns planning_blocked and missing plan
+    QueueInspection --> ApprovalBlocked: inspect_work_queue returns approval_blocked
+    QueueInspection --> SetupBlocked: inspect_work_queue returns config_blocked or workspace_blocked
     QueueInspection --> WorkerReady: inspect_work_queue returns ready
     QueueInspection --> ActiveWork: inspect_work_queue returns active or completed_pending_integration
     QueueInspection --> DependencyBlocked: inspect_work_queue reports dependency_blocked_count > 0
     QueueInspection --> ClosedQueue: inspect_work_queue reports only closed items
 
     PlanMissing --> QueueInspection: write_task_plan then validate_task_plan
+    ApprovalBlocked --> QueueInspection: request_planning_approval then approval_respond
+    SetupBlocked --> QueueInspection: doctor_snapshot or clean manager workspace
     DirectReady --> DirectComplete: prepare_work returns direct_edit
     DirectComplete --> QueueInspection: complete_backlog_item
     WorkerReady --> WorkerRunning: prepare_work or dispatch_ready_work returns run_in_worktree
@@ -96,11 +100,42 @@ stateDiagram-v2
 | Empty backlog | `inspect_work_queue` reports no items | Host decides concrete items, then `create_backlog_items` and `validate_backlog` |
 | Dependency blocked | `inspect_work_queue.inventory.dependency_blocked_count > 0` | `inspect_item` on the blocked item; close or create its dependencies |
 | Plan missing | `inspect_work_queue.items[].recommended_tool == "write_task_plan"` | Host writes exact plan with `write_task_plan`, then `validate_task_plan` |
+| Approval blocked | `queue_state == "approval_blocked"` | `request_planning_approval`, then `approval_respond` |
+| Config blocked | `queue_state == "config_blocked"` | `doctor_snapshot` and the reported recovery action |
+| Workspace blocked | `queue_state == "workspace_blocked"` | Commit, stash, or finish the manager-workspace change before worker dispatch |
 | Direct ready | `queue_state == "direct_ready"` | `prepare_work`, edit manager workspace, `complete_backlog_item` |
 | Worker ready | `queue_state == "ready"` | `prepare_work` for one item or `dispatch_ready_work` for batch handoff |
 | Active work | `queue_state == "active"` or existing task id | `inspect_task`, `inspect_task_events`, `finish_work`, or recovery action |
 | Pending integration | `queue_state == "completed_pending_integration"` | `inspect_integration_gates`, then `integrate_worker_result` |
 | Closed queue | only closed items remain | Host decides whether to create more work; if yes, `create_backlog_items` |
+
+### Lifecycle Output States
+
+Queue tools emit exactly these queue states:
+
+| Queue state | Meaning | Follow-up |
+| --- | --- | --- |
+| `direct_ready` | direct manager-workspace work is executable | `prepare_work`, edit, `complete_backlog_item` |
+| `ready` | worker handoff can be prepared | `prepare_work` or `dispatch_ready_work` |
+| `planning_blocked` | a required task plan is missing or invalid | `write_task_plan`, then `validate_task_plan` |
+| `approval_blocked` | planning approval is required before execution | `request_planning_approval`, then `approval_respond` |
+| `dependency_blocked` | backlog dependencies are still open | `inspect_item` and close or create the dependencies |
+| `config_blocked` | project setup blocks worktree dispatch | `doctor_snapshot` and the reported recovery action |
+| `workspace_blocked` | manager workspace changes block worker dispatch | commit, stash, or finish those changes |
+| `active` | a task lifecycle already exists | `inspect_task`, `inspect_task_events`, or the recommended active-task tool |
+| `completed_pending_integration` | worker output is complete and awaiting integration | `inspect_integration_gates`, then `integrate_worker_result` |
+
+`prepare_work.prepared_state` is `direct_guidance`, `worktree_prepared`, or
+`not_prepared`. `direct_guidance` is response-local: it creates no task,
+assignment, event, or worktree, so `complete_backlog_item` is the next durable
+transition. `worktree_prepared` means a worker assignment and worktree were
+persisted. `not_prepared` means no selected item could be prepared and the host
+should follow `next_action`.
+
+Host action kinds are `direct_edit`, `run_in_worktree`,
+`verify_or_record_risk`, `resolve_findings`, `integrate_result`,
+`inspect_or_recover`, and `done`. Treat them as the exact next-step contract
+returned by `prepare_work`, `finish_work`, or completion tools.
 
 ## Bootstrap
 
@@ -113,6 +148,13 @@ stateDiagram-v2
 3. Run `doctor_snapshot` to check config, backlog directories, Git metadata,
    and recovery guidance.
 4. Inspect workflow policy with `inspect_workflow_config`.
+
+At the start of an MCP-host session, `inspect_session` can replace the separate
+startup detector calls to `doctor_snapshot`, `inspect_status`,
+`inspect_workflow_config`, `inspect_queue_status`, and `inspect_work_queue`
+when it succeeds and the snapshot is fresh. Call the narrower tools after
+mutations, when the host needs a detailed payload, or when a previous chat
+turn may be stale.
 
 `init_project` also installs project-local agent and workflow guidance. That is
 intentional: once an MCP host enters an initialized directory, normal goal
@@ -157,6 +199,14 @@ items can continue through `prepare_work` and complete with
 Worker-handoff items need committed planning context before creating worktrees.
 Use `commit_planning_artifacts` when backlog or task-plan files are the only
 pending manager-workspace changes.
+
+Minimum viable direct-edit loop for tiny, user-approved work:
+`inspect_session`, `inspect_queue_status` or `inspect_work_queue`,
+`prepare_work`, edit the manager workspace, run relevant verification, then
+`complete_backlog_item`. This is a traceability tradeoff: it avoids worktree
+overhead for small tasks while still recording the durable completion. Use task
+plans, worker handoff, findings, and integration gates for long-lived,
+parallel, or review-sensitive product development.
 
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime

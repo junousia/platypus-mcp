@@ -243,11 +243,42 @@ state from chat history.
 | `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `validate_backlog` | backlog validates and queue is inspected again |
 | `dependency_blocked` | `inspect_work_queue` | `inventory.dependency_blocked_count > 0` and no runnable item is selected | call `inspect_item` on the first blocked item; close or create required dependencies | blocked dependencies are resolved |
 | `plan_missing` | `inspect_work_queue` | an item recommends `write_task_plan` | host model writes an explicit plan with `write_task_plan`, then calls `validate_task_plan` | task plan validates cleanly |
+| `approval_blocked` | `inspect_work_queue` | `queue_state == "approval_blocked"` | call `request_planning_approval`, then `approval_respond` | planning approval is recorded |
+| `config_blocked` | `inspect_work_queue` | `queue_state == "config_blocked"` | call `doctor_snapshot` and follow the reported recovery action | setup blocker is resolved |
+| `workspace_blocked` | `inspect_work_queue` | `queue_state == "workspace_blocked"` | commit, stash, or finish current manager-workspace changes | worker dispatch can safely create a worktree |
 | `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | call `prepare_work`, edit the manager workspace, then call `complete_backlog_item` | direct completion evidence or closure commit exists |
 | `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` for one item or `dispatch_ready_work` for a batch | `run_in_worktree` handoff exists |
 | `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree; call `finish_work` | `finish_work.host_action` is returned |
 | `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` | work is integrated or a specific blocker is reported |
 | `failed_or_unclear` | any tool result | `status == "failed"` or `recovery_action` is present | follow `recovery_action`; if still unclear call `inspect_session` | a known state above matches |
+
+## Lifecycle Output States
+
+Queue states: `direct_ready`, `ready`, `planning_blocked`,
+`approval_blocked`, `dependency_blocked`, `config_blocked`,
+`workspace_blocked`, `active`, and `completed_pending_integration`.
+
+Prepare states: `direct_guidance` means response-local direct-edit guidance
+with no persisted task, assignment, event, or worktree; `worktree_prepared`
+means durable worker handoff state exists; `not_prepared` means follow the
+tool `next_action`.
+
+Host action kinds: `direct_edit`, `run_in_worktree`,
+`verify_or_record_risk`, `resolve_findings`, `integrate_result`,
+`inspect_or_recover`, and `done`.
+
+`inspect_session` may replace separate startup calls to `doctor_snapshot`,
+`inspect_status`, `inspect_workflow_config`, `inspect_queue_status`, and
+`inspect_work_queue` when it succeeds in a fresh session. Call narrower tools
+after mutations, when a detailed payload is needed, or when the snapshot is
+stale.
+
+Minimum viable direct-edit loop for tiny, user-approved work:
+`inspect_session`, `inspect_queue_status` or `inspect_work_queue`,
+`prepare_work`, edit the manager workspace, run relevant verification, then
+`complete_backlog_item`. This keeps a durable completion record while avoiding
+worktree overhead. Use task plans, worker handoff, findings, and integration
+gates for long-lived or parallel product development.
 
 ## State Rules
 
@@ -288,6 +319,11 @@ Use the Platypus MCP tools to keep planning reproducible:
 - `finish_work` closes worker assignments and returns integration guidance.
 - `inspect_work_queue` computes detailed queue state and the recommended next
   tool.
+- `inspect_session` can replace separate startup detector calls when the
+  session snapshot is fresh.
+- Tiny direct edits may use the minimum loop:
+  `inspect_session`, queue inspection, `prepare_work`, edit, verify, and
+  `complete_backlog_item`.
 
 Do not manually maintain queue indexes or runtime status in markdown. Queue
 state is computed from backlog metadata, task-plan readiness, Platypus runtime
@@ -325,11 +361,42 @@ history.
 | `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `validate_backlog` |
 | `dependency_blocked` | `inspect_work_queue` | `inventory.dependency_blocked_count > 0` and no runnable item is selected | call `inspect_item`; close or create required dependencies |
 | `plan_missing` | `inspect_work_queue` | an item recommends `write_task_plan` | call `write_task_plan`, then `validate_task_plan` |
+| `approval_blocked` | `inspect_work_queue` | `queue_state == "approval_blocked"` | call `request_planning_approval`, then `approval_respond` |
+| `config_blocked` | `inspect_work_queue` | `queue_state == "config_blocked"` | call `doctor_snapshot` and follow the reported recovery action |
+| `workspace_blocked` | `inspect_work_queue` | `queue_state == "workspace_blocked"` | commit, stash, or finish current manager-workspace changes |
 | `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | call `prepare_work`; treat the direct action as response-local guidance, edit manager workspace, then `complete_backlog_item` |
 | `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` or `dispatch_ready_work` |
 | `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree, then `finish_work` |
 | `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` |
 | `failed_or_unclear` | any tool result | `status == "failed"` or `recovery_action` is present | follow `recovery_action`; if still unclear call `inspect_session` |
+
+## Lifecycle Output States
+
+Queue states: `direct_ready`, `ready`, `planning_blocked`,
+`approval_blocked`, `dependency_blocked`, `config_blocked`,
+`workspace_blocked`, `active`, and `completed_pending_integration`.
+
+Prepare states: `direct_guidance` means response-local direct-edit guidance
+with no persisted task, assignment, event, or worktree; `worktree_prepared`
+means durable worker handoff state exists; `not_prepared` means follow the
+tool `next_action`.
+
+Host action kinds: `direct_edit`, `run_in_worktree`,
+`verify_or_record_risk`, `resolve_findings`, `integrate_result`,
+`inspect_or_recover`, and `done`.
+
+`inspect_session` may replace separate startup calls to `doctor_snapshot`,
+`inspect_status`, `inspect_workflow_config`, `inspect_queue_status`, and
+`inspect_work_queue` when it succeeds in a fresh session. Call narrower tools
+after mutations, when a detailed payload is needed, or when the snapshot is
+stale.
+
+Minimum viable direct-edit loop for tiny, user-approved work:
+`inspect_session`, `inspect_queue_status` or `inspect_work_queue`,
+`prepare_work`, edit the manager workspace, run relevant verification, then
+`complete_backlog_item`. This keeps a durable completion record while avoiding
+worktree overhead. Use task plans, worker handoff, findings, and integration
+gates for long-lived or parallel product development.
 
 ## Tool Preload
 
@@ -435,6 +502,17 @@ mod tests {
         assert!(agents.contains("first matching state"));
         assert!(agents.contains("queue_state == \"direct_ready\""));
         assert!(agents.contains("completed_pending_integration"));
+        assert!(agents.contains("approval_blocked"));
+        assert!(agents.contains("workspace_blocked"));
+        assert!(agents.contains("direct_guidance"));
+        assert!(agents.contains("worktree_prepared"));
+        assert!(agents.contains("not_prepared"));
+        assert!(agents.contains("direct_edit"));
+        assert!(agents.contains("run_in_worktree"));
+        assert!(agents.contains("verify_or_record_risk"));
+        assert!(agents.contains("resolve_findings"));
+        assert!(agents.contains("may replace separate startup calls"));
+        assert!(agents.contains("Minimum viable direct-edit loop"));
         assert!(agents.contains("write_task_plan"));
         assert!(!agents.contains("draft_task_plan"));
         assert!(agents.contains("Tool Preload"));
@@ -452,6 +530,17 @@ mod tests {
         assert!(claude.contains("first matching state"));
         assert!(claude.contains("queue_state == \"direct_ready\""));
         assert!(claude.contains("completed_pending_integration"));
+        assert!(claude.contains("approval_blocked"));
+        assert!(claude.contains("workspace_blocked"));
+        assert!(claude.contains("direct_guidance"));
+        assert!(claude.contains("worktree_prepared"));
+        assert!(claude.contains("not_prepared"));
+        assert!(claude.contains("direct_edit"));
+        assert!(claude.contains("run_in_worktree"));
+        assert!(claude.contains("verify_or_record_risk"));
+        assert!(claude.contains("resolve_findings"));
+        assert!(claude.contains("may replace separate startup calls"));
+        assert!(claude.contains("Minimum viable direct-edit loop"));
         assert!(claude.contains("write_task_plan"));
         assert!(!claude.contains("draft_task_plan"));
         assert!(claude.contains("Tool Preload"));
@@ -470,6 +559,14 @@ mod tests {
         assert!(workflow.contains("matching state wins"));
         assert!(workflow.contains("queue_state == \"direct_ready\""));
         assert!(workflow.contains("completed_pending_integration"));
+        assert!(workflow.contains("approval_blocked"));
+        assert!(workflow.contains("workspace_blocked"));
+        assert!(workflow.contains("direct_guidance"));
+        assert!(workflow.contains("worktree_prepared"));
+        assert!(workflow.contains("not_prepared"));
+        assert!(workflow.contains("verify_or_record_risk"));
+        assert!(workflow.contains("may replace separate startup calls"));
+        assert!(workflow.contains("Minimum viable direct-edit loop"));
         assert!(workflow.contains("spec-driven development"));
         assert!(workflow.contains("dispatch_ready_work"));
         assert!(workflow.contains("complete_backlog_item"));
@@ -479,6 +576,7 @@ mod tests {
         assert!(backlog_readme.contains("inspect_work_queue"));
         assert!(backlog_readme.contains("task-plan"));
         assert!(backlog_readme.contains("complete_backlog_item"));
+        assert!(backlog_readme.contains("minimum loop"));
         assert!(temp.path().join("backlog/items").is_dir());
         assert!(temp.path().join("backlog/plans").is_dir());
         assert!(!temp.path().join("backlog/index.md").exists());
