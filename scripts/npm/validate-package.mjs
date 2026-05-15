@@ -64,6 +64,7 @@ const requiredPiCommands = [
   "platy-ready",
   "platy-next",
   "platy-plan",
+  "platy-steer",
   "platy-direction",
   "platy-direction-revise",
   "platy-standards",

@@ -5,6 +5,7 @@ export const PI_COMMAND_NAMES = [
 	"platy-ready",
 	"platy-next",
 	"platy-plan",
+	"platy-steer",
 	"platy-direction",
 	"platy-direction-revise",
 	"platy-standards",

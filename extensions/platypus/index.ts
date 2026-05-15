@@ -10,6 +10,7 @@ import {
 	noReadyItemMessage,
 } from "./commands.mjs";
 import {
+	buildProductSteeringPrompt,
 	buildEngineeringStandardsPrompt,
 	buildDirectionPrompt,
 	readProjectDirectionSummary,
@@ -857,6 +858,15 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		handler: async (_args, ctx) => {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
 			pi.sendUserMessage(buildPlanPrompt(), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+		},
+	});
+
+	pi.registerCommand("platy-steer", {
+		description: "Steer product direction and propose durable docs/backlog updates",
+		handler: async (args, ctx) => {
+			if (!latestSnapshot) await refreshSnapshot(ctx);
+			const input = Array.isArray(args) ? args.join(" ") : String(args ?? "");
+			pi.sendUserMessage(buildProductSteeringPrompt(input), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
 

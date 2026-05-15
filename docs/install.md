@@ -277,6 +277,10 @@ review, evidence, and definition-of-done expectations in `docs/engineering.md`.
 Run `/platy-story-review <draft-or-item-id>` before execution when a story or
 manager proposal needs visible clarification; approved revisions can then be
 written through typed backlog create or update tools.
+Run `/platy-steer <new-direction>` when the user wants to redirect the product.
+It asks the agent to compare current guidance and backlog state with the new
+direction, present tradeoffs, ask for approval, and then persist accepted
+guidance, backlog, or finding updates.
 Run `/platy-plan-review [item-id]` before non-trivial implementation. It asks
 the agent to decide between response-local direct planning and durable strict
 task-plan creation from project policy and user intent.

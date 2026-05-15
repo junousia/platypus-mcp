@@ -312,25 +312,30 @@ need to memorize the underlying MCP tool surface:
    strategy, required verification commands, UI design language, commit/PR
    expectations, evidence expectations, and definition of done in
    `docs/engineering.md`.
-4. Run `/platy-story-review <draft-or-item-id>` before executing vague or
+4. Run `/platy-steer <new-direction>` when the product needs to move in a new
+   direction. The agent should summarize current direction, proposed direction,
+   affected docs, affected backlog items, tradeoffs, unresolved decisions, and
+   exact changes to persist. It must ask for approval before writing guidance
+   files, backlog updates, follow-up items, or findings.
+5. Run `/platy-story-review <draft-or-item-id>` before executing vague or
    manager-proposed work. The agent should separate blocking issues from
    improvement suggestions, and use `platypus_create_backlog_items` with
    `preview=true` or `platypus_update_backlog_item` only after the revision is
    approved.
-5. Run `/platy-plan-review [item-id]` before non-trivial work starts. The agent
+6. Run `/platy-plan-review [item-id]` before non-trivial work starts. The agent
    should state whether response-local direct planning is enough or whether a
    durable task plan is required by policy or user approval, then include
    expected surfaces, tests, risks, verification command, and completion
    evidence. Durable plans should be written with `platypus_write_task_plan`
    and validated with `platypus_validate_task_plan`.
-6. If the queue is empty, run `/platy-plan`. The agent should inspect the
+7. If the queue is empty, run `/platy-plan`. The agent should inspect the
    session, ask for missing product direction, and then call
    `platypus_create_backlog_items` with concrete titles, goals, acceptance
    criteria, owned surfaces, execution paths, and planning gates.
-7. Run `/platy-start` to ask the agent to work on the next ready item. The
+8. Run `/platy-start` to ask the agent to work on the next ready item. The
    prompt names the target item and tells the agent to finish with
    `platypus_complete_backlog_item`.
-8. Run `/platy-review-result [item-or-task-id]` after implementation and
+9. Run `/platy-review-result [item-or-task-id]` after implementation and
    verification when the result needs an explicit review. The agent should
    compare changes to acceptance criteria, check verification, call
    `platypus_list_findings` and `platypus_validate_findings`, record required
@@ -338,13 +343,13 @@ need to memorize the underlying MCP tool surface:
    with `platypus_create_backlog_items`, and then choose
    `platypus_complete_backlog_item` for direct work or `platypus_finish_work`
    for worker handoff.
-9. Run `/platy-complete` when implementation is done but the agent has not yet
+10. Run `/platy-complete` when implementation is done but the agent has not yet
    closed the item. The required fields are `item_id`, `summary`,
    `changed_files`, `verification_status`, `verification_summary`, and
    `verification_refs`.
-10. Run `/platy-direction-revise` or `/platy-standards-revise` to revise
+11. Run `/platy-direction-revise` or `/platy-standards-revise` to revise
    captured guidance without rerunning the whole setup flow.
-11. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
+12. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
 
 These commands surface current state and exact tools, but they do not choose a
 product direction for the user. The agent remains responsible for judgement and
@@ -373,6 +378,7 @@ Goal: a small personal habit tracker for one user, built as a local web app.
 /platy-standards
 Use a simple module layout, keep verification as make check, and record
 follow-up risks as findings.
+/platy-steer Keep the first release local-only, but leave room for sync later.
 /platy-plan
 Create the first two concrete backlog items for product baseline and the first
 static UI slice.

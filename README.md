@@ -58,7 +58,7 @@ pi
 ```
 
 Inside Pi, the short path is `/platy-ready`, `/platy-direction`,
-`/platy-standards`, `/platy-plan`, `/platy-start`, and
+`/platy-standards`, `/platy-steer` when direction changes, `/platy-plan`, `/platy-start`, and
 `/platy-review-result`. The extension also exposes typed `platypus_*` tools so
 agents can create backlog items, inspect queue state, record findings, and close
 work without filling opaque JSON.
@@ -294,22 +294,25 @@ The Pi happy path is intentionally short:
 3. `/platy-standards` asks the agent to capture module boundaries, code
    organization, verification, UI, review, evidence, and definition-of-done
    expectations in `docs/engineering.md`.
-4. `/platy-story-review` asks the agent to review a draft or existing backlog
+4. `/platy-steer` asks the agent to compare a requested direction change to
+   current guidance and backlog state, present tradeoffs, ask for approval, and
+   persist accepted docs/backlog/finding updates.
+5. `/platy-story-review` asks the agent to review a draft or existing backlog
    item for concrete goal, acceptance criteria, dependencies, planning mode,
    owned surfaces, and expected evidence before execution.
-5. `/platy-plan-review` asks the agent to produce a lightweight implementation
+6. `/platy-plan-review` asks the agent to produce a lightweight implementation
    review for the next ready item or a selected item, creating durable task
    plans only when policy or user approval calls for them.
-6. `/platy-review-result` asks the agent to compare implemented work against
+7. `/platy-review-result` asks the agent to compare implemented work against
    acceptance criteria, verification, findings, follow-ups, and the definition
    of done before completing direct or worker-handoff work.
-7. `/platy-plan` asks the agent to create concrete backlog items when the queue
+8. `/platy-plan` asks the agent to create concrete backlog items when the queue
    is empty.
-8. `/platy-start` asks the agent to work the next ready item and complete it
+9. `/platy-start` asks the agent to work the next ready item and complete it
    with `platypus_complete_backlog_item`.
-9. `/platy-direction-revise` and `/platy-standards-revise` revisit captured
+10. `/platy-direction-revise` and `/platy-standards-revise` revisit captured
    guidance without rerunning the whole setup flow.
-10. `/platy-doctor` shows setup or recovery guidance when work is blocked.
+11. `/platy-doctor` shows setup or recovery guidance when work is blocked.
 
 Add `--init-project` for fresh repositories so `AGENTS.md`, `CLAUDE.md`,
 `WORKFLOW.md`, `platy.yaml`, `backlog/`, durable direction files, and

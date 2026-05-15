@@ -13,8 +13,10 @@ import {
 } from "../../extensions/platypus/commands.mjs";
 import {
 	PROJECT_DIRECTION_FILES,
+	analyzeProductSteeringProposal,
 	buildDirectionPrompt,
 	buildEngineeringStandardsPrompt,
+	buildProductSteeringPrompt,
 	readProjectDirectionSummary,
 } from "../../extensions/platypus/direction.mjs";
 import {
@@ -148,6 +150,30 @@ assert.match(noReadyItemMessage(), /No ready Platypus item/);
 assert.match(buildDirectionPrompt(), /product domain/);
 assert.match(buildDirectionPrompt(), /Do not keep direction only in chat/);
 assert.match(buildDirectionPrompt({ revision: true }), /Review and revise/);
+assert.match(buildProductSteeringPrompt("move toward offline-first mobile"), /Affected docs/);
+assert.match(buildProductSteeringPrompt("move toward offline-first mobile"), /approval/);
+assert.match(buildProductSteeringPrompt(), /Ask the user/);
+const simpleSteering = analyzeProductSteeringProposal({
+	current_direction: "A local developer workflow tool.",
+	proposed_direction: "Focus on better developer experience for planning workflows.",
+	approved: true,
+});
+assert.equal(simpleSteering.status, "approved_to_persist");
+assert.ok(simpleSteering.affected_docs.includes("docs/product.md"));
+assert.ok(simpleSteering.affected_docs.includes("docs/engineering.md"));
+const conflictingSteering = analyzeProductSteeringProposal({
+	current_direction: "Use Rust and local-first storage.",
+	proposed_direction: "Switch to a hosted backend and replace the local workflow.",
+});
+assert.equal(conflictingSteering.status, "needs_decision");
+assert.match(conflictingSteering.tradeoffs.join(" "), /conflict/);
+const rejectedSteering = analyzeProductSteeringProposal({
+	current_direction: "Keep a local-first MCP server.",
+	proposed_direction: "Drop local-first support.",
+	rejected: true,
+});
+assert.equal(rejectedSteering.status, "rejected");
+assert.match(rejectedSteering.unresolved_decisions.join(" "), /Do not persist/);
 assert.match(buildEngineeringStandardsPrompt(), /module boundaries/);
 assert.match(buildEngineeringStandardsPrompt(), /docs\/engineering\.md/);
 assert.match(buildEngineeringStandardsPrompt({ revision: true }), /Review and revise/);

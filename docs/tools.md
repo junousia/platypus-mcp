@@ -81,6 +81,7 @@ Pi command mapping:
 | `/platy-ready`, `/platy-refresh`, `/platy-next` | `inspect_session`, `inspect_work_queue` |
 | `/platy-direction`, `/platy-direction-revise` | typed backlog/update tools plus durable docs chosen by the agent |
 | `/platy-standards`, `/platy-standards-revise` | typed backlog/update tools plus `docs/engineering.md` edits chosen by the agent |
+| `/platy-steer` | `inspect_session`, `inspect_work_queue`, `update_backlog_item`, `create_backlog_items`, `record_finding` |
 | `/platy-story-review` | `get_backlog_item`, `create_backlog_items`, `update_backlog_item` |
 | `/platy-plan-review` | `inspect_work_queue`, `get_backlog_item`, `write_task_plan`, `validate_task_plan` |
 | `/platy-plan` | `inspect_session`, `create_backlog_items`, `inspect_work_queue` |

@@ -118,6 +118,7 @@ assert.deepEqual(failed, [
 const empty = renderDashboardLines(undefined).join("\n");
 assert.match(empty, /not been inspected/);
 assert.equal(shouldShowGuidance("let us capture project direction"), true);
+assert.equal(shouldShowGuidance("could you steer the product toward mobile"), true);
 assert.equal(shouldShowGuidance("define the engineering standards"), true);
 assert.equal(shouldShowGuidance("hello"), false);
 

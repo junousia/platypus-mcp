@@ -87,3 +87,54 @@ export function buildEngineeringStandardsPrompt(options = {}) {
 		"After updating standards, summarize the definition of done and use it when planning, starting, reviewing, and completing work.",
 	].join(" ");
 }
+
+export function analyzeProductSteeringProposal(proposal = {}) {
+	const current = String(proposal.current_direction ?? "").trim();
+	const requested = String(proposal.proposed_direction ?? "").trim();
+	const approved = proposal.approved === true;
+	const rejected = proposal.rejected === true;
+	const affectedDocs = new Set(["docs/product.md"]);
+	const unresolved = [];
+	const tradeoffs = [];
+
+	if (!requested) unresolved.push("State the proposed product direction.");
+	if (/stack|architecture|migrate|switch|replace|database|backend|frontend|deployment/i.test(requested)) {
+		affectedDocs.add("docs/architecture.md");
+	}
+	if (/test|quality|verification|coverage/i.test(requested)) {
+		affectedDocs.add("docs/testing.md");
+		affectedDocs.add("docs/engineering.md");
+	}
+	if (/ui|ux|design|accessibility|workflow|developer experience/i.test(requested)) {
+		affectedDocs.add("docs/engineering.md");
+	}
+	if (current && /\b(replace|instead|migrate|switch|drop|remove)\b/i.test(requested)) {
+		tradeoffs.push("The proposed direction may conflict with existing captured direction; preserve the old context and explain the change.");
+	}
+	if (!approved && !rejected && requested) unresolved.push("Get user approval before writing durable guidance or backlog updates.");
+	if (rejected) unresolved.push("Do not persist rejected steering changes; summarize why the proposal was rejected.");
+
+	return {
+		status: rejected ? "rejected" : unresolved.length > 0 ? "needs_decision" : "approved_to_persist",
+		affected_docs: [...affectedDocs],
+		affected_backlog: requested ? ["Review open and runnable backlog items for stale goals, dependencies, acceptance criteria, and owned surfaces."] : [],
+		unresolved_decisions: unresolved,
+		tradeoffs,
+	};
+}
+
+export function buildProductSteeringPrompt(input = "") {
+	const trimmed = String(input ?? "").trim();
+	const subject = trimmed.length > 0
+		? `Steer the Platypus project direction toward: ${trimmed}`
+		: "Ask the user what product direction should change before editing durable project guidance.";
+	return [
+		subject,
+		"First call platypus_inspect_session and platypus_inspect_work_queue, then inspect current durable direction files and docs/engineering.md.",
+		"Present a concise steering proposal with sections: Current direction, Proposed direction, Affected docs, Affected backlog items, Tradeoffs, Unresolved decisions, and Exact changes to persist.",
+		"Preserve old context when useful. Do not silently overwrite project intent; explain what changes, what stays, and why.",
+		"Ask for approval before writing files or backlog updates. If the user rejects the proposal, summarize the rejected path and do not persist changes.",
+		"After approval, update repository guidance files directly and use typed Platypus tools for backlog changes: platypus_update_backlog_item for existing items, platypus_create_backlog_items for approved follow-up work, and platypus_record_finding for unresolved implications that must stay visible.",
+		"Finish by summarizing persisted docs, changed backlog items, new findings or follow-up items, and remaining decisions.",
+	].join(" ");
+}
