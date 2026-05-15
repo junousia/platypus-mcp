@@ -15,8 +15,8 @@ Use this when preparing, reviewing, or creating commits.
 - Review the relevant diff before staging.
 - Stage only files that belong to the completed task.
 - Preserve unrelated user changes.
-- Never commit `.env`, secrets, local caches, generated build output, or
-  `target/`.
+- Never commit `.env`, secrets, local caches, generated build output,
+  `target/`, or `bazel-*`.
 - Commit `Cargo.lock`.
 - Run verification before committing unless the user asks to skip it or a
   blocker prevents it.
@@ -28,9 +28,9 @@ Use this when preparing, reviewing, or creating commits.
 1. Review `git status --short --untracked-files=all`.
 2. Review the relevant diff.
 3. Run verification:
-   - `cargo fmt --check` when available
-   - `cargo check`
-   - `cargo test`
+   - `bazel test //...`
+   - `bazel build --config=release //:platypus_mcp_binary_tar //:release_metadata_tar`
+   - if Bazel is unavailable locally, run Cargo fallback and state the gap
 4. Stage only task-related files.
 5. Commit with a concise imperative subject.
 6. Report commit SHA, verification status, and remaining dirty files.

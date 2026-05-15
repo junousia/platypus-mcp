@@ -194,8 +194,8 @@ still contain SQLite code. The desired end state is that `rusqlite`,
 `query_row`, `prepare`, and raw SQL strings appear only in SQLite backend
 modules and their focused tests.
 
-`tests/sql_isolation.rs` enforces the current allowlist during `cargo test`,
-so it is also part of `make check`. Permanent SQLite-specific locations are:
+`tests/sql_isolation.rs` enforces the current allowlist during
+`bazel test //...`. Permanent SQLite-specific locations are:
 
 - `src/state/sqlite/mod.rs`
 - `src/storage/mod.rs`

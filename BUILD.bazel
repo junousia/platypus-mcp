@@ -1,0 +1,167 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rustfmt_test")
+load("//tools/bazel:release.bzl", "release_file", "stamped_manifest")
+
+package(default_visibility = ["//visibility:public"])
+
+RUST_SRCS = glob(
+    ["src/**/*.rs"],
+    exclude = ["src/main.rs"],
+)
+
+RUST_EDITION = "2021"
+
+rust_library(
+    name = "platypus_mcp_lib",
+    srcs = RUST_SRCS,
+    aliases = aliases(),
+    crate_name = "platypus_mcp",
+    crate_root = "src/lib.rs",
+    edition = RUST_EDITION,
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    deps = all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "platypus-mcp",
+    srcs = ["src/main.rs"],
+    aliases = aliases(),
+    binary_name = "platypus-mcp",
+    crate_root = "src/main.rs",
+    edition = RUST_EDITION,
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    deps = [
+        ":platypus_mcp_lib",
+    ] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "platypus_mcp_unit_test",
+    aliases = aliases(
+        normal_dev = True,
+        proc_macro_dev = True,
+    ),
+    crate = ":platypus_mcp_lib",
+    edition = RUST_EDITION,
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    deps = all_crate_deps(normal_dev = True),
+)
+
+rustfmt_test(
+    name = "rustfmt_test",
+    targets = [
+        ":platypus-mcp",
+        ":platypus_mcp_lib",
+        ":platypus_mcp_unit_test",
+        ":sql_isolation_test",
+        ":state_contract_test",
+        ":stdio_protocol_test",
+    ],
+)
+
+rust_test(
+    name = "sql_isolation_test",
+    srcs = ["tests/sql_isolation.rs"],
+    aliases = aliases(
+        normal_dev = True,
+        proc_macro_dev = True,
+    ),
+    crate_root = "tests/sql_isolation.rs",
+    data = glob(["src/**/*.rs"]),
+    edition = RUST_EDITION,
+    env = {
+        "PLATYPUS_MCP_SOURCE_ROOT": "_main",
+    },
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    deps = all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
+)
+
+rust_test(
+    name = "state_contract_test",
+    srcs = ["tests/state_contract.rs"],
+    aliases = aliases(
+        normal_dev = True,
+        proc_macro_dev = True,
+    ),
+    crate_root = "tests/state_contract.rs",
+    edition = RUST_EDITION,
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    deps = [
+        ":platypus_mcp_lib",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
+)
+
+rust_test(
+    name = "stdio_protocol_test",
+    srcs = ["tests/stdio_protocol.rs"],
+    aliases = aliases(
+        normal_dev = True,
+        proc_macro_dev = True,
+    ),
+    crate_root = "tests/stdio_protocol.rs",
+    data = [":platypus-mcp"],
+    edition = RUST_EDITION,
+    env = {
+        "PLATYPUS_MCP_TEST_BIN": "_main/platypus-mcp",
+    },
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    deps = [
+        ":platypus_mcp_lib",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
+)
+
+stamped_manifest(
+    name = "release_cargo_toml",
+    out = "release/Cargo.toml",
+    package_name = "platypus-mcp",
+    template = "Cargo.toml",
+)
+
+stamped_manifest(
+    name = "release_cargo_lock",
+    out = "release/Cargo.lock",
+    package_name = "platypus-mcp",
+    template = "Cargo.lock",
+)
+
+stamped_manifest(
+    name = "release_package_json",
+    out = "release/package.json",
+    package_name = "platypus-pi",
+    template = "package.json",
+)
+
+release_file(
+    name = "release_binary_linux_x64",
+    src = ":platypus-mcp",
+    out = "release/vendor/linux-x64/platypus-mcp",
+)
+
+pkg_tar(
+    name = "platypus_mcp_binary_tar",
+    srcs = [":platypus-mcp"],
+    extension = "tar.gz",
+    mode = "0755",
+    package_dir = "bin",
+)
+
+pkg_tar(
+    name = "release_metadata_tar",
+    srcs = [
+        ":release_cargo_lock",
+        ":release_cargo_toml",
+        ":release_package_json",
+        "README.md",
+    ],
+    extension = "tar.gz",
+)

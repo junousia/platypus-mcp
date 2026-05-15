@@ -3460,13 +3460,67 @@ async fn start_client(
 }
 
 fn server_binary() -> PathBuf {
+    if let Ok(path) = std::env::var("PLATYPUS_MCP_TEST_BIN") {
+        if let Some(resolved) = resolve_test_path(&path) {
+            return resolved;
+        }
+    }
+
     let mut path = std::env::current_exe().expect("current test executable");
     path.pop();
     if path.ends_with("deps") {
         path.pop();
     }
     path.push("platypus-mcp");
+    if let Some(resolved) = resolve_test_path(path.to_string_lossy().as_ref()) {
+        return resolved;
+    }
     path
+}
+
+fn resolve_test_path(path: &str) -> Option<PathBuf> {
+    let candidate = PathBuf::from(path);
+    for resolved in runfile_candidates(&candidate) {
+        if resolved.exists() {
+            return Some(resolved);
+        }
+    }
+    resolve_runfiles_manifest(path)
+}
+
+fn runfile_candidates(path: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if path.is_absolute() || path.exists() {
+        candidates.push(path.to_path_buf());
+    }
+
+    for key in ["RUNFILES_DIR", "TEST_SRCDIR"] {
+        if let Ok(runfiles) = std::env::var(key) {
+            let root = PathBuf::from(runfiles);
+            candidates.push(root.join(path));
+            candidates.push(root.join("_main").join(path));
+            candidates.push(root.join("platypus_mcp").join(path));
+        }
+    }
+    candidates
+}
+
+fn resolve_runfiles_manifest(path: &str) -> Option<PathBuf> {
+    let manifest = std::env::var("RUNFILES_MANIFEST_FILE").ok()?;
+    let manifest = fs::read_to_string(manifest).ok()?;
+    let keys = [
+        path.to_string(),
+        format!("_main/{path}"),
+        format!("platypus_mcp/{path}"),
+    ];
+    for line in manifest.lines() {
+        if let Some((key, value)) = line.split_once(' ') {
+            if keys.iter().any(|candidate| candidate == key) {
+                return Some(PathBuf::from(value));
+            }
+        }
+    }
+    None
 }
 
 fn json_args(value: Value) -> JsonObject {

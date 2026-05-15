@@ -59,8 +59,9 @@ from the product direction below.
 5. **Second backend readiness:** use the storage capability probe and
    `ProjectState` contract tests to decide whether a shared backend such as
    Postgres is justified.
-6. **Release and installation hardening:** keep crates.io, GitHub releases,
-   bootstrap diagnostics, and host smoke tests simple enough for fresh installs.
+6. **Bazel-first build and release:** treat Bazel as the monorepo build graph
+   for Rust, package staging, stamped releases, and future components while
+   keeping Cargo/npm as registry boundaries.
 
 ```mermaid
 flowchart LR

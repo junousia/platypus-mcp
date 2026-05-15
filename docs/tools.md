@@ -172,7 +172,7 @@ For development, the binary can invoke one MCP tool through its own stdio
 server and print the structured result as formatted JSON:
 
 ```bash
-cargo run -- tool --root "$PWD" inspect_work_queue '{"limit":5}'
+bazel run //:platypus-mcp -- tool --root "$PWD" inspect_work_queue '{"limit":5}'
 ```
 
 The helper exits non-zero when the MCP tool returns a failed structured result

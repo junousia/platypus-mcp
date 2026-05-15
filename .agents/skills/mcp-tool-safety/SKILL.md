@@ -32,6 +32,8 @@ tools.
 Run:
 
 ```bash
-cargo check
-cargo test
+bazel test //...
 ```
+
+If Bazel is unavailable locally, run `cargo check` and `cargo test` as fallback
+evidence and state that Bazel verification is deferred to CI.

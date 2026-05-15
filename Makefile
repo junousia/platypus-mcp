@@ -1,55 +1,45 @@
 SHELL := /bin/sh
 
+BAZEL ?= bazel
 CARGO ?= cargo
 ROOT ?= $(CURDIR)
 MAX_TASKS ?= 1
 NPM_CACHE_DIR ?= $(CURDIR)/.platy/npm-cache
 NPM_REQUIRED_PLATFORMS ?=
-TEST ?=
+TEST ?= //...
 ARGS ?=
 
 .DEFAULT_GOAL := help
 
 .PHONY: \
 	help \
-	check ci lint fmt-check fmt format test test-lib test-stdio test-one \
-	build doc clean package publish-dry-run publish npm-package npm-package-dry-run npm-publish-dry-run npm-publish release-check \
-	run run-root smoke smoke-queue smoke-storage \
+	check ci lint fmt-check fmt format test test-one build release-build package release-check clean \
+	run \
 	feedback opencode-feedback claude-feedback codex-feedback \
+	smoke smoke-queue smoke-storage \
 	metadata version
 
 help: ## Show categorized developer commands.
 	@printf '\033[1mPlatypus MCP developer commands\033[0m\n'
-	@printf 'Local-first Rust MCP server for deterministic project orchestration.\n\n'
+	@printf 'Bazel-first Rust MCP server for deterministic project orchestration.\n\n'
 	@printf '\033[1mUsage\033[0m\n'
 	@printf '  make \033[36m<target>\033[0m [VARIABLE=value]\n\n'
-	@printf '\033[1mVerification\033[0m\n'
-	@printf '  \033[36mcheck\033[0m       Format check, build-check, and run all tests\n'
-	@printf '  \033[36mci\033[0m          Alias for check\n'
-	@printf '  \033[36mlint\033[0m        cargo fmt --check + cargo check\n'
-	@printf '  \033[36mfmt-check\033[0m   Check Rust formatting\n'
-	@printf '  \033[36mfmt\033[0m         Apply Rust formatting\n'
-	@printf '  \033[36mformat\033[0m      Alias for fmt\n\n'
-	@printf '\033[1mTests\033[0m\n'
-	@printf '  \033[36mtest\033[0m        Run all tests\n'
-	@printf '  \033[36mtest-lib\033[0m    Run library/unit tests\n'
-	@printf '  \033[36mtest-stdio\033[0m  Run stdio protocol integration tests\n'
-	@printf '  \033[36mtest-one\033[0m    Run a filtered test: make test-one TEST=name\n\n'
-	@printf '\033[1mBuild And Docs\033[0m\n'
-	@printf '  \033[36mbuild\033[0m       Build debug binary\n'
-	@printf '  \033[36mdoc\033[0m         Build Rust API docs without dependencies\n'
-	@printf '  \033[36mpackage\033[0m     Verify crates.io package contents\n'
-	@printf '  \033[36mpublish-dry-run\033[0m Validate crates.io publishing without uploading\n'
-	@printf '  \033[36mpublish\033[0m     Publish the crate to crates.io\n'
-	@printf '  \033[36mnpm-package\033[0m Validate npm package contents\n'
-	@printf '  \033[36mnpm-package-dry-run\033[0m Show npm package dry-run output\n'
-	@printf '  \033[36mnpm-publish-dry-run\033[0m Validate npm publish without uploading\n'
-	@printf '  \033[36mnpm-publish\033[0m Publish the npm package\n'
-	@printf '  \033[36mrelease-check\033[0m Validate Rust and npm release packaging\n'
-	@printf '  \033[36mclean\033[0m       Remove Cargo build output\n\n'
+	@printf '\033[1mPrimary Bazel Workflow\033[0m\n'
+	@printf '  \033[36mcheck\033[0m         Run Bazel test and release artifact validation\n'
+	@printf '  \033[36mci\033[0m            Alias for check\n'
+	@printf '  \033[36mlint\033[0m          Run Bazel rustfmt test\n'
+	@printf '  \033[36mfmt-check\033[0m     Run Bazel rustfmt test\n'
+	@printf '  \033[36mfmt\033[0m           Run rules_rust rustfmt\n'
+	@printf '  \033[36mformat\033[0m        Alias for fmt\n'
+	@printf '  \033[36mtest\033[0m          Run Bazel tests; override TEST=//target\n'
+	@printf '  \033[36mtest-one\033[0m      Run one Bazel test target; set TEST=//target\n'
+	@printf '  \033[36mbuild\033[0m         Build all Bazel targets\n'
+	@printf '  \033[36mrelease-build\033[0m Build stamped release artifacts\n'
+	@printf '  \033[36mpackage\033[0m       Alias for release-build\n'
+	@printf '  \033[36mrelease-check\033[0m Alias for check\n'
+	@printf '  \033[36mclean\033[0m         Clean Bazel output\n\n'
 	@printf '\033[1mRun\033[0m\n'
-	@printf '  \033[36mrun\033[0m         Run stdio MCP server in the current directory\n'
-	@printf '  \033[36mrun-root\033[0m    Run stdio MCP server with ROOT=/path/to/project\n\n'
+	@printf '  \033[36mrun\033[0m           Run stdio MCP server through Bazel\n\n'
 	@printf '\033[1mHost Exercises\033[0m\n'
 	@printf '  \033[36mfeedback\033[0m         Alias for opencode-feedback\n'
 	@printf '  \033[36mopencode-feedback\033[0m Create a temp OpenCode project and ask for workflow feedback\n'
@@ -59,14 +49,14 @@ help: ## Show categorized developer commands.
 	@printf '  \033[36msmoke\033[0m       Invoke inspect_status through the stdio tool helper\n'
 	@printf '  \033[36msmoke-queue\033[0m Invoke inspect_work_queue through the stdio tool helper\n'
 	@printf '  \033[36msmoke-storage\033[0m Probe storage backend capabilities through MCP\n'
-	@printf '  \033[36mmetadata\033[0m    Print Cargo metadata without dependencies\n'
-	@printf '  \033[36mversion\033[0m     Print Cargo and rustc versions\n\n'
+	@printf '  \033[36mmetadata\033[0m    Print Bazel module/dependency metadata\n'
+	@printf '  \033[36mversion\033[0m     Print Bazel version\n\n'
 	@printf '\033[1mVariables\033[0m\n'
+	@printf '  BAZEL=%s\n' '$(BAZEL)'
+	@printf '  TEST=%s\n' '$(TEST)'
 	@printf '  ROOT=%s\n' '$(ROOT)'
 	@printf '  MAX_TASKS=%s\n' '$(MAX_TASKS)'
 	@printf '  NPM_REQUIRED_PLATFORMS=linux-x64,linux-arm64,darwin-x64,darwin-arm64 for strict npm binary validation\n'
-	@printf '  TEST=%s\n' '$(TEST)'
-	@printf '  ARGS=%s\n' '$(ARGS)'
 	@printf '  PROJECT_ROOT=/path/to/new/temp/project for *-feedback\n'
 	@printf '  FEEDBACK_DRY_RUN=1 to bootstrap and smoke-check without invoking the host\n'
 	@printf '  FEEDBACK_TIMEOUT_SECONDS=600 to control host run timeout budget\n'
@@ -85,74 +75,45 @@ help: ## Show categorized developer commands.
 	@printf '  CODEX_DANGEROUS=1 to bypass Codex approvals and sandboxing in the temp project\n'
 	@printf '  CODEX_DRY_RUN=1 to bootstrap and smoke-check without invoking Codex\n'
 
-check: lint test ## Format check, build-check, and run all tests.
+check: test release-build ## Run Bazel test and release artifact validation.
 
 ci: check ## Alias for check.
 
-lint: fmt-check ## Run formatting check and cargo check.
-	$(CARGO) check
+lint: fmt-check ## Run Bazel rustfmt test.
 
-fmt-check: ## Check Rust formatting.
-	$(CARGO) fmt --check
+fmt-check: ## Run Bazel rustfmt test.
+	$(BAZEL) test //:rustfmt_test
 
-fmt: ## Apply Rust formatting.
-	$(CARGO) fmt
+fmt: ## Run rules_rust rustfmt.
+	$(BAZEL) run @rules_rust//:rustfmt
 
 format: fmt ## Alias for fmt.
 
-test: ## Run all tests.
-	$(CARGO) test $(ARGS)
+test: ## Run Bazel tests; override TEST=//target.
+	$(BAZEL) test $(TEST) $(ARGS)
 
-test-lib: ## Run library/unit tests.
-	$(CARGO) test --lib $(ARGS)
-
-test-stdio: ## Run stdio protocol integration tests.
-	$(CARGO) test --test stdio_protocol $(ARGS)
-
-test-one: ## Run a filtered test: make test-one TEST=name.
+test-one: ## Run one Bazel test target; set TEST=//target.
 	@if [ -z "$(TEST)" ]; then \
-		printf 'TEST is required. Example: make test-one TEST=parses_platypus_trailers\n' >&2; \
+		printf 'TEST is required. Example: make test-one TEST=//:stdio_protocol_test\n' >&2; \
 		exit 2; \
 	fi
-	$(CARGO) test $(TEST) $(ARGS)
+	$(BAZEL) test $(TEST) $(ARGS)
 
-build: ## Build debug binary.
-	$(CARGO) build
+build: ## Build all Bazel targets.
+	$(BAZEL) build //... $(ARGS)
 
-doc: ## Build Rust API docs without dependencies.
-	$(CARGO) doc --no-deps
+release-build: ## Build stamped release artifacts.
+	$(BAZEL) build --config=release //:platypus_mcp_binary_tar //:release_metadata_tar $(ARGS)
 
-package: ## Verify crates.io package contents.
-	$(CARGO) package --list
+package: release-build ## Alias for release-build.
 
-publish-dry-run: ## Validate crates.io publishing without uploading.
-	$(CARGO) publish --dry-run
+release-check: check ## Alias for check.
 
-publish: ## Publish the crate to crates.io.
-	$(CARGO) publish
+clean: ## Clean Bazel output.
+	$(BAZEL) clean
 
-npm-package: ## Validate npm package contents.
-	PLATYPUS_NPM_REQUIRED_PLATFORMS="$${PLATYPUS_NPM_REQUIRED_PLATFORMS:-$(NPM_REQUIRED_PLATFORMS)}" npm_config_cache=$(NPM_CACHE_DIR) npm run package:validate
-
-npm-package-dry-run: ## Show npm package dry-run output.
-	npm_config_cache=$(NPM_CACHE_DIR) npm run package:dry-run
-
-npm-publish-dry-run: npm-package ## Validate npm publish without uploading.
-	npm_config_cache=$(NPM_CACHE_DIR) npm run publish:dry-run
-
-npm-publish: npm-package ## Publish the npm package.
-	npm_config_cache=$(NPM_CACHE_DIR) npm run publish:release
-
-release-check: publish-dry-run npm-publish-dry-run ## Validate Rust and npm release packaging.
-
-clean: ## Remove Cargo build output.
-	$(CARGO) clean
-
-run: ## Run stdio MCP server in the current directory.
-	$(CARGO) run -- $(ARGS)
-
-run-root: ## Run stdio MCP server with ROOT=/path/to/project.
-	PLATYPUS_MCP_ROOT="$(ROOT)" $(CARGO) run -- $(ARGS)
+run: ## Run stdio MCP server through Bazel.
+	$(BAZEL) run //:platypus-mcp -- $(ARGS)
 
 feedback: opencode-feedback ## Alias for opencode-feedback.
 
@@ -166,17 +127,16 @@ codex-feedback: ## Create a temp Codex project and ask for workflow feedback.
 	CARGO="$(CARGO)" scripts/dev/codex-feedback.sh
 
 smoke: ## Invoke inspect_status through the stdio tool helper.
-	$(CARGO) run -- tool --root "$(ROOT)" inspect_status '{"limit":5}'
+	$(BAZEL) run //:platypus-mcp -- tool --root "$(ROOT)" inspect_status '{"limit":5}'
 
 smoke-queue: ## Invoke inspect_work_queue through the stdio tool helper.
-	$(CARGO) run -- tool --root "$(ROOT)" inspect_work_queue '{"limit":5}'
+	$(BAZEL) run //:platypus-mcp -- tool --root "$(ROOT)" inspect_work_queue '{"limit":5}'
 
 smoke-storage: ## Probe storage backend capabilities through MCP.
-	$(CARGO) run -- tool --root "$(ROOT)" storage_capability_probe '{}'
+	$(BAZEL) run //:platypus-mcp -- tool --root "$(ROOT)" storage_capability_probe '{}'
 
-metadata: ## Print Cargo metadata without dependencies.
-	$(CARGO) metadata --no-deps
+metadata: ## Print Bazel module/dependency metadata.
+	$(BAZEL) mod graph
 
-version: ## Print Cargo and rustc versions.
-	@$(CARGO) --version
-	@rustc --version
+version: ## Print Bazel version.
+	$(BAZEL) version

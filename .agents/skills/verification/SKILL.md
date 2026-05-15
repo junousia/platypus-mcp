@@ -10,15 +10,15 @@ Use this before declaring implementation work complete.
 ## Required Commands
 
 ```bash
-cargo fmt --check
-cargo check
-cargo test
+bazel test //...
+bazel build --config=release //:platypus_mcp_binary_tar //:release_metadata_tar
 ```
 
-If `cargo fmt` is unavailable, report the missing `rustfmt` component and still
-run:
+If Bazel is unavailable locally, report that blocker and run the closest Cargo
+fallback:
 
 ```bash
+cargo fmt --check
 cargo check
 cargo test
 ```

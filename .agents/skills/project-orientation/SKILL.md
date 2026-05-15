@@ -10,7 +10,7 @@ Use this when starting unfamiliar work in this repository.
 ## Steps
 
 1. Read `AGENTS.md`.
-2. Inspect `Cargo.toml` and `Cargo.lock`.
+2. Inspect `MODULE.bazel`, `BUILD.bazel`, `Cargo.toml`, and `Cargo.lock`.
 3. Inspect `README.md`.
 4. Inspect `src/main.rs` and any nearby modules for the target area.
 5. Check `git status --short --untracked-files=all`.

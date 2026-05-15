@@ -14,30 +14,25 @@ concurrency:
   group: code-review-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  rust:
-    name: Rust checks
+  bazel:
+    name: Bazel checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show toolchain
-        run: |
-          rustc --version
-          cargo --version
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
 
-      - name: Ensure rustfmt is installed
-        run: rustup component add rustfmt
+      - name: Test
+        run: bazel test //...
 
-      - name: Verify
-        run: make check
-
-      - name: Inspect crate package
-        run: make package
-
-      - name: Validate crates.io publish
-        run: make publish-dry-run
+      - name: Build release artifacts
+        env:
+          RELEASE_VERSION: 0.0.0-dev
+        run: bazel build --config=release //:platypus_mcp_binary_tar //:release_metadata_tar
