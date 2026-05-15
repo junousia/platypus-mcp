@@ -6,6 +6,7 @@ import { join } from "node:path";
 const requiredFiles = new Set([
   "package.json",
   "extensions/platypus/index.ts",
+  "extensions/platypus/renderers.mjs",
 ]);
 
 const requiredMetadata = {

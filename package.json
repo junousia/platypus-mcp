@@ -20,7 +20,8 @@
   ],
   "scripts": {
     "package:dry-run": "npm pack --dry-run",
-    "package:validate": "node scripts/npm/validate-package.mjs",
+    "pi:renderers:test": "node scripts/npm/test-pi-renderers.mjs",
+    "package:validate": "node scripts/npm/test-pi-renderers.mjs && node scripts/npm/validate-package.mjs",
     "publish:dry-run": "npm publish --dry-run --access public",
     "publish:release": "npm publish --access public"
   },

@@ -4,6 +4,13 @@ import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import {
+	compactStatus,
+	renderDashboardLines,
+	renderToolResultLines,
+	shouldShowGuidance,
+	snapshotFromDetails,
+} from "./renderers.mjs";
 
 type JsonObject = Record<string, unknown>;
 
@@ -668,133 +675,13 @@ async function runPlatypusTool(pi: ExtensionAPI, ctx: ExtensionContext, toolName
 	};
 }
 
-function asObject(value: unknown): JsonObject | undefined {
-	return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : undefined;
-}
-
-function asArray(value: unknown): unknown[] {
-	return Array.isArray(value) ? value : [];
-}
-
-function asString(value: unknown): string | undefined {
-	return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function itemFromQueueEntry(entry: JsonObject): ReadyItem | undefined {
-	const candidate = asObject(entry.candidate) ?? entry;
-	const id = asString(candidate.item_id) ?? asString(entry.item_id);
-	if (!id) return undefined;
-	return {
-		id,
-		title: asString(candidate.title) ?? asString(entry.title) ?? "Untitled backlog item",
-		priority: asString(candidate.priority) ?? asString(entry.priority),
-		state: asString(entry.queue_state) ?? asString(candidate.queue_state),
-		recommendedTool: asString(entry.recommended_tool),
-		reason: asString(entry.reason),
-	};
-}
-
-function snapshotFromDetails(details: unknown): PlatypusSnapshot | undefined {
-	const envelope = asObject(details);
-	if (!envelope) return undefined;
-	const data = asObject(envelope.data) ?? envelope;
-	const queue = asObject(data.queue);
-	const status = asObject(data.status);
-	const inventory = asObject(queue?.inventory);
-	const items = asArray(queue?.items).map((item) => asObject(item)).filter(Boolean) as JsonObject[];
-	const readyItems = items.map(itemFromQueueEntry).filter(Boolean) as ReadyItem[];
-	const blockedItems = asArray(inventory?.dependency_blocked_items)
-		.map((item) => asObject(item))
-		.filter(Boolean)
-		.map((item) => itemFromQueueEntry(item as JsonObject))
-		.filter(Boolean) as ReadyItem[];
-
-	const ready = asNumber(queue?.ready_count) ?? asNumber(inventory?.runnable_count) ?? asNumber(status?.runnable_backlog_items) ?? readyItems.length;
-	const blocked = asNumber(queue?.blocked_count) ?? asNumber(inventory?.dependency_blocked_count) ?? blockedItems.length;
-	const active = asNumber(queue?.active_count) ?? asNumber(inventory?.active_lifecycle_count) ?? 0;
-
-	return {
-		ready,
-		blocked,
-		active,
-		closed: asNumber(inventory?.closed_count),
-		total: asNumber(inventory?.total_count) ?? asNumber(status?.backlog_items),
-		pendingIntegration: asNumber(inventory?.pending_integration_count),
-		root: asString(data.root) ?? asString(status?.root),
-		status: envelope.status === "completed" || envelope.ok === true ? "ok" : envelope.status === "failed" ? "error" : "unknown",
-		summary: asString(data.summary) ?? asString(envelope.summary),
-		nextAction: asString(envelope.next_action) ?? asString(data.reason) ?? asString(queue?.reason),
-		recommendedTool: asString(data.recommended_tool) ?? asString(queue?.recommended_tool),
-		readyItems,
-		blockedItems,
-		updatedAt: Date.now(),
-	};
-}
-
-function formatRelativeTime(timestamp?: number): string {
-	if (!timestamp) return "not refreshed";
-	const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
-	if (seconds < 5) return "just now";
-	if (seconds < 60) return `${seconds}s ago`;
-	const minutes = Math.round(seconds / 60);
-	return `${minutes}m ago`;
-}
-
-function compactStatus(snapshot?: PlatypusSnapshot): string {
-	if (!snapshot) return "platypus: not inspected";
-	if (snapshot.error) return `platypus: error`;
-	return `platypus: ${snapshot.ready} ready · ${snapshot.blocked} blocked · ${snapshot.active} active`;
-}
-
-function nextItemLine(snapshot: PlatypusSnapshot): string | undefined {
-	const item = snapshot.readyItems[0];
-	if (!item) return snapshot.nextAction;
-	const priority = item.priority ? ` ${item.priority}` : "";
-	const state = item.state ? ` ${item.state}` : "";
-	return `${item.id}${priority}${state} — ${item.title}`;
-}
-
-function renderPlainDashboard(snapshot?: PlatypusSnapshot, expanded = false): string {
-	if (!snapshot) return "Platypus backlog has not been inspected yet. Use /platy-refresh.";
-	if (snapshot.error) return `Platypus unavailable: ${snapshot.error}\nTry /platy-refresh or inspect the Platypus doctor output.`;
-
-	const bits = [`${snapshot.ready} ready`, `${snapshot.blocked} blocked`, `${snapshot.active} active`];
-	if (snapshot.pendingIntegration !== undefined) bits.push(`${snapshot.pendingIntegration} integration`);
-	if (snapshot.closed !== undefined && snapshot.total !== undefined) bits.push(`${snapshot.closed}/${snapshot.total} closed`);
-
-	const lines = [`Platypus backlog: ${bits.join(" · ")}`];
-	const next = nextItemLine(snapshot);
-	if (next) lines.push(`▶ ${next}`);
-	if (snapshot.recommendedTool) lines.push(`Next tool: ${snapshot.recommendedTool}`);
-	if (snapshot.nextAction) lines.push(`Next: ${snapshot.nextAction}`);
-	if (snapshot.blockedItems.length > 0) {
-		const blocked = snapshot.blockedItems.slice(0, expanded ? 8 : 4).map((item) => item.id).join(", ");
-		const suffix = snapshot.blockedItems.length > (expanded ? 8 : 4) ? " …" : "";
-		lines.push(`Blocked: ${blocked}${suffix}`);
-	}
-	lines.push(`Updated: ${formatRelativeTime(snapshot.updatedAt)}`);
-
-	if (expanded && snapshot.readyItems.length > 1) {
-		lines.push("", "Ready items:");
-		for (const item of snapshot.readyItems.slice(1, 10)) {
-			lines.push(`  ${item.id} ${item.priority ?? ""} ${item.state ?? ""} — ${item.title}`.replace(/\s+/g, " "));
-		}
-	}
-
-	return lines.join("\n");
-}
-
-function shouldShowGuidance(prompt: string): boolean {
-	return /\b(backlog|platypus|platy|what\s+next|next\s+item|queue|status|complete|completion)\b/i.test(prompt);
+function renderDashboardText(snapshot?: PlatypusSnapshot, expanded = false): string {
+	return renderDashboardLines(snapshot, { expanded }).join("\n");
 }
 
 function guidanceForSnapshot(snapshot?: PlatypusSnapshot): string | undefined {
 	if (!snapshot || snapshot.error) return undefined;
-	const lines = ["## Current Platypus Queue Snapshot", renderPlainDashboard(snapshot, false)];
+	const lines = ["## Current Platypus Queue Snapshot", renderDashboardText(snapshot, false)];
 	if (snapshot.ready > 0) {
 		lines.push(
 			"When working a direct_ready Platypus item, use the direct loop: inspect acceptance criteria, edit the manager workspace, verify, then call platypus_complete_backlog_item with summary, changed_files, and verification_status.",
@@ -831,7 +718,7 @@ function updateUi(ctx: ExtensionContext, snapshot: PlatypusSnapshot | undefined,
 	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => ({
 		invalidate() {},
 		render(width: number) {
-			const text = renderPlainDashboard(snapshot, false);
+			const text = renderDashboardText(snapshot, false);
 			return text.split("\n").map((line, index) => {
 				const styled = index === 0 ? theme.fg("accent", line) : line.startsWith("▶") ? theme.fg("success", line) : line.startsWith("Blocked:") ? theme.fg("warning", line) : theme.fg("dim", line);
 				return truncateToWidth(styled, Math.max(1, width));
@@ -841,18 +728,14 @@ function updateUi(ctx: ExtensionContext, snapshot: PlatypusSnapshot | undefined,
 }
 
 function renderToolDashboard(result: { details?: unknown; content?: Array<{ text?: string }> }, theme: { fg: (color: string, text: string) => string }) {
-	const snapshot = snapshotFromDetails(result.details);
-	if (snapshot) {
-		return new Text(renderPlainDashboard(snapshot, true).split("\n").map((line, index) => {
-			if (index === 0) return theme.fg("accent", line);
-			if (line.startsWith("▶")) return theme.fg("success", line);
-			if (line.startsWith("Blocked:")) return theme.fg("warning", line);
-			return line;
-		}).join("\n"), 0, 0);
-	}
-
-	const text = result.content?.map((part) => part.text).filter(Boolean).join("\n") ?? "Platypus tool completed.";
-	return new Text(text, 0, 0);
+	const lines = renderToolResultLines(result, { expanded: true });
+	return new Text(lines.map((line: string, index: number) => {
+		if (index === 0 && line.startsWith("!")) return theme.fg("error", line);
+		if (line.startsWith("▶") || line.startsWith("✓")) return theme.fg("success", line);
+		if (line.startsWith("Blocked:") || line.startsWith("Next:")) return theme.fg("warning", line);
+		if (index === 0) return theme.fg("accent", line);
+		return line;
+	}).join("\n"), 0, 0);
 }
 
 export default function platypusPiExtension(pi: ExtensionAPI) {
@@ -878,7 +761,7 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 			error: result.content[0]?.text ?? "inspect_session returned an unrecognized response.",
 		};
 		applySnapshot(ctx, snapshot);
-		if (notify && ctx.hasUI) ctx.ui.notify(renderPlainDashboard(snapshot, true), snapshot.error ? "error" : "info");
+		if (notify && ctx.hasUI) ctx.ui.notify(renderDashboardText(snapshot, true), snapshot.error ? "error" : "info");
 		return snapshot;
 	};
 
@@ -931,7 +814,7 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		description: "Show compact Platypus backlog status",
 		handler: async (_args, ctx) => {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
-			if (ctx.hasUI) ctx.ui.notify(renderPlainDashboard(latestSnapshot, true), latestSnapshot?.error ? "error" : "info");
+			if (ctx.hasUI) ctx.ui.notify(renderDashboardText(latestSnapshot, true), latestSnapshot?.error ? "error" : "info");
 		},
 	});
 
@@ -954,7 +837,7 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		handler: async (_args, ctx) => {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
 			const text = latestSnapshot?.readyItems[0]
-				? renderPlainDashboard({ ...latestSnapshot, blockedItems: [] }, true)
+				? renderDashboardText({ ...latestSnapshot, blockedItems: [] }, true)
 				: "No runnable Platypus backlog item is currently ready.";
 			if (ctx.hasUI) ctx.ui.notify(text, latestSnapshot?.readyItems[0] ? "info" : "warning");
 		},
