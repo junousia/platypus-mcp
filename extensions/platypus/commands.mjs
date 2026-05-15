@@ -5,6 +5,8 @@ export const PI_COMMAND_NAMES = [
 	"platy-ready",
 	"platy-next",
 	"platy-plan",
+	"platy-direction",
+	"platy-direction-revise",
 	"platy-start",
 	"platy-complete",
 	"platy-doctor",
@@ -15,7 +17,7 @@ export const PI_COMMAND_NAMES = [
 export function buildPlanPrompt() {
 	return [
 		"Shape the current project goal into concrete Platypus backlog items.",
-		"First call platypus_inspect_session and inspect repository context if needed.",
+		"First call platypus_inspect_session and inspect repository context and durable project direction files if needed.",
 		"Then call platypus_create_backlog_items with concrete titles, goals, acceptance criteria, owned_surfaces, execution_path, and planning_gate.",
 		"Present the created items and the next ready item. Ask for missing product direction instead of inventing details.",
 	].join(" ");

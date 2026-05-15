@@ -304,18 +304,23 @@ Pi keeps the common Platypus workflow behind a small command set so users do not
 need to memorize the underlying MCP tool surface:
 
 1. Run `/platy-refresh` or `/platy-ready` to inspect current queue state.
-2. If the queue is empty, run `/platy-plan`. The agent should inspect the
+2. Run `/platy-direction` when product direction is missing or stale. The agent
+   should ask concise questions and write durable answers to
+   `docs/product.md`, `docs/architecture.md`, and `docs/testing.md`.
+3. If the queue is empty, run `/platy-plan`. The agent should inspect the
    session, ask for missing product direction, and then call
    `platypus_create_backlog_items` with concrete titles, goals, acceptance
    criteria, owned surfaces, execution paths, and planning gates.
-3. Run `/platy-start` to ask the agent to work on the next ready item. The
+4. Run `/platy-start` to ask the agent to work on the next ready item. The
    prompt names the target item and tells the agent to finish with
    `platypus_complete_backlog_item`.
-4. Run `/platy-complete` when implementation is done but the agent has not yet
+5. Run `/platy-complete` when implementation is done but the agent has not yet
    closed the item. The required fields are `item_id`, `summary`,
    `changed_files`, `verification_status`, `verification_summary`, and
    `verification_refs`.
-5. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
+6. Run `/platy-direction-revise` to revise captured direction without rerunning
+   the whole setup flow.
+7. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
 
 These commands surface current state and exact tools, but they do not choose a
 product direction for the user. The agent remains responsible for judgement and

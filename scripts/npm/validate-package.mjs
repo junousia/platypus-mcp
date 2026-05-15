@@ -7,6 +7,7 @@ const requiredFiles = new Set([
   "package.json",
   "extensions/platypus/index.ts",
   "extensions/platypus/commands.mjs",
+  "extensions/platypus/direction.mjs",
   "extensions/platypus/renderers.mjs",
   "extensions/platypus/runtime.mjs",
 ]);
@@ -56,6 +57,8 @@ const requiredPiCommands = [
   "platy-ready",
   "platy-next",
   "platy-plan",
+  "platy-direction",
+  "platy-direction-revise",
   "platy-start",
   "platy-complete",
   "platy-doctor",

@@ -118,32 +118,36 @@ straight to broad edits. Convert the goal into a controlled loop:
 2. Decide the workflow strategy with model judgment and user intent. The MCP
    server supplies facts, schemas, validation, and state transitions; it does
    not classify broad goals.
-3. For tiny scaffolds, the host may edit directly after user approval. No
+3. Inspect durable project direction in `docs/product.md`,
+   `docs/architecture.md`, and `docs/testing.md` when present. If direction is
+   missing or stale, ask concise questions and update those files before
+   creating backlog items.
+4. For tiny scaffolds, the host may edit directly after user approval. No
    Platypus scaffold tool is involved: use the host's native file edits or
    scaffold command, commit the baseline, then return to Platypus for follow-up
    backlog work when tracking is useful.
-4. For tracked control, create a small concrete backlog set with
+5. For tracked control, create a small concrete backlog set with
    `create_backlog_item` or `create_backlog_items`. Keep items independently
    reviewable and executable.
-5. After successful `create_backlog_item(s)`, inline validation has already
+6. After successful `create_backlog_item(s)`, inline validation has already
    passed. Call `inspect_work_queue` to continue. Run `validate_backlog` only
    after manual markdown edits or when an explicit audit result is useful.
-6. Use `inspect_queue_status` for compact queue counts and top ready/blocked
+7. Use `inspect_queue_status` for compact queue counts and top ready/blocked
    work. Use `inspect_work_queue` when full readiness, task-plan state, active
    work, setup blockers, and next-tool parameters are needed.
-7. When planning is required by the user or team, create a strict task plan
+8. When planning is required by the user or team, create a strict task plan
    with `write_task_plan` and `validate_task_plan`.
-8. Prepare execution with `prepare_work`. Direct items may return a
+9. Prepare execution with `prepare_work`. Direct items may return a
    `direct_edit` host action; that direct action is response-local guidance,
    not persisted preparation state. Its structured `durable_next_tool` is
    `complete_backlog_item`.
    Standard/full items return a `run_in_worktree`
    action with a worker assignment bundle; the MCP server does not launch the
    external worker.
-9. Record progress when useful, then finish worker assignments with `finish_work`. Workers should
+10. Record progress when useful, then finish worker assignments with `finish_work`. Workers should
    report changed files, verification status, acceptance coverage, and findings
    or explicitly set `findings_reviewed=true`.
-10. Follow the `finish_work.host_action`: verify, record/resolve findings,
+11. Follow the `finish_work.host_action`: verify, record/resolve findings,
     integrate with `integrate_worker_result`, recover, run
     `reconcile_project` when the result needs an audit/recovery pass, or move
     to the next item.

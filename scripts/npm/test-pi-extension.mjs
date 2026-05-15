@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,11 @@ import {
 	buildStartPrompt,
 	noReadyItemMessage,
 } from "../../extensions/platypus/commands.mjs";
+import {
+	PROJECT_DIRECTION_FILES,
+	buildDirectionPrompt,
+	readProjectDirectionSummary,
+} from "../../extensions/platypus/direction.mjs";
 import {
 	commandForTool,
 	formatResult,
@@ -127,6 +132,30 @@ assert.match(buildShortcutStartPrompt(item), /after verification/);
 assert.match(buildCompletePrompt(item), /MCP-127 \(Add Pi extension test harness\)/);
 assert.match(buildCompletePrompt(undefined), /current direct-ready Platypus item/);
 assert.match(noReadyItemMessage(), /No ready Platypus item/);
+assert.match(buildDirectionPrompt(), /product domain/);
+assert.match(buildDirectionPrompt(), /Do not keep direction only in chat/);
+assert.match(buildDirectionPrompt({ revision: true }), /Review and revise/);
+
+const directionRoot = mkdtempSync(join(tmpdir(), "platypus-pi-direction-"));
+try {
+	const missingDirection = readProjectDirectionSummary(directionRoot);
+	assert.equal(missingDirection.status, "missing");
+	assert.deepEqual(missingDirection.missing, PROJECT_DIRECTION_FILES);
+	mkdirSync(join(directionRoot, "docs"), { recursive: true });
+	writeFileSync(join(directionRoot, "docs", "product.md"), "# Product Direction\n\n## Product Goal\nBuild durable project tooling.\n\n## Users\n- Maintainers\n");
+	let partialDirection = readProjectDirectionSummary(directionRoot);
+	assert.equal(partialDirection.status, "partial");
+	assert.match(partialDirection.text, /durable project tooling/);
+	assert.deepEqual(partialDirection.missing, ["docs/architecture.md", "docs/testing.md"]);
+	writeFileSync(join(directionRoot, "docs", "architecture.md"), "# Architecture Direction\n\n## Stack\n- Rust MCP server\n");
+	writeFileSync(join(directionRoot, "docs", "testing.md"), "# Testing Direction\n\n## Verification\n- make check\n");
+	const completeDirection = readProjectDirectionSummary(directionRoot);
+	assert.equal(completeDirection.status, "ready");
+	assert.match(completeDirection.text, /docs\/architecture\.md/);
+	assert.match(completeDirection.text, /make check/);
+} finally {
+	rmSync(directionRoot, { recursive: true, force: true });
+}
 
 const extensionSource = readFileSync("extensions/platypus/index.ts", "utf8");
 for (const commandName of PI_COMMAND_NAMES) {

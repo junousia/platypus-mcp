@@ -10,6 +10,10 @@ import {
 	noReadyItemMessage,
 } from "./commands.mjs";
 import {
+	buildDirectionPrompt,
+	readProjectDirectionSummary,
+} from "./direction.mjs";
+import {
 	compactStatus,
 	renderDashboardLines,
 	renderToolResultLines,
@@ -705,6 +709,21 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("platy-direction", {
+		description: "Capture durable project direction before backlog planning",
+		handler: async (_args, ctx) => {
+			if (!latestSnapshot) await refreshSnapshot(ctx);
+			pi.sendUserMessage(buildDirectionPrompt(), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+		},
+	});
+
+	pi.registerCommand("platy-direction-revise", {
+		description: "Revise existing durable project direction",
+		handler: async (_args, ctx) => {
+			pi.sendUserMessage(buildDirectionPrompt({ revision: true }), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+		},
+	});
+
 	pi.registerCommand("platy-start", {
 		description: "Ask the agent to work on the next ready Platypus item",
 		handler: async (_args, ctx) => {
@@ -833,7 +852,7 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("before_agent_start", async (event) => {
+	pi.on("before_agent_start", async (event, ctx) => {
 		const base = `${event.systemPrompt}
 
 ## Platypus MCP Integration
@@ -849,7 +868,9 @@ Workflow guidance:
 - Do not expose hidden chain-of-thought. It is fine to expose safe status, tool calls, events, evidence, and summaries.
 `;
 
-		const dynamicGuidance = shouldShowGuidance(event.prompt) ? guidanceForSnapshot(latestSnapshot) : undefined;
+		if (!shouldShowGuidance(event.prompt)) return { systemPrompt: base };
+		const projectDirection = ctx?.cwd ? readProjectDirectionSummary(ctx.cwd).text : undefined;
+		const dynamicGuidance = [guidanceForSnapshot(latestSnapshot), projectDirection].filter(Boolean).join("\n\n");
 		if (!dynamicGuidance || dynamicGuidance === lastInjectedPrompt) return { systemPrompt: base };
 		lastInjectedPrompt = dynamicGuidance;
 		return { systemPrompt: `${base}\n${dynamicGuidance}\n` };

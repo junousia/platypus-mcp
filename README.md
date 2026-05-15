@@ -254,15 +254,19 @@ fixtures. Run them with `make pi-extension-test`; `make check` includes them.
 The Pi happy path is intentionally short:
 
 1. `/platy-refresh` or `/platy-ready` shows current queue state.
-2. `/platy-plan` asks the agent to create concrete backlog items when the queue
+2. `/platy-direction` asks the agent to capture durable product, architecture,
+   and testing direction in repository docs when direction is missing or stale.
+3. `/platy-plan` asks the agent to create concrete backlog items when the queue
    is empty.
-3. `/platy-start` asks the agent to work the next ready item and complete it
+4. `/platy-start` asks the agent to work the next ready item and complete it
    with `platypus_complete_backlog_item`.
-4. `/platy-doctor` shows setup or recovery guidance when work is blocked.
+5. `/platy-direction-revise` revisits captured direction without rerunning the
+   whole setup flow.
+6. `/platy-doctor` shows setup or recovery guidance when work is blocked.
 
 Add `--init-project` for fresh repositories so `AGENTS.md`, `CLAUDE.md`,
-`WORKFLOW.md`, `platy.yaml`, and `backlog/` are created alongside host MCP
-configuration or Pi package settings.
+`WORKFLOW.md`, `platy.yaml`, `backlog/`, and durable direction files under
+`docs/` are created alongside host MCP configuration or Pi package settings.
 
 If your host defers tool schemas, read resource
 `platypus://guidance/tool-preload` or prompt `platypus-tool-preload` at session

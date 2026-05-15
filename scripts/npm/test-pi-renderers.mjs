@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
 	renderDashboardLines,
 	renderToolResultLines,
+	shouldShowGuidance,
 	snapshotFromDetails,
 } from "../../extensions/platypus/renderers.mjs";
 
@@ -116,5 +117,7 @@ assert.deepEqual(failed, [
 
 const empty = renderDashboardLines(undefined).join("\n");
 assert.match(empty, /not been inspected/);
+assert.equal(shouldShowGuidance("let us capture project direction"), true);
+assert.equal(shouldShowGuidance("hello"), false);
 
 console.log("pi renderer fixtures ok");

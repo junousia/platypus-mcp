@@ -95,8 +95,9 @@ platypus-mcp bootstrap pi --root /path/to/project --init-project
 ```
 
 That writes host configuration and creates project-local guidance such as
-`AGENTS.md`, `CLAUDE.md`, `WORKFLOW.md`, `platy.yaml`, and `backlog/` in the
-target root. Existing files are preserved by default. For Pi specifically,
+`AGENTS.md`, `CLAUDE.md`, `WORKFLOW.md`, `platy.yaml`, `backlog/`, and durable
+direction templates under `docs/` in the target root. Existing files are
+preserved by default. For Pi specifically,
 bootstrap writes `.pi/settings.json` with the `npm:platypus-pi` package entry
 instead of writing a generic `.mcp.json` file; the Pi package supplies the
 `platypus_*` tools and forwards them to the Rust MCP tool CLI.
@@ -262,6 +263,12 @@ normal set is `platypus_inspect_session`, `platypus_inspect_work_queue`,
 `platypus_update_finding_disposition`, `platypus_events_replay`, and
 `platypus_doctor_snapshot`. Use `platypus_call_tool` only when a less common
 Rust MCP tool has no dedicated Pi wrapper yet.
+
+For first-time product steering, run `/platy-direction` inside Pi. It asks the
+agent to capture product, architecture, and testing direction in
+`docs/product.md`, `docs/architecture.md`, and `docs/testing.md`.
+Use `/platy-direction-revise` to update those files later without rerunning the
+whole setup flow.
 
 ## First Project Smoke Flow
 
