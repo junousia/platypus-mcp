@@ -250,16 +250,27 @@ guidance is needed.
   separate dispatch-result record.
 - Runtime state lives under the configured project root in `.platy/`.
 
-## Crates.io Release
+## Release
 
-The `Publish` GitHub Actions workflow publishes `platypus-mcp` to crates.io
-when a GitHub release is published. It can also be run manually as a dry run.
+The `Publish` GitHub Actions workflow publishes the Rust crate to crates.io and
+the Pi integration package to npm when a GitHub release is published. It can
+also be run manually as a dry run.
 
 Repository setup:
 
 1. Create a crates.io API token.
 2. Add it as the GitHub repository secret `CARGO_REGISTRY_TOKEN`.
-3. Publish a GitHub release for the version in `Cargo.toml`.
+3. Create an npm automation token with publish rights for `platypus-pi`.
+4. Add it as the GitHub repository secret `NPM_TOKEN`.
+5. Publish a GitHub release for the version in `Cargo.toml` and `package.json`.
 
-The workflow always runs `make check` and `make publish-dry-run` before the
-upload step.
+The workflow always runs `make check`, `make publish-dry-run`, per-platform npm
+binary validation, combined npm package validation, and `make
+npm-publish-dry-run` before upload steps. npm publishing waits for the crate
+publish job, so a crates.io failure prevents the npm package from being
+published.
+
+Manual `workflow_dispatch` runs default to `dry_run=true`, which validates both
+release paths without uploading. Set `dry_run=false` only when both
+`CARGO_REGISTRY_TOKEN` and `NPM_TOKEN` are configured and an actual publish is
+intended.

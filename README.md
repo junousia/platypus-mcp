@@ -144,6 +144,10 @@ with:
 make npm-package
 ```
 
+The GitHub `Publish` workflow publishes both the crates.io package and the
+`platypus-pi` npm package from releases. npm publishing requires repository
+secret `NPM_TOKEN`; manual workflow dispatch defaults to dry-run validation.
+
 Run the installed stdio server:
 
 ```bash
