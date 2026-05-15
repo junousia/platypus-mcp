@@ -157,7 +157,7 @@ impl ServerHandler for PlatypusMcp {
             .enable_prompts()
             .build();
         info.instructions = Some(
-            "Use Platypus MCP for spec-driven development: inspect first, convert goals to backlog, plan non-trivial work, dispatch through worktrees, then record evidence and integrate. Read `platypus://guidance/spec-driven-development` or get the `platypus-spec-driven-development` prompt before shaping free-form goals."
+            "Use Platypus MCP for spec-driven development: inspect first, convert goals to backlog, plan non-trivial work, dispatch through worktrees, then record evidence and integrate. Read `platypus://guidance/spec-driven-development`; hosts with deferred schemas should also read `platypus://tools/core-schemas` or `platypus://guidance/tool-preload` before shaping free-form goals."
                 .to_string(),
         );
         info
@@ -1295,7 +1295,7 @@ impl PlatypusMcp {
 
     #[tool(
         title = "Complete Worker Execution",
-        description = "Persist a worker result and finish the assigned task with guarded result data.",
+        description = "Low-level worker-assignment completion. Prefer finish_work for normal host-run worker handoffs because it returns verification, findings, integration, and recovery guidance.",
         annotations(
             title = "Complete Worker Execution",
             read_only_hint = false,
@@ -1317,7 +1317,7 @@ impl PlatypusMcp {
 
     #[tool(
         title = "Complete Worker Task",
-        description = "Friendly alias for complete_worker_execution. Persist a worker result and finish the assigned task.",
+        description = "Compatibility alias for complete_worker_execution. Prefer finish_work for normal worker handoff completion.",
         annotations(
             title = "Complete Worker Task",
             read_only_hint = false,

@@ -86,12 +86,14 @@ project session with the same deterministic opening sequence:
 1. List MCP resources and prompts.
 2. Read `platypus://guidance/workflow`,
    `platypus://guidance/project-status`, and
-   `platypus://guidance/tool-preload`, or the equivalent prompts
+   `platypus://guidance/tool-preload`, plus
+   `platypus://tools/core-schemas` when schema preloading is supported, or the equivalent prompts
    `platypus-workflow`, `platypus-project-status`, and
    `platypus-tool-preload`.
 3. If the client supports deferred schema preloading, call `inspect_toolsets`
-   or read `platypus-tool-preload` for advisory discovery metadata. Toolsets
-   are not required workflow steps or separate MCP servers.
+   or read `platypus://tools/core-schemas` / `platypus-tool-preload` for
+   advisory discovery metadata. Toolsets are not required workflow steps or
+   separate MCP servers.
 4. Call `inspect_session`. If the client cannot use that broad snapshot, call
    `doctor_snapshot`, `inspect_status`, `inspect_workflow_config`,
    `inspect_queue_status`, then `inspect_work_queue` as needed.

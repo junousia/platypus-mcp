@@ -14,6 +14,7 @@ pub const WORKFLOW_URI: &str = "platypus://guidance/workflow";
 pub const SPEC_DRIVEN_URI: &str = "platypus://guidance/spec-driven-development";
 pub const PROJECT_STATUS_URI: &str = "platypus://guidance/project-status";
 pub const TOOL_PRELOAD_URI: &str = "platypus://guidance/tool-preload";
+pub const CORE_SCHEMAS_URI: &str = "platypus://tools/core-schemas";
 pub const BACKLOG_AUTHORING_URI: &str = "platypus://guidance/backlog-authoring";
 pub const WORKER_HANDOFF_URI: &str = "platypus://guidance/worker-handoff";
 pub const INTEGRATION_REVIEW_URI: &str = "platypus://guidance/integration-review";
@@ -25,8 +26,9 @@ Use Platypus MCP tools for deterministic project state. The MCP host owns chat,
 model turns, and external worker execution.
 
 If the host supports deferred schema preloading, first read
-`platypus://guidance/tool-preload` or the `platypus-tool-preload` prompt and
-call `inspect_toolsets` when compact discovery metadata would help.
+`platypus://guidance/tool-preload` and `platypus://tools/core-schemas`, or the
+`platypus-tool-preload` prompt. Call `inspect_toolsets` when compact discovery
+metadata would help.
 
 ## Exact Decision Table
 
@@ -86,9 +88,11 @@ inspection.
 
 `inspect_session` may replace separate startup calls to `doctor_snapshot`,
 `inspect_status`, `inspect_workflow_config`, `inspect_queue_status`, and
-`inspect_work_queue` when it succeeds in a fresh session. Call the narrower
-tools after mutations, when a detailed payload is needed, or when the session
-snapshot is stale.
+`inspect_work_queue` when it succeeds in a fresh session. Its default compact
+detail returns headline facts and schema hints; pass `detail=verbose` only when
+the host needs the full embedded payloads. Call the narrower tools after
+mutations, when a detailed payload is needed, or when the session snapshot is
+stale.
 
 For `prepare_work`, prefer structured routing fields over prose:
 `state_persisted=false` plus `durable_next_tool=complete_backlog_item` means
@@ -169,6 +173,8 @@ Use status tools before making assumptions about the repository or task queue.
 
 - `inspect_session` is the preferred startup tool. It combines setup checks,
   project status, workflow config, and queue state in one read-only snapshot.
+  Its default compact response returns headline facts; pass `detail=verbose`
+  when the host needs the full embedded payloads.
   When it succeeds at session start, it replaces separate startup detector
   calls to `doctor_snapshot`, `inspect_status`, `inspect_workflow_config`,
   `inspect_queue_status`, and `inspect_work_queue` unless a detailed payload
@@ -217,8 +223,8 @@ completion events created by `complete_backlog_item`.
 Backlog schema quick reference:
 
 - Minimal create input: a meaningful `goal` or `title`. Platypus derives
-  conservative title and goal, keeps the required Implementation Contract
-  section empty, and writes first acceptance text when those fields are
+  conservative title and goal, writes a visible "not specified" contract
+  placeholder, and writes one neutral tracking criterion when those fields are
   omitted. Add a real implementation contract before delegated, complex, or
   long-lived work.
 - Rich create input: provide explicit `title`, `goal`,
@@ -413,6 +419,13 @@ pub const GUIDANCE: &[GuidanceEntry] = &[
         text: TOOL_PRELOAD_TEXT,
     },
     GuidanceEntry {
+        name: "platypus-core-schemas",
+        uri: CORE_SCHEMAS_URI,
+        title: "Core Schema Preload",
+        description: "Compact startup schema preload hints for common Platypus tools.",
+        text: "",
+    },
+    GuidanceEntry {
         name: "platypus-backlog-authoring",
         uri: BACKLOG_AUTHORING_URI,
         title: "Backlog Authoring",
@@ -478,6 +491,8 @@ pub fn by_prompt_name(name: &str) -> Option<&'static GuidanceEntry> {
 pub fn entry_text(entry: &GuidanceEntry) -> String {
     if entry.uri == TOOL_PRELOAD_URI {
         toolsets::tool_preload_markdown()
+    } else if entry.uri == CORE_SCHEMAS_URI {
+        toolsets::core_schemas_markdown()
     } else {
         entry.text.to_string()
     }

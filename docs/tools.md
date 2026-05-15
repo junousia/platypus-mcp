@@ -11,10 +11,14 @@ Platypus tools return typed JSON with a shared envelope:
 - `error`: optional failure detail
 
 Hosts should prefer `inspect_session` at startup and after stale chat context.
-If `inspect_session` is unavailable or too broad for the current client, fall
-back deterministically to `doctor_snapshot`, `inspect_status`,
-`inspect_workflow_config`, `inspect_queue_status`, then `inspect_work_queue` as
-needed. Use `inspect_queue_status` for compact dashboards and chat summaries.
+Its default `detail=compact` response returns the queue headline, recommended
+tool, direct-work loop, and schema hints without embedding full doctor/status/
+workflow/queue payloads. Use `detail=verbose` only when the host needs all
+startup payloads in one response. If `inspect_session` is unavailable or too
+broad for the current client, fall back deterministically to `doctor_snapshot`,
+`inspect_status`, `inspect_workflow_config`, `inspect_queue_status`, then
+`inspect_work_queue` as needed. Use `inspect_queue_status` for compact
+dashboards and chat summaries.
 Use `inspect_work_queue` when inspecting runnable backlog work, task-plan
 state, active lifecycle state, setup blockers, and the recommended next
 lifecycle command. The lower-level tools remain available for precise control
@@ -32,6 +36,7 @@ guidance is:
   `platypus-project-status`
 - Resource `platypus://guidance/tool-preload` / prompt
   `platypus-tool-preload`
+- Resource `platypus://tools/core-schemas` for startup schema preload hints
 
 Additional phase guidance:
 
@@ -45,12 +50,13 @@ Additional phase guidance:
   `platypus-integration-review`
 - Resource `platypus://guidance/recovery` / prompt `platypus-recovery`
 
-`platypus://guidance/tool-preload` and `inspect_toolsets` expose small optional
-discovery toolsets for clients with deferred tool schemas: Startup, Backlog
-Planning, Direct Execution, Worker Handoff, Evidence And Findings, and
-Recovery. Toolsets are metadata, not required workflow steps and not separate
-MCP servers. If schema preloading is awkward in Codex, Claude, opencode, or
-another host, call the same tools normally when the workflow reaches that phase.
+`platypus://tools/core-schemas`, `platypus://guidance/tool-preload`, and
+`inspect_toolsets` expose optional discovery metadata for clients with deferred
+tool schemas. The core-schemas resource names the common startup tools and
+points hosts back to the live MCP tool list as the schema source of truth.
+Toolsets are metadata, not required workflow steps and not separate MCP
+servers. If schema preloading is awkward in Codex, Claude, opencode, or another
+host, call the same tools normally when the workflow reaches that phase.
 
 For Claude Code, deferred schemas are loaded with ToolSearch selectors such as
 `select:mcp__platypus__inspect_session` or
@@ -229,13 +235,13 @@ make smoke-storage
 Backlog schema quick reference:
 
 - Minimal `create_backlog_item` input: a meaningful `goal` or `title`.
-  Platypus derives conservative title and goal, keeps the required
-  Implementation Contract section empty, and writes first acceptance text when
-  those fields are omitted. Add a real contract before delegation or complex
-  work.
+  Platypus derives conservative title and goal, writes a visible "not
+  specified" contract placeholder, and writes one neutral tracking criterion
+  when those fields are omitted. Add a real contract before delegation or
+  complex work.
 - Rich `create_backlog_item` input: provide explicit `title`, `goal`,
   `implementation_contract` or `contract`, and `acceptance` when the work is
-  complex or the generated defaults would be too broad.
+  complex or the conservative defaults would be too broad.
 - Compact `quick_create_backlog_item` input: provide the common fields
   `title`, `goal`, `priority`, `type`, `area`, `owned_surfaces`, and
   `acceptance`. The tool omits advanced fields such as external refs, notes,
@@ -438,11 +444,6 @@ trailers.
 - `start_worker_execution` / `start_worker_task`: mark a prepared assignment as
   running.
 - `record_worker_event` / `record_worker_progress`: persist worker progress.
-- `complete_worker_execution` / `complete_worker_task`: finish a worker task
-  with result, changed files, and verification status. For same-session host
-  flows, completion can auto-start a prepared assignment by default. Set
-  `auto_start_if_prepared=false` only when strict running-only completion is
-  required.
 - `finish_work`: preferred high-level completion flow for worker assignments.
   It can infer changed files from the worktree diff, record verification
   evidence, record findings, optionally integrate when gates are satisfied, and
@@ -451,6 +452,10 @@ trailers.
   `complete_backlog_item`.
   `host_action.kind` is one of `verify_or_record_risk`, `resolve_findings`,
   `integrate_result`, `inspect_or_recover`, or `done`.
+- `complete_worker_execution` / `complete_worker_task`: low-level assignment
+  lifecycle tools. Use them only when a host intentionally manages
+  verification, findings, and integration separately; normal worker handoffs
+  should finish with `finish_work`.
 - `run_task_verification`: execute the assignment verification command in the
   task worktree and persist a verification run event/evidence record.
 - `send_worker_guidance`: persist steering messages for active tasks.

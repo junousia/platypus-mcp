@@ -277,6 +277,21 @@ pub enum DirectWorkLoopPhaseSchema {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum InspectSessionDetailSchema {
+    Compact,
+    Verbose,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaHintUsageSchema {
+    Required,
+    Optional,
+    Recovery,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum PreparedStateSchema {
     NotPrepared,
     DirectGuidance,
@@ -479,6 +494,12 @@ pub struct InspectSessionParams {
     #[schemars(range(min = 1, max = 200))]
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
+    /// Response detail level. Defaults to compact so a session-start call
+    /// returns the next action, queue headline, and schema hints without
+    /// embedding full doctor/status/workflow/queue payloads. Use verbose when a
+    /// host needs all startup payloads in one response.
+    #[schemars(with = "Option<InspectSessionDetailSchema>")]
+    pub detail: Option<String>,
     /// Deprecated compatibility hint. Durable task-plan policy now comes from
     /// `workflow.execution` or backlog item `planning_gate`.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
@@ -890,15 +911,15 @@ pub struct CreateBacklogItemParams {
     #[schemars(example = example_goal())]
     pub goal: String,
     /// Implementation contract text for this backlog item. Provide this for
-    /// real execution guidance; when omitted, creation tools keep the required
-    /// Implementation Contract section empty.
+    /// real execution guidance; when omitted, creation tools write a clear
+    /// "not specified" placeholder instead of inventing execution details.
     pub implementation_contract: Option<String>,
     /// Optional alias for implementation_contract. Provide only one of
     /// implementation_contract or contract.
     pub contract: Option<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Acceptance criteria for this item. When omitted, creation tools write
-    /// one generated acceptance criterion so the backlog item remains valid.
+    /// one neutral tracking criterion so the backlog item remains valid.
     pub acceptance: Vec<String>,
     /// Optional notes for this item.
     pub notes: Option<String>,
@@ -1042,15 +1063,15 @@ pub struct CreateBacklogItemsEntry {
     #[schemars(example = example_goal())]
     pub goal: String,
     /// Implementation contract text for this backlog item. Provide this for
-    /// real execution guidance; when omitted, creation tools keep the required
-    /// Implementation Contract section empty.
+    /// real execution guidance; when omitted, creation tools write a clear
+    /// "not specified" placeholder instead of inventing execution details.
     pub implementation_contract: Option<String>,
     /// Optional alias for implementation_contract. Provide only one of
     /// implementation_contract or contract.
     pub contract: Option<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Acceptance criteria for this item. When omitted, creation tools write
-    /// one generated acceptance criterion so the backlog item remains valid.
+    /// one neutral tracking criterion so the backlog item remains valid.
     pub acceptance: Vec<String>,
     /// Optional notes for this item.
     pub notes: Option<String>,
@@ -2153,6 +2174,8 @@ pub struct CompleteBacklogItemData {
 pub struct CompleteBacklogItemCompact {
     /// Backlog item identifier.
     pub item_id: String,
+    /// One-line direct completion status for normal chat output.
+    pub status_line: String,
     /// Whether the backlog item is considered closed after this operation.
     pub closed: bool,
     /// Source that made the item closed.
@@ -2349,6 +2372,10 @@ pub struct SchemaDiscoveryHint {
     pub tool_name: String,
     /// Workflow phase or queue condition that makes this schema relevant.
     pub phase: String,
+    /// Whether this schema is required for the next transition, optional
+    /// supporting context, or recovery-only guidance.
+    #[schemars(with = "SchemaHintUsageSchema")]
+    pub usage: String,
     /// Human-readable reason this tool schema is likely useful next.
     pub reason: String,
     /// Host-neutral search phrase for MCP clients that do not support Claude
@@ -2743,6 +2770,11 @@ pub struct InspectSessionData {
     /// Whether inspected setup and queue state are ready for normal workflow
     /// continuation.
     pub ok: bool,
+    /// Response detail level used for this result.
+    #[schemars(with = "InspectSessionDetailSchema")]
+    pub detail: String,
+    /// Compact session facts intended for startup chat context.
+    pub compact: InspectSessionCompact,
     /// Project setup diagnostics, when inspection could collect them.
     pub doctor: Option<DoctorSnapshotData>,
     /// Project and backlog status, when inspection could collect it.
@@ -2776,6 +2808,32 @@ pub struct InspectSessionData {
     /// Bounded hints for MCP tool schemas likely needed in the next workflow
     /// phase. Hosts may ignore this when their schema discovery is automatic.
     pub schemas_likely_needed_next: Vec<SchemaDiscoveryHint>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct InspectSessionCompact {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Whether inspected setup and queue state are ready for normal workflow
+    /// continuation.
+    pub ok: bool,
+    /// Current queue state when queue inspection succeeded.
+    #[schemars(with = "Option<WorkQueueStateSchema>")]
+    pub queue_state: Option<String>,
+    /// Count of all known backlog items when queue inspection succeeded.
+    pub total_items: Option<usize>,
+    /// Count of runnable or ready items when queue inspection succeeded.
+    pub runnable_items: Option<usize>,
+    /// Recommended Platypus MCP tool to call next.
+    pub recommended_tool: String,
+    /// Human-readable reason for the recommendation.
+    pub reason: String,
+    /// Minimal deterministic loop for direct manager-workspace work. Present
+    /// when direct-ready items can be edited and closed without a worker
+    /// handoff.
+    pub minimal_direct_loop: Option<DirectWorkLoop>,
+    /// Non-fatal errors encountered while collecting the session snapshot.
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

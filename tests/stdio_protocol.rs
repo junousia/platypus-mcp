@@ -143,7 +143,7 @@ async fn stdio_server_inspects_session_snapshot() -> anyhow::Result<()> {
     let session = call_tool_json(
         &client,
         "inspect_session",
-        json!({ "limit": 5, "require_task_plan": false }),
+        json!({ "limit": 5, "detail": "verbose", "require_task_plan": false }),
     )
     .await?;
 
@@ -161,6 +161,7 @@ async fn stdio_server_inspects_session_snapshot() -> anyhow::Result<()> {
         .expect("session schema hints")
         .iter()
         .any(|hint| hint["tool_name"] == "write_task_plan"
+            && hint["usage"] == "required"
             && hint["host_neutral_query"] == "platypus tool write_task_plan"
             && hint["codex_tool_search_query"]
                 == "mcp__platypus__write_task_plan platypus write_task_plan"
@@ -678,6 +679,7 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(resource_uris.contains(&"platypus://guidance/spec-driven-development"));
     assert!(resource_uris.contains(&"platypus://guidance/project-status"));
     assert!(resource_uris.contains(&"platypus://guidance/tool-preload"));
+    assert!(resource_uris.contains(&"platypus://tools/core-schemas"));
     assert!(resource_uris.contains(&"platypus://guidance/backlog-authoring"));
     assert!(resource_uris.contains(&"platypus://guidance/worker-handoff"));
     assert!(resource_uris.contains(&"platypus://guidance/integration-review"));
@@ -768,6 +770,18 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("complete_backlog_item"));
     assert!(text.contains("update_finding_disposition"));
 
+    let core = client
+        .read_resource(ReadResourceRequestParams {
+            meta: None,
+            uri: "platypus://tools/core-schemas".to_string(),
+        })
+        .await?;
+    let text = resource_text(&core.contents[0]);
+    assert!(text.contains("Platypus Core Schema Preload"));
+    assert!(text.contains("mcp__platypus__inspect_session"));
+    assert!(text.contains("create_backlog_items"));
+    assert!(text.contains("schema source of truth"));
+
     client.cancel().await?;
     Ok(())
 }
@@ -783,6 +797,7 @@ async fn stdio_server_lists_and_returns_host_guidance_prompts() -> anyhow::Resul
     assert!(prompt_names.contains(&"platypus-spec-driven-development"));
     assert!(prompt_names.contains(&"platypus-project-status"));
     assert!(prompt_names.contains(&"platypus-tool-preload"));
+    assert!(prompt_names.contains(&"platypus-core-schemas"));
     assert!(prompt_names.contains(&"platypus-backlog-authoring"));
     assert!(prompt_names.contains(&"platypus-worker-handoff"));
     assert!(prompt_names.contains(&"platypus-integration-review"));
@@ -3069,11 +3084,18 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
         .expect("schema hints")
         .iter()
         .any(|hint| hint["tool_name"] == "complete_backlog_item"
+            && hint["usage"] == "required"
             && hint["host_neutral_query"] == "platypus tool complete_backlog_item"
             && hint["codex_tool_search_query"]
                 == "mcp__platypus__complete_backlog_item platypus complete_backlog_item"
             && hint["claude_toolsearch_selector"]
                 == "select:mcp__platypus__complete_backlog_item"));
+    assert!(direct_queue["data"]["schemas_likely_needed_next"]
+        .as_array()
+        .expect("schema hints")
+        .iter()
+        .any(|hint| hint["tool_name"] == "record_verification_evidence"
+            && hint["usage"] == "optional"));
     assert_eq!(
         direct_queue["data"]["claude_toolsearch_batch_selector"],
         "select:mcp__platypus__complete_backlog_item,mcp__platypus__record_verification_evidence,mcp__platypus__prepare_work"
@@ -3142,6 +3164,10 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
         serde_json::Value::Null
     );
     assert_eq!(completed["data"]["compact"]["item_id"], "PROJ-001");
+    assert!(completed["data"]["compact"]["status_line"]
+        .as_str()
+        .expect("status line")
+        .contains("PROJ-001 closed"));
     assert_eq!(completed["data"]["compact"]["closed"], true);
     assert_eq!(
         completed["data"]["compact"]["closure_source"],

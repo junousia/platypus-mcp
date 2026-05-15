@@ -271,6 +271,52 @@ alias.
     text
 }
 
+pub fn core_schemas_markdown() -> String {
+    let core_tools = [
+        "inspect_session",
+        "inspect_work_queue",
+        "create_backlog_items",
+        "prepare_work",
+        "complete_backlog_item",
+        "finish_work",
+        "record_verification_evidence",
+        "record_finding",
+        "validate_findings",
+        "inspect_item",
+        "doctor_snapshot",
+    ];
+    let tools = core_tools
+        .iter()
+        .map(|tool| (*tool).to_string())
+        .collect::<Vec<_>>();
+    let mut text = String::from(
+        r#"# Platypus Core Schema Preload
+
+This resource names the schemas most hosts need in a normal session. MCP hosts
+still own schema discovery: if your client can preload or search tool schemas,
+load the tools below before the first planning turn. If your client cannot
+preload, call `inspect_session` first and use `schemas_likely_needed_next` as
+the smaller phase-specific fallback.
+
+This resource intentionally does not embed JSON Schema copies. The live MCP
+tool list remains the schema source of truth, so schema descriptions and enum
+values cannot drift from callable tools.
+
+"#,
+    );
+    let _ = writeln!(text, "- Claude selector: `{}`", claude_selector(&tools));
+    let _ = writeln!(text, "- Codex query: `{}`", codex_query("core", &tools));
+    let _ = writeln!(
+        text,
+        "- Host-neutral query: `{}`\n",
+        host_neutral_query("core", &tools)
+    );
+    for tool in core_tools {
+        let _ = writeln!(text, "- `{tool}`");
+    }
+    text
+}
+
 pub fn available_toolset_names() -> Vec<String> {
     TOOLSETS
         .iter()

@@ -270,9 +270,10 @@ Host action kinds: `direct_edit`, `run_in_worktree`,
 
 `inspect_session` may replace separate startup calls to `doctor_snapshot`,
 `inspect_status`, `inspect_workflow_config`, `inspect_queue_status`, and
-`inspect_work_queue` when it succeeds in a fresh session. Call narrower tools
-after mutations, when a detailed payload is needed, or when the snapshot is
-stale.
+`inspect_work_queue` when it succeeds in a fresh session. Its default compact
+detail returns headline facts and schema hints; pass `detail=verbose` only when
+the host needs the full embedded payloads. Call narrower tools after mutations,
+when a detailed payload is needed, or when the snapshot is stale.
 
 Minimum viable direct-edit loop for tiny, user-approved work:
 `inspect_session`, `inspect_queue_status` or `inspect_work_queue`,
@@ -403,9 +404,10 @@ Host action kinds: `direct_edit`, `run_in_worktree`,
 
 `inspect_session` may replace separate startup calls to `doctor_snapshot`,
 `inspect_status`, `inspect_workflow_config`, `inspect_queue_status`, and
-`inspect_work_queue` when it succeeds in a fresh session. Call narrower tools
-after mutations, when a detailed payload is needed, or when the snapshot is
-stale.
+`inspect_work_queue` when it succeeds in a fresh session. Its default compact
+detail returns headline facts and schema hints; pass `detail=verbose` only when
+the host needs the full embedded payloads. Call narrower tools after mutations,
+when a detailed payload is needed, or when the snapshot is stale.
 
 Minimum viable direct-edit loop for tiny, user-approved work:
 `inspect_session`, `inspect_queue_status` or `inspect_work_queue`,
@@ -427,8 +429,9 @@ parallel product development.
 ## Tool Preload
 
 If your MCP host supports tool discovery or schema preloading, read
-`platypus://guidance/tool-preload` or the `platypus-tool-preload` prompt and
-call `inspect_toolsets` when compact discovery metadata would help.
+`platypus://guidance/tool-preload` and `platypus://tools/core-schemas`, or the
+`platypus-tool-preload` prompt. Call `inspect_toolsets` when compact discovery
+metadata would help.
 
 `inspect_session` and `inspect_work_queue` return
 `schemas_likely_needed_next` with 1-4 likely next tool schemas. Use those hints

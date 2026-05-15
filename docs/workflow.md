@@ -23,6 +23,9 @@ Resources:
 - `platypus://guidance/project-status`: project inspection and setup blockers.
 - `platypus://guidance/tool-preload`: optional phase-specific tool groups for
   hosts that defer tool schemas.
+- `platypus://tools/core-schemas`: compact startup preload hints for common
+  Platypus tool schemas. It points hosts to the live tool list instead of
+  duplicating JSON Schema in documentation.
 - `platypus://guidance/backlog-authoring`: declarative backlog authoring rules.
 - `platypus://guidance/worker-handoff`: worker dispatch, handoff, progress, and
   completion flow.
@@ -31,15 +34,17 @@ Resources:
 
 Equivalent prompts are available as `platypus-workflow`,
 `platypus-spec-driven-development`, `platypus-project-status`,
-`platypus-tool-preload`, `platypus-backlog-authoring`, `platypus-worker-handoff`,
+`platypus-tool-preload`, `platypus-core-schemas`,
+`platypus-backlog-authoring`, `platypus-worker-handoff`,
 `platypus-integration-review`, and `platypus-recovery`.
 
 Tool preloading is optional and host-specific. Hosts can call
-`inspect_toolsets` or read `platypus-tool-preload` for compact discovery
-metadata covering Startup, Backlog Planning, Direct Execution, Worker Handoff,
-Evidence And Findings, and Recovery. Toolsets are not required workflow steps
-or separate MCP servers. Hosts without preloading support should use the same
-tools normally as the workflow requires them.
+`inspect_toolsets`, read `platypus://tools/core-schemas`, or read
+`platypus-tool-preload` for compact discovery metadata covering Startup,
+Backlog Planning, Direct Execution, Worker Handoff, Evidence And Findings, and
+Recovery. Toolsets are not required workflow steps or separate MCP servers.
+Hosts without preloading support should use the same tools normally as the
+workflow requires them.
 
 ## Principles
 
@@ -163,9 +168,10 @@ evidence may be missing, or stale task lifecycle state needs inspection.
 At the start of an MCP-host session, `inspect_session` can replace the separate
 startup detector calls to `doctor_snapshot`, `inspect_status`,
 `inspect_workflow_config`, `inspect_queue_status`, and `inspect_work_queue`
-when it succeeds and the snapshot is fresh. Call the narrower tools after
-mutations, when the host needs a detailed payload, or when a previous chat
-turn may be stale.
+when it succeeds and the snapshot is fresh. Its default compact detail returns
+headline facts and schema hints; pass `detail=verbose` only when the host needs
+the full embedded payloads. Call the narrower tools after mutations, when the
+host needs a detailed payload, or when a previous chat turn may be stale.
 `inspect_session` and `inspect_work_queue` include
 `schemas_likely_needed_next` with 1-4 likely next tool schemas. Claude hints
 include literal ToolSearch selectors and a response-level batch selector.
@@ -239,8 +245,8 @@ status, task attempts, PR metadata, or closure state.
 When creating backlog items through tools, use the typed schema:
 
 - minimal input: a meaningful `goal` or `title`; Platypus derives conservative
-  defaults for missing title and goal, keeps the required Implementation
-  Contract section empty, and writes a first acceptance criterion. Add a real
+  defaults for missing title and goal, writes a visible "not specified"
+  contract placeholder, and writes one neutral tracking criterion. Add a real
   implementation contract before delegated, complex, or long-lived work.
 - rich input: explicit `title`, `goal`, `implementation_contract` or
   `contract`, and `acceptance` criteria when the work is complex or generated

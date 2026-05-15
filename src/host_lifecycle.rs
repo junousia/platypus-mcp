@@ -824,8 +824,20 @@ fn completion_compact(
     summary: &str,
 ) -> CompleteBacklogItemCompact {
     let next_ready = queue_status.and_then(|queue| queue.top_ready_items.first());
+    let next = next_ready
+        .map(|item| item.item_id.as_str())
+        .unwrap_or("inspect_work_queue");
+    let status_line = format!(
+        "{} {} closed; closure={}; commit={}; next={}",
+        if closed { "done" } else { "pending" },
+        item_id,
+        closure.source,
+        commit_outcome.status,
+        next
+    );
     CompleteBacklogItemCompact {
         item_id: item_id.to_string(),
+        status_line,
         closed,
         closure_source: closure.source.clone(),
         commit_status: commit_outcome.status.clone(),

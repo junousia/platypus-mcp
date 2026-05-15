@@ -6,11 +6,12 @@ use crate::{
         BacklogItemMarkdownState, BacklogListData, DirectWorkLoop, DirectWorkStep,
         EffectiveExecutionPolicy, EvidenceRecord, FindingRecord, GetBacklogItemData,
         GetBacklogItemParams, InspectItemData, InspectItemParams, InspectQueueStatusParams,
-        InspectSessionData, InspectSessionParams, InspectWorkQueueParams, LeaseRecord,
-        PlanningApprovalState, PlanningClassification, QueueLeaseSummary, QueueStateDescription,
-        QueueStatusCounts, QueueStatusData, QueueStatusItem, QueueTaskSummary, SchemaDiscoveryHint,
-        TaskPlanQueryParams, WorkQueueData, WorkQueueInventorySummary, WorkQueueItem,
-        WorkQueuePlanState, WorkflowConfigParams, WorkflowExecutionConfig,
+        InspectSessionCompact, InspectSessionData, InspectSessionParams, InspectWorkQueueParams,
+        LeaseRecord, PlanningApprovalState, PlanningClassification, QueueLeaseSummary,
+        QueueStateDescription, QueueStatusCounts, QueueStatusData, QueueStatusItem,
+        QueueTaskSummary, SchemaDiscoveryHint, TaskPlanQueryParams, WorkQueueData,
+        WorkQueueInventorySummary, WorkQueueItem, WorkQueuePlanState, WorkflowConfigParams,
+        WorkflowExecutionConfig,
     },
     project,
     storage::LeaseStore,
@@ -29,6 +30,10 @@ pub fn inspect_session(
 ) -> ActionResult<InspectSessionData> {
     let action = "inspect_session";
     let root_arg = params.root.clone();
+    let detail = match normalize_session_detail(params.detail.as_deref()) {
+        Ok(detail) => detail,
+        Err(error) => return ActionResult::failed(action, "Could not inspect session.", error),
+    };
     let mut root = root_arg.clone().unwrap_or_else(|| {
         default_root
             .canonicalize()
@@ -163,6 +168,22 @@ pub fn inspect_session(
     let minimal_direct_loop = queue
         .as_ref()
         .and_then(|queue| queue.minimal_direct_loop.clone());
+    let compact = InspectSessionCompact {
+        root: root.clone(),
+        ok,
+        queue_state: queue.as_ref().map(|queue| queue.queue_state.clone()),
+        total_items: queue.as_ref().map(|queue| queue.inventory.total_count),
+        runnable_items: queue.as_ref().map(|queue| queue.inventory.runnable_count),
+        recommended_tool: recommended_tool.clone(),
+        reason: reason.clone(),
+        minimal_direct_loop: minimal_direct_loop.clone(),
+        errors: errors.clone(),
+    };
+    let (doctor, status, workflow, queue) = if detail == "verbose" {
+        (doctor, status, workflow, queue)
+    } else {
+        (None, None, None, None)
+    };
     ActionResult {
         action: action.to_string(),
         status: ActionStatus::Completed,
@@ -172,6 +193,8 @@ pub fn inspect_session(
         data: Some(InspectSessionData {
             root,
             ok,
+            detail,
+            compact,
             doctor,
             status,
             workflow,
@@ -187,6 +210,21 @@ pub fn inspect_session(
             schemas_likely_needed_next,
         }),
         error: None,
+    }
+}
+
+fn normalize_session_detail(value: Option<&str>) -> Result<String, String> {
+    match value
+        .unwrap_or("compact")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "" | "compact" => Ok("compact".to_string()),
+        "verbose" => Ok("verbose".to_string()),
+        value => Err(format!(
+            "unsupported detail `{value}`; use compact or verbose"
+        )),
     }
 }
 
@@ -723,12 +761,32 @@ fn schema_hints_for_tools<'a>(
         .map(|tool| SchemaDiscoveryHint {
             tool_name: tool.to_string(),
             phase: phase.clone(),
+            usage: schema_hint_usage(tool, &phase).to_string(),
             reason: schema_hint_reason(tool, &phase),
             host_neutral_query: format!("platypus tool {tool}"),
             codex_tool_search_query: format!("mcp__platypus__{tool} platypus {tool}"),
             claude_toolsearch_selector: Some(format!("select:mcp__platypus__{tool}")),
         })
         .collect()
+}
+
+fn schema_hint_usage(tool: &str, phase: &str) -> &'static str {
+    match (phase, tool) {
+        ("direct_ready", "complete_backlog_item") => "required",
+        ("direct_ready", "record_verification_evidence" | "prepare_work") => "optional",
+        ("empty_backlog", "create_backlog_items") => "required",
+        ("empty_backlog", "inspect_work_queue") => "optional",
+        ("planning_blocked", "write_task_plan" | "validate_task_plan") => "required",
+        ("planning_blocked", "inspect_item") => "optional",
+        ("approval_blocked", "request_planning_approval" | "approval_respond") => "required",
+        ("config_blocked" | "workspace_blocked", _) => "recovery",
+        ("completed_pending_integration", _) => "required",
+        (_, "doctor_snapshot" | "reconcile_project") => "recovery",
+        (_, "inspect_work_queue" | "inspect_item" | "inspect_task" | "inspect_task_events") => {
+            "optional"
+        }
+        _ => "required",
+    }
 }
 
 fn host_neutral_tool_search_query(hints: &[SchemaDiscoveryHint]) -> Option<String> {
@@ -773,10 +831,10 @@ fn schema_hint_reason(tool: &str, phase: &str) -> String {
                 .to_string()
         }
         "record_verification_evidence" => {
-            "Record explicit verification details before or during direct completion.".to_string()
+            "Optional for direct completion: record reusable verification evidence separately when the evidence should outlive the completion summary.".to_string()
         }
         "prepare_work" => {
-            "Return response-local direct guidance or prepare a worker handoff when useful."
+            "Optional for direct_ready items; required only when preparing a worker handoff."
                 .to_string()
         }
         "write_task_plan" => {
@@ -838,8 +896,8 @@ fn direct_work_loop(item_id: Option<&str>) -> DirectWorkLoop {
             DirectWorkStep {
                 order: 3,
                 phase: "verify".to_string(),
-                tool: Some("record_verification_evidence".to_string()),
-                summary: "Run the relevant checks; record separate evidence only when it adds useful detail.".to_string(),
+                tool: None,
+                summary: "Run the relevant checks. Put verification_status, verification_summary, and verification_refs into complete_backlog_item; call record_verification_evidence only when reusable standalone evidence is useful.".to_string(),
             },
             DirectWorkStep {
                 order: 4,
@@ -2186,6 +2244,7 @@ mod tests {
             InspectSessionParams {
                 root: None,
                 limit: Some(10),
+                detail: Some("verbose".to_string()),
                 require_task_plan: None,
                 require_planning_approval: None,
             },
@@ -2194,6 +2253,9 @@ mod tests {
 
         assert_eq!(result.status, ActionStatus::Completed);
         assert!(data.ok);
+        assert_eq!(data.detail, "verbose");
+        assert_eq!(data.compact.recommended_tool, "complete_backlog_item");
+        assert_eq!(data.compact.queue_state.as_deref(), Some("direct_ready"));
         assert_eq!(data.recommended_tool, "complete_backlog_item");
         assert_eq!(
             data.minimal_direct_loop
@@ -2220,9 +2282,29 @@ mod tests {
             .schemas_likely_needed_next
             .iter()
             .any(|hint| hint.tool_name == "complete_backlog_item"
+                && hint.usage == "required"
                 && hint.host_neutral_query == "platypus tool complete_backlog_item"
                 && hint.codex_tool_search_query
                     == "mcp__platypus__complete_backlog_item platypus complete_backlog_item"));
+
+        let compact = inspect_session(
+            project.path(),
+            InspectSessionParams {
+                root: None,
+                limit: Some(10),
+                detail: None,
+                require_task_plan: None,
+                require_planning_approval: None,
+            },
+        )
+        .data
+        .expect("compact session");
+        assert_eq!(compact.detail, "compact");
+        assert!(compact.doctor.is_none());
+        assert!(compact.status.is_none());
+        assert!(compact.workflow.is_none());
+        assert!(compact.queue.is_none());
+        assert_eq!(compact.compact.recommended_tool, "complete_backlog_item");
         assert!(
             !project.path().join(".platy").exists(),
             "read-only session inspection must not create runtime state"
