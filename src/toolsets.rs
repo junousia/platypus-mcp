@@ -208,9 +208,10 @@ selected. Platypus does not require any specific preload mechanism. The
 toolsets below are optional discovery metadata, not required workflow steps and
 not separate MCP servers.
 
-Preloading is optional and host-specific; if a host cannot preload schemas,
-continue normally and call the same tools on demand when the workflow reaches
-that phase.
+Preloading is optional and host-specific. These entries are advisory search
+hints and selectors unless the host explicitly supports automatic schema
+registration. If a host cannot preload schemas, continue normally and call the
+same tools on demand when the workflow reaches that phase.
 
 Start with `inspect_toolsets` when a host needs a map of available tool groups.
 Otherwise call `inspect_session` directly and follow `recommended_tool`,
@@ -294,9 +295,10 @@ pub fn core_schemas_markdown() -> String {
 
 This resource names the schemas most hosts need in a normal session. MCP hosts
 still own schema discovery: if your client can preload or search tool schemas,
-load the tools below before the first planning turn. If your client cannot
-preload, call `inspect_session` first and use `schemas_likely_needed_next` as
-the smaller phase-specific fallback.
+use the tools below before the first planning turn. These entries are advisory
+search hints and selectors unless the host explicitly supports automatic schema
+registration. If your client cannot preload, call `inspect_session` first and
+use `schemas_likely_needed_next` as the smaller phase-specific fallback.
 
 This resource intentionally does not embed JSON Schema copies. The live MCP
 tool list remains the schema source of truth, so schema descriptions and enum

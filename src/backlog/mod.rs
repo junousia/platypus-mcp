@@ -1145,6 +1145,7 @@ mod tests {
                 root: Some(root_arg(temp.path())),
                 id_prefix: Some("WEB".to_string()),
                 preview: false,
+                detail: None,
                 items: vec![
                     batch_entry("foundation", None, "Shape web foundation", vec![]),
                     batch_entry(
@@ -1183,6 +1184,7 @@ mod tests {
                 root: Some(root_arg(temp.path())),
                 id_prefix: Some("WEB".to_string()),
                 preview: true,
+                detail: None,
                 items: vec![
                     batch_entry("shape", None, "Shape web foundation", vec![]),
                     batch_entry(
@@ -1205,9 +1207,12 @@ mod tests {
         assert_eq!(data.items[1].depends_on, vec!["WEB-001"]);
         assert!(!data.items[0].created);
         assert_eq!(data.items[0].preview.title, "Shape web foundation");
+        assert!(data.items[0].preview.markdown_included);
         assert!(data.items[0]
             .preview
             .markdown
+            .as_deref()
+            .unwrap_or("")
             .contains("# WEB-001 Shape web foundation"));
         assert!(!temp.path().join("backlog/items/WEB-001.md").exists());
         assert!(!temp.path().join("backlog/items/WEB-002.md").exists());
@@ -1223,6 +1228,7 @@ mod tests {
                 root: Some(root_arg(temp.path())),
                 id_prefix: Some("WEB".to_string()),
                 preview: true,
+                detail: None,
                 items: vec![CreateBacklogItemsEntry {
                     client_key: Some("minimal".to_string()),
                     depends_on_keys: Vec::new(),
@@ -1251,13 +1257,12 @@ mod tests {
         let data = result.data.expect("preview data");
         assert_eq!(data.items[0].preview.title, "Scaffold frontend");
         assert_eq!(data.items[0].preview.implementation_contract, "");
-        assert!(data.items[0].preview.markdown.contains(
+        assert!(data.items[0].preview.markdown_included);
+        let markdown = data.items[0].preview.markdown.as_deref().unwrap_or("");
+        assert!(markdown.contains(
             "## Implementation Contract\n\n_Not specified. Add a real implementation contract"
         ));
-        assert!(!data.items[0]
-            .preview
-            .markdown
-            .contains("Implement the requested change: Scaffold frontend."));
+        assert!(!markdown.contains("Implement the requested change: Scaffold frontend."));
         assert!(!temp.path().join("backlog/items/WEB-001.md").exists());
     }
 
@@ -1271,6 +1276,7 @@ mod tests {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
                 preview: false,
+                detail: None,
                 items: vec![CreateBacklogItemsEntry {
                     implementation_contract: Some("Primary contract.".to_string()),
                     contract: Some("Alias contract.".to_string()),
@@ -1336,6 +1342,7 @@ mod tests {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
                 preview: false,
+                detail: None,
                 items: vec![batch_entry("new", Some("PROJ-002"), "New item", vec![])],
             },
         );
@@ -1360,6 +1367,7 @@ mod tests {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
                 preview: false,
+                detail: None,
                 items: vec![
                     batch_entry("explicit", Some("PROJ-010"), "Explicit item", vec![]),
                     batch_entry("auto", None, "Auto item", vec!["explicit".to_string()]),
@@ -1384,6 +1392,7 @@ mod tests {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
                 preview: false,
+                detail: None,
                 items: vec![
                     batch_entry("ok", None, "Would be valid", vec![]),
                     CreateBacklogItemsEntry {
@@ -1412,6 +1421,7 @@ mod tests {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
                 preview: false,
+                detail: None,
                 items: vec![
                     batch_entry("ok", Some("PROJ-002"), "Would be valid", vec![]),
                     batch_entry("duplicate", Some("PROJ-001"), "Duplicate", vec![]),
@@ -1438,6 +1448,7 @@ mod tests {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
                 preview: false,
+                detail: None,
                 items: vec![batch_entry(
                     "implementation",
                     None,
@@ -1466,6 +1477,7 @@ mod tests {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
                 preview: false,
+                detail: None,
                 items: vec![
                     batch_entry(
                         "shape",
@@ -1508,6 +1520,7 @@ mod tests {
                 root: Some(root_arg(temp.path())),
                 id_prefix: None,
                 preview: false,
+                detail: None,
                 items: vec![first, second],
             },
         );

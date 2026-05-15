@@ -436,6 +436,11 @@ pub fn complete_backlog_item(
                 let commit_outcome =
                     completion_commit_outcome(params.commit.unwrap_or(false), None, true);
                 let generated_evidence = Vec::new();
+                let evidence_behavior = completion_evidence_behavior(
+                    params.record_auto_evidence.unwrap_or(true),
+                    params.evidence_refs.len(),
+                    generated_evidence.len(),
+                );
                 let compact = completion_compact(
                     &item_id,
                     true,
@@ -444,6 +449,7 @@ pub fn complete_backlog_item(
                     None,
                     params.record_auto_evidence.unwrap_or(true),
                     &generated_evidence,
+                    &evidence_behavior,
                     &[],
                     queue_status.as_ref(),
                     "Backlog item was already closed.",
@@ -461,6 +467,7 @@ pub fn complete_backlog_item(
                     evidence: Vec::new(),
                     auto_evidence_enabled: params.record_auto_evidence.unwrap_or(true),
                     generated_evidence,
+                    evidence_behavior,
                     event: None,
                     commit: None,
                     closed: true,
@@ -670,6 +677,11 @@ pub fn complete_backlog_item(
     let mut completion_evidence_refs = params.evidence_refs.clone();
     completion_evidence_refs.extend(generated_evidence_refs.clone());
     let commit_outcome = completion_commit_outcome(commit_requested, commit.clone(), false);
+    let evidence_behavior = completion_evidence_behavior(
+        record_auto_evidence,
+        params.evidence_refs.len(),
+        generated_evidence.len(),
+    );
 
     let event = match events::record_event(
         default_root,
@@ -736,6 +748,7 @@ pub fn complete_backlog_item(
         commit.clone(),
         record_auto_evidence,
         &generated_evidence,
+        &evidence_behavior,
         &warnings,
         queue_status.as_ref(),
         &format!("Completed direct backlog item `{item_id}`."),
@@ -753,6 +766,7 @@ pub fn complete_backlog_item(
         evidence: evidence_records,
         auto_evidence_enabled: record_auto_evidence,
         generated_evidence,
+        evidence_behavior,
         event,
         commit,
         closed: true,
@@ -811,6 +825,33 @@ fn verbose_queue_status(
     }
 }
 
+fn completion_evidence_behavior(
+    record_auto_evidence: bool,
+    explicit_ref_count: usize,
+    generated_count: usize,
+) -> String {
+    match (record_auto_evidence, explicit_ref_count, generated_count) {
+        (true, explicit, generated) if explicit > 0 && generated > 0 => format!(
+            "record_auto_evidence=true created {generated} evidence record(s) and combined them with {explicit} explicit evidence_refs for closure."
+        ),
+        (true, _, generated) if generated > 0 => format!(
+            "record_auto_evidence=true created {generated} evidence record(s) from the completion, verification, and commit fields."
+        ),
+        (true, explicit, _) if explicit > 0 => format!(
+            "record_auto_evidence=true was enabled; no automatic records were created, so closure uses {explicit} explicit evidence_refs."
+        ),
+        (true, _, _) => {
+            "record_auto_evidence=true was enabled; no automatic records were created.".to_string()
+        }
+        (false, explicit, _) if explicit > 0 => format!(
+            "record_auto_evidence=false; closure relies on {explicit} explicit evidence_refs supplied by the caller."
+        ),
+        (false, _, _) => {
+            "record_auto_evidence=false; no evidence_refs were supplied, so the completion summary is the only inline support.".to_string()
+        }
+    }
+}
+
 fn completion_compact(
     item_id: &str,
     closed: bool,
@@ -819,6 +860,7 @@ fn completion_compact(
     commit: Option<String>,
     auto_evidence_enabled: bool,
     generated_evidence: &[GeneratedEvidenceSummary],
+    evidence_behavior: &str,
     warnings: &[String],
     queue_status: Option<&QueueStatusData>,
     summary: &str,
@@ -844,6 +886,7 @@ fn completion_compact(
         commit,
         auto_evidence_enabled,
         generated_evidence: generated_evidence.to_vec(),
+        evidence_behavior: evidence_behavior.to_string(),
         warnings: warnings.to_vec(),
         queue_state: queue_status.map(|queue| queue.queue_state.clone()),
         next_ready_item_id: next_ready.map(|item| item.item_id.clone()),

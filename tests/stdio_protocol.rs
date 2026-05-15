@@ -150,6 +150,14 @@ async fn stdio_server_inspects_session_snapshot() -> anyhow::Result<()> {
     assert_stage_status("inspect_session", &session, "completed");
     assert_eq!(session["data"]["ok"], true);
     assert_eq!(session["data"]["recommended_tool"], "write_task_plan");
+    assert_eq!(session["data"]["compact"]["health"]["scaffold_ok"], true);
+    assert_eq!(session["data"]["compact"]["health"]["git_ok"], true);
+    assert_eq!(session["data"]["compact"]["health"]["backlog_ok"], true);
+    assert_eq!(session["data"]["compact"]["health"]["workflow_ok"], true);
+    assert!(session["data"]["compact"]["health"]["summary"]
+        .as_str()
+        .unwrap_or("")
+        .contains("workflow: ready"));
     assert!(session["data"]["doctor"]["ok"].as_bool().unwrap_or(false));
     assert_eq!(session["data"]["status"]["backlog_items"], 1);
     assert_eq!(
@@ -176,6 +184,57 @@ async fn stdio_server_inspects_session_snapshot() -> anyhow::Result<()> {
     );
     assert!(session["data"]["workflow"]["integration"]["merge_style"].is_string());
 
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_inspect_session_compact_health_reports_setup_states() -> anyhow::Result<()> {
+    let missing = TempDir::new()?;
+    let client = start_client(Some(missing.path().to_string_lossy().as_ref())).await?;
+    let session = call_tool_json(&client, "inspect_session", json!({})).await?;
+    assert_stage_status("inspect_session missing", &session, "completed");
+    assert_eq!(session["data"]["compact"]["health"]["scaffold_ok"], false);
+    assert_eq!(session["data"]["compact"]["health"]["git_ok"], false);
+    assert_eq!(session["data"]["compact"]["health"]["backlog_ok"], false);
+    assert_eq!(session["data"]["compact"]["health"]["workflow_ok"], true);
+    client.cancel().await?;
+
+    let unborn = TempDir::new()?;
+    let client = start_client(Some(unborn.path().to_string_lossy().as_ref())).await?;
+    let initialized = call_tool_json(&client, "init_project", json!({})).await?;
+    assert_stage_status("init_project unborn", &initialized, "completed");
+    git(unborn.path(), &["init"]);
+    let session = call_tool_json(&client, "inspect_session", json!({})).await?;
+    assert_stage_status("inspect_session unborn", &session, "completed");
+    assert_eq!(session["data"]["compact"]["health"]["scaffold_ok"], true);
+    assert_eq!(session["data"]["compact"]["health"]["git_ok"], false);
+    assert_eq!(session["data"]["compact"]["health"]["backlog_ok"], false);
+    assert_eq!(session["data"]["compact"]["health"]["workflow_ok"], true);
+    client.cancel().await?;
+
+    let empty = TempDir::new()?;
+    let client = start_client(Some(empty.path().to_string_lossy().as_ref())).await?;
+    let initialized = call_tool_json(&client, "init_project", json!({})).await?;
+    assert_stage_status("init_project empty", &initialized, "completed");
+    git(empty.path(), &["init"]);
+    git(empty.path(), &["config", "user.name", "Platypus Test"]);
+    git(
+        empty.path(),
+        &["config", "user.email", "platypus@example.invalid"],
+    );
+    git(empty.path(), &["add", "--all"]);
+    git(empty.path(), &["commit", "-m", "Initialize project"]);
+    let session = call_tool_json(&client, "inspect_session", json!({})).await?;
+    assert_stage_status("inspect_session empty", &session, "completed");
+    assert_eq!(session["data"]["compact"]["health"]["scaffold_ok"], true);
+    assert_eq!(session["data"]["compact"]["health"]["git_ok"], true);
+    assert_eq!(session["data"]["compact"]["health"]["backlog_ok"], false);
+    assert_eq!(session["data"]["compact"]["health"]["workflow_ok"], true);
+    assert_eq!(
+        session["data"]["compact"]["health"]["backlog"],
+        "empty_or_missing"
+    );
     client.cancel().await?;
     Ok(())
 }
@@ -222,9 +281,14 @@ async fn stdio_server_creates_backlog_items_atomically() -> anyhow::Result<()> {
     .await?;
     assert_stage_status("create_backlog_items preview", &created, "completed");
     assert!(created["data"]["preview"].as_bool().unwrap_or(false));
+    assert_eq!(created["data"]["detail"], "compact");
     assert_eq!(created["data"]["created"], 0);
     assert_eq!(created["data"]["items"][0]["item_id"], "WEB-001");
     assert_eq!(created["data"]["items"][0]["created"], false);
+    assert_eq!(
+        created["data"]["items"][0]["preview"]["markdown_included"],
+        true
+    );
     assert!(created["data"]["items"][0]["preview"]["markdown"]
         .as_str()
         .unwrap_or("")
@@ -261,9 +325,52 @@ async fn stdio_server_creates_backlog_items_atomically() -> anyhow::Result<()> {
     assert_stage_status("create_backlog_items", &created, "completed");
     assert_eq!(created["data"]["created"], 2);
     assert_eq!(created["data"]["preview"], false);
+    assert_eq!(created["data"]["detail"], "compact");
     assert_eq!(created["data"]["items"][0]["item_id"], "WEB-001");
     assert_eq!(created["data"]["items"][1]["item_id"], "WEB-002");
     assert_eq!(created["data"]["items"][1]["depends_on"][0], "WEB-001");
+    assert_eq!(
+        created["data"]["items"][0]["preview"]["markdown_included"],
+        false
+    );
+    assert_eq!(
+        created["data"]["items"][0]["preview"]["markdown"],
+        serde_json::Value::Null
+    );
+    assert!(created["next_action"]
+        .as_str()
+        .unwrap_or("")
+        .contains("validate_backlog only after manual edits"));
+
+    let verbose = call_tool_json(
+        &client,
+        "create_backlog_items",
+        json!({
+            "id_prefix": "DOC",
+            "detail": "verbose",
+            "items": [
+                {
+                    "client_key": "docs",
+                    "title": "Document batch behavior",
+                    "type": "docs",
+                    "goal": "Document batch behavior.",
+                    "implementation_contract": "Write the docs item.",
+                    "acceptance": ["The docs item validates."]
+                }
+            ]
+        }),
+    )
+    .await?;
+    assert_stage_status("create_backlog_items verbose", &verbose, "completed");
+    assert_eq!(verbose["data"]["detail"], "verbose");
+    assert_eq!(
+        verbose["data"]["items"][0]["preview"]["markdown_included"],
+        true
+    );
+    assert!(verbose["data"]["items"][0]["preview"]["markdown"]
+        .as_str()
+        .unwrap_or("")
+        .contains("# DOC-001 Document batch behavior"));
 
     let failed = call_tool_json(
         &client,
@@ -758,7 +865,7 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("Evidence And Findings Group"));
     assert!(text.contains("Recovery Group"));
     assert!(text.contains("Preloading is optional and host-specific"));
-    assert!(text.contains("if a host cannot preload schemas"));
+    assert!(text.contains("If a host cannot preload schemas"));
     assert!(text.contains("select:mcp__platypus__inspect_session"));
     assert!(text.contains("Direct Execution"));
     assert!(text.contains("quick_create_backlog_item"));
@@ -1136,13 +1243,23 @@ area: general
     assert_eq!(response["data"]["counts"]["total_count"], 2);
     assert_eq!(response["data"]["counts"]["runnable_count"], 1);
     assert_eq!(response["data"]["counts"]["dependency_blocked_count"], 1);
+    assert_eq!(response["data"]["next_ready_item_id"], "PROJ-001");
+    assert_eq!(response["data"]["lifecycle_mode"], "simple_direct");
     assert_eq!(
         response["data"]["top_ready_items"][0]["item_id"],
         "PROJ-001"
     );
     assert_eq!(
+        response["data"]["top_ready_items"][0]["lifecycle_mode"],
+        "simple_direct"
+    );
+    assert_eq!(
         response["data"]["top_blocked_items"][0]["queue_state"],
         "dependency_blocked"
+    );
+    assert_eq!(
+        response["data"]["top_blocked_items"][0]["lifecycle_mode"],
+        "blocked"
     );
     assert!(response["data"]["state_descriptions"]
         .as_array()
@@ -3063,6 +3180,12 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
         direct_queue["data"]["items"][0]["queue_state"],
         "direct_ready"
     );
+    assert_eq!(direct_queue["data"]["next_ready_item_id"], "PROJ-001");
+    assert_eq!(direct_queue["data"]["lifecycle_mode"], "simple_direct");
+    assert_eq!(
+        direct_queue["data"]["items"][0]["lifecycle_mode"],
+        "simple_direct"
+    );
     assert_eq!(
         direct_queue["data"]["items"][0]["prepare_work_optional"],
         true
@@ -3179,6 +3302,14 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
         "create_backlog_items"
     );
     assert_eq!(completed["data"]["auto_evidence_enabled"], true);
+    assert!(completed["data"]["evidence_behavior"]
+        .as_str()
+        .unwrap_or("")
+        .contains("record_auto_evidence=true created 2 evidence record"));
+    assert!(completed["data"]["compact"]["evidence_behavior"]
+        .as_str()
+        .unwrap_or("")
+        .contains("completion, verification"));
     assert_eq!(
         completed["data"]["generated_evidence"]
             .as_array()
@@ -3261,6 +3392,10 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
         "completed",
     );
     assert_eq!(completed["data"]["auto_evidence_enabled"], false);
+    assert!(completed["data"]["evidence_behavior"]
+        .as_str()
+        .unwrap_or("")
+        .contains("record_auto_evidence=false"));
     assert_eq!(
         completed["data"]["generated_evidence"]
             .as_array()

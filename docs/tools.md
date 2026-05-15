@@ -11,14 +11,15 @@ Platypus tools return typed JSON with a shared envelope:
 - `error`: optional failure detail
 
 Hosts should prefer `inspect_session` at startup and after stale chat context.
-Its default `detail=compact` response returns the queue headline, recommended
-tool, direct-work loop, and schema hints without embedding full doctor/status/
+Its default `detail=compact` response returns setup health for scaffold, Git,
+backlog, and workflow readiness, plus the queue headline, recommended tool,
+direct-work loop, and schema hints without embedding full doctor/status/
 workflow/queue payloads. Use `detail=verbose` only when the host needs all
-startup payloads in one response. If `inspect_session` is unavailable or too
-broad for the current client, fall back deterministically to `doctor_snapshot`,
-`inspect_status`, `inspect_workflow_config`, `inspect_queue_status`, then
-`inspect_work_queue` as needed. Use `inspect_queue_status` for compact
-dashboards and chat summaries.
+startup payloads in one response or explicit recovery diagnostics. If
+`inspect_session` is unavailable or too broad for the current client, fall back
+deterministically to `doctor_snapshot`, `inspect_status`,
+`inspect_workflow_config`, `inspect_queue_status`, then `inspect_work_queue` as
+needed. Use `inspect_queue_status` for compact dashboards and chat summaries.
 Use `inspect_work_queue` when inspecting runnable backlog work, task-plan
 state, active lifecycle state, setup blockers, and the recommended next
 lifecycle command. The lower-level tools remain available for precise control
@@ -52,11 +53,13 @@ Additional phase guidance:
 
 `platypus://tools/core-schemas`, `platypus://guidance/tool-preload`, and
 `inspect_toolsets` expose optional discovery metadata for clients with deferred
-tool schemas. The core-schemas resource names the common startup tools and
-points hosts back to the live MCP tool list as the schema source of truth.
-Toolsets are metadata, not required workflow steps and not separate MCP
-servers. If schema preloading is awkward in Codex, Claude, opencode, or another
-host, call the same tools normally when the workflow reaches that phase.
+tool schemas. These are advisory search hints and selectors unless the host
+explicitly supports automatic schema registration. The core-schemas resource
+names common startup tools and points hosts back to the live MCP tool list as
+the schema source of truth. Toolsets are metadata, not required workflow steps
+and not separate MCP servers. If schema preloading is awkward in Codex, Claude,
+opencode, Pi, or another host, call the same tools normally when the workflow
+reaches that phase.
 
 For Claude Code, deferred schemas are loaded with ToolSearch selectors such as
 `select:mcp__platypus__inspect_session` or
@@ -69,6 +72,12 @@ Direct quick path: read the startup guidance, call `inspect_session`, inspect
 for `direct_ready`, edit the manager workspace, then call
 `complete_backlog_item`. Call `prepare_work` first only when response-local
 guidance is useful.
+
+A concrete minimal direct-work example is documented in
+[docs/workflow.md](workflow.md#minimal-direct-work-example). Use it for
+sustained tracked work that is small enough for direct manager-workspace edits;
+switch to task plans and worker handoff when the work is long-lived, parallel,
+or review-sensitive.
 
 Alias and deprecation expectations: `contract` is only an alias for
 `implementation_contract`, `quick_create_backlog_item` is shorthand for simple
@@ -201,6 +210,11 @@ make smoke-storage
 - `create_backlog_items`: atomically write related backlog items in one call.
   Pass `preview=true` to allocate the same would-be IDs, validate the batch,
   and return exact paths plus generated markdown without writing files.
+  Successful writes default to `detail=compact`, which returns created IDs,
+  paths, normalized metadata, and inline validation without full generated
+  markdown bodies. Use `detail=verbose` or `preview=true` when the host needs
+  the exact markdown for review or debugging. After a successful typed create,
+  `validate_backlog` is optional unless files were manually edited.
 - `update_backlog_item`: update one existing backlog item through a typed
   patch. It validates before keeping the write, rolls back failed updates, and
   protects closed items unless `force_closed=true` is supplied intentionally.
@@ -253,6 +267,9 @@ Backlog schema quick reference:
   or when the host wants to show the user the exact target files and generated
   markdown first. Preview is non-mutating and returns `created: 0` with
   per-item `created: false`.
+- Use `detail=compact` for normal successful writes so chat output stays
+  scan-friendly. Use `detail=verbose` only when debugging or showing generated
+  markdown after the write.
 - Use `update_backlog_item` to correct or refine an existing item. Supported
   updates include title, priority, type, area, epic, dependencies, owned
   surfaces, external refs, execution path, planning gate, goal, implementation
@@ -354,7 +371,11 @@ trailers.
   `workspace_blocked` identify distinct remedies; `active` and
   `completed_pending_integration` identify existing lifecycle state. Closed
   item summaries expose `has_evidence` and `evidence_count`; call
-  `list_evidence` or `inspect_item` for full evidence records.
+  `list_evidence` or `inspect_item` for full evidence records. Queue responses
+  include `next_ready_item_id` when a runnable item exists and
+  `lifecycle_mode` values such as `simple_direct`, `worker_handoff`,
+  `blocked`, `active`, `integration`, `closed`, or `empty`. These values
+  describe the existing path; they do not choose work for the host model.
 - `prepare_work`: preferred high-level host flow for executable backlog work.
   It inspects the queue, returns direct-edit guidance for
   `execution_path=direct_edit`, and prepares safe manual-handoff assignments
@@ -379,7 +400,11 @@ trailers.
   same `complete_backlog_item` call instead of separately calling
   `record_verification_evidence`. Set `record_auto_evidence=false` only when
   `evidence_refs` already point to explicit evidence records managed by the
-  host. Use this for `prepare_work` host actions of kind `direct_edit`.
+  host. When both automatic evidence and explicit `evidence_refs` are present,
+  closure combines them; automatic evidence is not suppressed. The response
+  includes `evidence_behavior` in both compact and verbose payloads so the host
+  can explain what supported closure. Use this for `prepare_work` host actions
+  of kind `direct_edit`.
   The tool returns warning-only `warnings` when `changed_files` is empty, points
   at missing paths, or names paths that Git does not currently report as
   changed; these warnings do not block valid non-file or already-committed

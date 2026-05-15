@@ -24,6 +24,9 @@ queue inspection, edit the manager workspace, verify, and
 `complete_backlog_item`. When queue output says `prepare_work_optional=true`,
 `prepare_work` is only response-local guidance; use task plans and worker
 handoff when traceability, parallelism, or review gates matter.
+The minimal direct-work example in [docs/workflow.md](docs/workflow.md#minimal-direct-work-example)
+shows `create_backlog_items`, `inspect_work_queue`, direct edits, and
+`complete_backlog_item` with automatic evidence.
 The preferred workflow is documented in [docs/workflow.md](docs/workflow.md),
 client setup is documented in [docs/install.md](docs/install.md), and the full
 tool surface is documented in [docs/tools.md](docs/tools.md).

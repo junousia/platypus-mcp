@@ -268,6 +268,18 @@ pub enum WorkExecutionPathSchema {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum WorkLifecycleModeSchema {
+    SimpleDirect,
+    WorkerHandoff,
+    Blocked,
+    Active,
+    Integration,
+    Closed,
+    Empty,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum DirectWorkLoopPhaseSchema {
     Inspect,
     Edit,
@@ -328,6 +340,13 @@ pub enum CompletionClosureSourceSchema {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CompletionDetailSchema {
+    Compact,
+    Verbose,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BacklogCreationDetailSchema {
     Compact,
     Verbose,
 }
@@ -995,6 +1014,11 @@ pub struct CreateBacklogItemsParams {
     /// would-be IDs, resolves batch dependencies, validates inputs, and returns
     /// the markdown text and paths that would be written.
     pub preview: bool,
+    /// Response detail level. Compact successful writes omit full generated
+    /// markdown bodies; verbose writes include them. Preview requests always
+    /// include markdown for review.
+    #[schemars(with = "Option<BacklogCreationDetailSchema>")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1611,6 +1635,9 @@ pub struct CompleteBacklogItemParams {
     pub verification_refs: Vec<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Existing evidence identifiers or references that support this completion.
+    /// When record_auto_evidence is true these are combined with generated
+    /// completion and verification evidence; they do not suppress automatic
+    /// evidence creation.
     pub evidence_refs: Vec<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Existing finding identifiers or references reviewed for this completion.
@@ -2149,6 +2176,9 @@ pub struct CompleteBacklogItemData {
     pub auto_evidence_enabled: bool,
     /// Generated evidence IDs and summaries created by this completion call.
     pub generated_evidence: Vec<GeneratedEvidenceSummary>,
+    /// Human-readable explanation of how automatic evidence and explicit
+    /// evidence_refs were handled for this completion.
+    pub evidence_behavior: String,
     /// Project event recorded for the direct completion.
     pub event: Option<EventRecord>,
     /// Git commit hash when complete_backlog_item created a closure commit.
@@ -2191,6 +2221,9 @@ pub struct CompleteBacklogItemCompact {
     pub auto_evidence_enabled: bool,
     /// Generated evidence IDs and summaries created by this completion call.
     pub generated_evidence: Vec<GeneratedEvidenceSummary>,
+    /// Human-readable explanation of how automatic evidence and explicit
+    /// evidence_refs were handled for this completion.
+    pub evidence_behavior: String,
     /// Non-fatal warnings produced while completing direct work.
     pub warnings: Vec<String>,
     /// Queue state after completion, when available.
@@ -2283,6 +2316,13 @@ pub struct WorkQueueData {
     pub require_task_plan: bool,
     /// Number of queue items ready to dispatch.
     pub ready_count: usize,
+    /// First ready backlog item identifier in execution order, when one exists.
+    #[schemars(regex(pattern = "^[A-Z][A-Z0-9]+-[0-9]+$"), example = example_item_id())]
+    pub next_ready_item_id: Option<String>,
+    /// Overall lifecycle weight for this queue snapshot. This describes the
+    /// existing workflow path; it does not choose work for the host model.
+    #[schemars(with = "WorkLifecycleModeSchema")]
+    pub lifecycle_mode: String,
     /// Number of returned queue candidates blocked by planning, setup, active
     /// lifecycle, or leases. This is not the whole-backlog dependency blocked
     /// inventory; use inventory.dependency_blocked_count for that.
@@ -2413,6 +2453,10 @@ pub struct WorkQueueItem {
     /// Execution path implied by the current queue state.
     #[schemars(with = "WorkExecutionPathSchema")]
     pub execution_path: String,
+    /// Lifecycle weight for this item. This is derived from queue state,
+    /// execution_path, planning_gate, and active integration state.
+    #[schemars(with = "WorkLifecycleModeSchema")]
+    pub lifecycle_mode: String,
     /// Tool that closes this item once implementation work is done, when known.
     pub completion_tool: Option<String>,
     /// Whether a task plan is required before this item can use a worktree
@@ -2545,6 +2589,13 @@ pub struct QueueStatusData {
     pub queue_state: String,
     /// Compact queue counts derived from the detailed work queue view.
     pub counts: QueueStatusCounts,
+    /// First ready backlog item identifier in execution order, when one exists.
+    #[schemars(regex(pattern = "^[A-Z][A-Z0-9]+-[0-9]+$"), example = example_item_id())]
+    pub next_ready_item_id: Option<String>,
+    /// Overall lifecycle weight for this queue status. This describes the
+    /// existing workflow path; it does not choose work for the host model.
+    #[schemars(with = "WorkLifecycleModeSchema")]
+    pub lifecycle_mode: String,
     /// Top ready backlog items in execution order.
     pub top_ready_items: Vec<QueueStatusItem>,
     /// Top blocked backlog items in execution or dependency order.
@@ -2620,6 +2671,9 @@ pub struct QueueStatusItem {
     /// Queue state for this item.
     #[schemars(with = "WorkQueueStateSchema")]
     pub queue_state: String,
+    /// Lifecycle weight for this item.
+    #[schemars(with = "WorkLifecycleModeSchema")]
+    pub lifecycle_mode: String,
     /// Short human-readable description for the queue state.
     pub state_description: String,
     /// Recommended Platypus MCP tool to call next for this item.
@@ -2824,6 +2878,9 @@ pub struct InspectSessionCompact {
     pub total_items: Option<usize>,
     /// Count of runnable or ready items when queue inspection succeeded.
     pub runnable_items: Option<usize>,
+    /// Compact setup health derived from the same deterministic checks used by
+    /// doctor_snapshot and workflow inspection.
+    pub health: SessionHealthSummary,
     /// Recommended Platypus MCP tool to call next.
     pub recommended_tool: String,
     /// Human-readable reason for the recommendation.
@@ -2834,6 +2891,28 @@ pub struct InspectSessionCompact {
     pub minimal_direct_loop: Option<DirectWorkLoop>,
     /// Non-fatal errors encountered while collecting the session snapshot.
     pub errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SessionHealthSummary {
+    /// Whether core scaffold files and backlog directories appear ready.
+    pub scaffold_ok: bool,
+    /// Whether Git metadata is ready enough for the current workflow.
+    pub git_ok: bool,
+    /// Whether backlog structure is present and non-empty.
+    pub backlog_ok: bool,
+    /// Whether workflow configuration could be inspected.
+    pub workflow_ok: bool,
+    /// Short scaffold readiness label.
+    pub scaffold: String,
+    /// Short Git readiness label.
+    pub git: String,
+    /// Short backlog readiness label.
+    pub backlog: String,
+    /// Short workflow readiness label.
+    pub workflow: String,
+    /// One-line setup health summary for compact chat output.
+    pub summary: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -3221,6 +3300,9 @@ pub struct CreatedBacklogItemsData {
     pub created: usize,
     /// Whether this result is a non-mutating preview.
     pub preview: bool,
+    /// Response detail level used for this result.
+    #[schemars(with = "BacklogCreationDetailSchema")]
+    pub detail: String,
     /// Validation result after the planning write completed.
     pub validation: BacklogValidationData,
 }
@@ -3265,8 +3347,12 @@ pub struct CreatedBacklogItemPreview {
     pub implementation_contract: String,
     /// Acceptance criteria for this item.
     pub acceptance: Vec<String>,
-    /// Exact markdown text that would be written for this backlog item.
-    pub markdown: String,
+    /// Whether exact generated markdown is included in this response.
+    pub markdown_included: bool,
+    /// Exact markdown text generated for this backlog item. Present for preview
+    /// requests and verbose successful writes; omitted from compact successful
+    /// writes to keep batch responses scan-friendly.
+    pub markdown: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
