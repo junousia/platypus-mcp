@@ -43,8 +43,9 @@ Tool preloading is optional and host-specific. Hosts can call
 `platypus-tool-preload` for compact discovery metadata covering Startup,
 Backlog Planning, Direct Execution, Worker Handoff, Evidence And Findings, and
 Recovery. Toolsets are not required workflow steps or separate MCP servers.
-Hosts without preloading support should use the same tools normally as the
-workflow requires them.
+These are advisory search hints and selectors unless the host explicitly
+supports automatic schema registration. Hosts without preloading support should
+use the same tools normally as the workflow requires them.
 
 ## Principles
 
@@ -178,6 +179,8 @@ include literal ToolSearch selectors and a response-level batch selector.
 Codex-style text-search hosts should use `codex_tool_search_query` or
 response-level `host_neutral_tool_search_query`; opencode and other callers can
 use `tool_name` or `host_neutral_query` values with their own discovery UI.
+These fields are advisory discovery hints, not a guarantee that the host has
+automatically registered every schema.
 
 `init_project` also installs project-local agent and workflow guidance. That is
 intentional: once an MCP host enters an initialized directory, normal goal
@@ -237,6 +240,63 @@ This is a traceability tradeoff: it avoids worktree overhead for small tasks
 while still recording the durable completion. Use task plans, worker handoff,
 findings, and integration gates for long-lived, parallel, or review-sensitive
 product development.
+
+### Minimal Direct Work Example
+
+Use this path for sustained tracked work that is small enough to edit in the
+manager workspace. It is not meant to replace a host's one-shot scaffold
+command when the user explicitly wants disposable quick prototyping.
+
+1. Create a tiny direct item:
+
+```json
+{
+  "tool": "create_backlog_items",
+  "arguments": {
+    "items": [
+      {
+        "client_key": "docs_note",
+        "title": "Document local setup note",
+        "type": "docs",
+        "area": "docs",
+        "goal": "Add one setup note to README.md.",
+        "owned_surfaces": ["README.md"],
+        "acceptance": ["README.md explains the local setup note."]
+      }
+    ]
+  }
+}
+```
+
+The successful compact response includes the created ID, path, normalized
+metadata, inline validation status, and `next_action`; it omits generated
+Markdown unless `detail=verbose` or `preview=true` is used.
+
+2. Call `inspect_work_queue`. If it returns `queue_state=direct_ready`, note
+   `next_ready_item_id` and the first item's `lifecycle_mode=simple_direct`.
+3. Edit `README.md` in the manager workspace and run the relevant check.
+4. Complete the item with inline evidence:
+
+```json
+{
+  "tool": "complete_backlog_item",
+  "arguments": {
+    "item_id": "PROJ-001",
+    "summary": "Documented the local setup note.",
+    "changed_files": ["README.md"],
+    "verification_status": "passed",
+    "verification_summary": "Documentation review passed.",
+    "verification_refs": ["manual:readme-review"]
+  }
+}
+```
+
+The response includes `generated_evidence` and `evidence_behavior`. With the
+default `record_auto_evidence=true`, Platypus records completion evidence and,
+when verification fields are present, verification evidence. Explicit
+`evidence_refs` are combined with automatic evidence; use
+`record_auto_evidence=false` only when explicit evidence records already cover
+the closure.
 
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime

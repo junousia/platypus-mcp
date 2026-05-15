@@ -353,7 +353,96 @@ fn agents_doc() -> String {
 }
 
 fn claude_doc() -> String {
-    agent_guidance_doc("Claude Instructions")
+    claude_guidance_doc()
+}
+
+fn claude_guidance_doc() -> String {
+    r#"# Claude Instructions
+
+This repository uses Platypus MCP as its spec-driven development control
+surface. When the MCP server is available, prefer Platypus tools over ad hoc
+task tracking.
+
+## Startup
+
+1. If Claude has deferred schemas, load the startup schema with
+   `select:mcp__platypus__inspect_session`.
+2. Call `inspect_session` first in a fresh or stale session.
+3. Follow `recommended_tool`, `reason`, `params`, and
+   `schemas_likely_needed_next` from tool results.
+
+`inspect_session` may replace separate startup calls to `doctor_snapshot`,
+`inspect_status`, `inspect_workflow_config`, `inspect_queue_status`, and
+`inspect_work_queue` when it succeeds. Use `detail=verbose` only for embedded
+doctor/status/workflow/queue payloads or explicit recovery diagnostics.
+
+## Exact Workflow
+
+Read this table top to bottom. The first matching state wins. Do not infer
+hidden state from chat history.
+
+| State | Detect with | Match condition | Required next action |
+| --- | --- | --- | --- |
+| `unknown` | session start | state was not freshly inspected | `inspect_session` |
+| `needs_scaffold` | `doctor_snapshot` | scaffold files are missing | `init_project`, then `doctor_snapshot` |
+| `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; `create_backlog_items`, then `inspect_work_queue` |
+| `dependency_blocked` | `inspect_work_queue` | dependency-blocked items exist and no runnable item is selected | `inspect_item`; close or create dependencies |
+| `plan_missing` | `inspect_work_queue` | an item recommends `write_task_plan` | `write_task_plan`, then `validate_task_plan` |
+| `approval_blocked` | `inspect_work_queue` | `queue_state == "approval_blocked"` | `request_planning_approval`, then `approval_respond` |
+| `config_blocked` | `inspect_work_queue` | `queue_state == "config_blocked"` | `doctor_snapshot` and the reported recovery action |
+| `workspace_blocked` | `inspect_work_queue` | `queue_state == "workspace_blocked"` | commit, stash, or finish manager-workspace changes |
+| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | edit manager workspace, verify, then `complete_backlog_item`; optional `prepare_work` only for guidance |
+| `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | `prepare_work` or `dispatch_ready_work` |
+| `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in its worktree, then `finish_work` |
+| `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` |
+| `failed_or_unclear` | any tool result | `status == "failed"` or `recovery_action` exists | follow `recovery_action`; if unclear call `inspect_session` |
+
+## Direct quick path
+
+For tiny user-approved work, the minimum tracked loop is:
+`inspect_session`, `inspect_queue_status` or `inspect_work_queue`, edit,
+verify, `complete_backlog_item`. When
+`inspect_work_queue.items[].prepare_work_optional` is true, `prepare_work`
+only returns response-local `direct_guidance`; it does not persist a task,
+assignment, event, or worktree. Use task plans and worker handoff for
+long-lived, parallel, or review-sensitive product work.
+
+For direct completion, leave `record_auto_evidence` omitted unless there is a
+reason to disable it. Pass `verification_status`, `verification_summary`, and
+`verification_refs` in the same `complete_backlog_item` call. Explicit
+`evidence_refs` are combined with automatic evidence; they do not suppress it.
+
+## Schema Loading
+
+Tool preload guidance is advisory. Resources such as
+`platypus://guidance/tool-preload`, `platypus://tools/core-schemas`, and
+`schemas_likely_needed_next` provide advisory search hints and ToolSearch selectors;
+they do not guarantee automatic schema registration unless the host supports
+that feature. Use `inspect_toolsets` when a compact map would help. Toolset
+groups include Startup, Backlog Planning, Direct Execution, Worker Handoff,
+Evidence And Findings, and Recovery.
+
+## Critical Rules
+
+- Keep backlog markdown declarative. Do not add runtime status, task attempts,
+  PR metadata, or closure fields.
+- Use `create_backlog_items` for atomic batches; `quick_create_backlog_item`
+  only for simple single-item shorthand; `contract` only as an alias for
+  `implementation_contract`; do not put worker-profile fields in backlog
+  items.
+- Queue output states have fixed meanings: `direct_guidance`,
+  `worktree_prepared`, `not_prepared`, `direct_edit`, `run_in_worktree`,
+  `verify_or_record_risk`, `resolve_findings`, `integrate_result`,
+  `inspect_or_recover`, and `done`.
+- Use `record_finding` for limitations and required follow-up work.
+- Use `reconcile_project` when state is unclear.
+- Full workflow and execution details are available from MCP resources:
+  `platypus://guidance/workflow`, `platypus://guidance/spec-driven-development`,
+  `platypus://guidance/backlog-authoring`,
+  `platypus://guidance/worker-handoff`, and
+  `platypus://guidance/recovery`.
+"#
+    .to_string()
 }
 
 fn agent_guidance_doc(title: &str) -> String {
@@ -432,6 +521,8 @@ If your MCP host supports tool discovery or schema preloading, read
 `platypus://guidance/tool-preload` and `platypus://tools/core-schemas`, or the
 `platypus-tool-preload` prompt. Call `inspect_toolsets` when compact discovery
 metadata would help.
+These entries are advisory search hints and selectors unless the host
+explicitly supports automatic schema registration.
 
 `inspect_session` and `inspect_work_queue` return
 `schemas_likely_needed_next` with 1-4 likely next tool schemas. Use those hints
@@ -590,6 +681,7 @@ mod tests {
         assert!(agents.contains("finish_work"));
         let claude = fs::read_to_string(temp.path().join("CLAUDE.md")).expect("claude");
         assert!(claude.contains("spec-driven development"));
+        assert!(claude.contains("Claude Instructions"));
         assert!(claude.contains("inspect_queue_status"));
         assert!(claude.contains("inspect_work_queue"));
         assert!(claude.contains("first matching state"));
@@ -609,15 +701,14 @@ mod tests {
         assert!(claude.contains("Direct quick path"));
         assert!(claude.contains("contract` only as an alias"));
         assert!(claude.contains("worker-profile"));
-        assert!(claude.contains("Minimum viable direct-edit loop"));
+        assert!(claude.contains("minimum tracked loop"));
         assert!(claude.contains("prepare_work_optional"));
         assert!(claude.contains("schemas_likely_needed_next"));
-        assert!(claude.contains("Tool Naming Map"));
         assert!(claude.contains("write_task_plan"));
         assert!(!claude.contains("draft_task_plan"));
-        assert!(claude.contains("Tool Preload"));
         assert!(claude.contains("inspect_toolsets"));
-        assert!(claude.contains("advisory groups"));
+        assert!(claude.contains("advisory search hints"));
+        assert!(claude.contains("automatic schema registration"));
         assert!(claude.contains("Backlog Planning"));
         assert!(claude.contains("Worker Handoff"));
         assert!(claude.contains("Evidence And Findings"));
@@ -627,10 +718,7 @@ mod tests {
         assert!(claude.contains("dispatch_ready_work"));
         assert!(claude.contains("complete_backlog_item"));
         assert!(claude.contains("finish_work"));
-        assert_eq!(
-            agents.replace("Agent Instructions", "Shared Instructions"),
-            claude.replace("Claude Instructions", "Shared Instructions")
-        );
+        assert!(claude.len() < agents.len());
         let workflow = fs::read_to_string(temp.path().join("WORKFLOW.md")).expect("workflow");
         assert!(workflow.contains("matching state wins"));
         assert!(workflow.contains("queue_state == \"direct_ready\""));

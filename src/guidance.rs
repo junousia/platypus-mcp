@@ -4,13 +4,14 @@ use crate::{
     models::{
         ActionResult, ActionStatus, BacklogCandidate, BacklogInventoryData, BacklogInventoryItem,
         BacklogItemMarkdownState, BacklogListData, DirectWorkLoop, DirectWorkStep,
-        EffectiveExecutionPolicy, EvidenceRecord, FindingRecord, GetBacklogItemData,
-        GetBacklogItemParams, InspectItemData, InspectItemParams, InspectQueueStatusParams,
-        InspectSessionCompact, InspectSessionData, InspectSessionParams, InspectWorkQueueParams,
-        LeaseRecord, PlanningApprovalState, PlanningClassification, QueueLeaseSummary,
-        QueueStateDescription, QueueStatusCounts, QueueStatusData, QueueStatusItem,
-        QueueTaskSummary, SchemaDiscoveryHint, TaskPlanQueryParams, WorkQueueData,
-        WorkQueueInventorySummary, WorkQueueItem, WorkQueuePlanState, WorkflowConfigParams,
+        DoctorCheckStatus, DoctorSnapshotData, EffectiveExecutionPolicy, EvidenceRecord,
+        FindingRecord, GetBacklogItemData, GetBacklogItemParams, InspectItemData,
+        InspectItemParams, InspectQueueStatusParams, InspectSessionCompact, InspectSessionData,
+        InspectSessionParams, InspectWorkQueueParams, LeaseRecord, PlanningApprovalState,
+        PlanningClassification, QueueLeaseSummary, QueueStateDescription, QueueStatusCounts,
+        QueueStatusData, QueueStatusItem, QueueTaskSummary, SchemaDiscoveryHint,
+        SessionHealthSummary, TaskPlanQueryParams, WorkQueueData, WorkQueueInventorySummary,
+        WorkQueueItem, WorkQueuePlanState, WorkflowConfigData, WorkflowConfigParams,
         WorkflowExecutionConfig,
     },
     project,
@@ -168,12 +169,14 @@ pub fn inspect_session(
     let minimal_direct_loop = queue
         .as_ref()
         .and_then(|queue| queue.minimal_direct_loop.clone());
+    let health = session_health(doctor.as_ref(), workflow.as_ref());
     let compact = InspectSessionCompact {
         root: root.clone(),
         ok,
         queue_state: queue.as_ref().map(|queue| queue.queue_state.clone()),
         total_items: queue.as_ref().map(|queue| queue.inventory.total_count),
         runnable_items: queue.as_ref().map(|queue| queue.inventory.runnable_count),
+        health,
         recommended_tool: recommended_tool.clone(),
         reason: reason.clone(),
         minimal_direct_loop: minimal_direct_loop.clone(),
@@ -226,6 +229,65 @@ fn normalize_session_detail(value: Option<&str>) -> Result<String, String> {
             "unsupported detail `{value}`; use compact or verbose"
         )),
     }
+}
+
+fn session_health(
+    doctor: Option<&DoctorSnapshotData>,
+    workflow: Option<&WorkflowConfigData>,
+) -> SessionHealthSummary {
+    let scaffold_ok = doctor
+        .map(|doctor| {
+            check_passed(doctor, "project_config")
+                && check_passed(doctor, "backlog_items")
+                && check_passed(doctor, "backlog_epics")
+        })
+        .unwrap_or(false);
+    let git_ok = doctor
+        .map(|doctor| check_passed(doctor, "git_readiness"))
+        .unwrap_or(false);
+    let backlog_ok = doctor
+        .map(|doctor| check_passed(doctor, "backlog_items_count"))
+        .unwrap_or(false);
+    let workflow_ok = workflow.is_some();
+
+    let scaffold = if scaffold_ok {
+        "ready"
+    } else {
+        "needs_scaffold"
+    };
+    let git = if git_ok { "ready" } else { "needs_git" };
+    let backlog = if backlog_ok {
+        "ready"
+    } else {
+        "empty_or_missing"
+    };
+    let workflow_status = if workflow_ok {
+        "ready"
+    } else {
+        "missing_or_invalid"
+    };
+    let summary = format!(
+        "scaffold: {scaffold}; git: {git}; backlog: {backlog}; workflow: {workflow_status}"
+    );
+
+    SessionHealthSummary {
+        scaffold_ok,
+        git_ok,
+        backlog_ok,
+        workflow_ok,
+        scaffold: scaffold.to_string(),
+        git: git.to_string(),
+        backlog: backlog.to_string(),
+        workflow: workflow_status.to_string(),
+        summary,
+    }
+}
+
+fn check_passed(doctor: &DoctorSnapshotData, name: &str) -> bool {
+    doctor
+        .checks
+        .iter()
+        .any(|check| check.name == name && matches!(check.status, DoctorCheckStatus::Pass))
 }
 
 pub fn inspect_work_queue(
@@ -503,6 +565,8 @@ pub fn inspect_work_queue(
     };
     let active_count = active_filtered + active_lease_filtered;
     let queue_state = overall_queue_state(&items, &inventory, active_count);
+    let next_ready_item_id = next_ready_item_id(&items);
+    let lifecycle_mode = queue_lifecycle_mode(&queue_state, &items, &inventory);
     let minimal_direct_loop = minimal_direct_loop_for_queue(&queue_state, &items);
     let schemas_likely_needed_next =
         schema_hints_for_queue(&queue_state, &recommended_tool, &items, &inventory);
@@ -521,6 +585,8 @@ pub fn inspect_work_queue(
             queue_state,
             require_task_plan,
             ready_count,
+            next_ready_item_id,
+            lifecycle_mode,
             blocked_count,
             active_count,
             active_item_ids,
@@ -671,6 +737,8 @@ fn compact_queue_status(
         root: queue.root.clone(),
         queue_state: queue.queue_state.clone(),
         counts,
+        next_ready_item_id: queue.next_ready_item_id.clone(),
+        lifecycle_mode: queue.lifecycle_mode.clone(),
         top_ready_items,
         top_blocked_items,
         active_tasks,
@@ -874,6 +942,59 @@ fn minimal_direct_loop_for_queue(
         .map(|item| direct_work_loop(Some(item.candidate.item_id.as_str())))
 }
 
+fn next_ready_item_id(items: &[WorkQueueItem]) -> Option<String> {
+    items
+        .iter()
+        .find(|item| item.ready_to_dispatch)
+        .map(|item| item.candidate.item_id.clone())
+}
+
+fn queue_lifecycle_mode(
+    queue_state: &str,
+    items: &[WorkQueueItem],
+    inventory: &WorkQueueInventorySummary,
+) -> String {
+    if inventory.total_count == 0 {
+        return "empty".to_string();
+    }
+    if queue_state == "closed" {
+        return "closed".to_string();
+    }
+    if let Some(item) = items.iter().find(|item| item.ready_to_dispatch) {
+        return item.lifecycle_mode.clone();
+    }
+    lifecycle_mode_for_state(queue_state, None)
+}
+
+fn item_lifecycle_mode(queue_state: &str, policy: &EffectiveExecutionPolicy) -> String {
+    lifecycle_mode_for_state(queue_state, Some(policy))
+}
+
+fn lifecycle_mode_for_state(
+    queue_state: &str,
+    policy: Option<&EffectiveExecutionPolicy>,
+) -> String {
+    match queue_state {
+        "empty_backlog" => "empty",
+        "closed" => "closed",
+        "direct_ready" => "simple_direct",
+        "ready" => "worker_handoff",
+        "active" => "active",
+        "completed_pending_integration" => "integration",
+        _ => {
+            if matches!(
+                policy.map(|policy| policy.execution_path.as_str()),
+                Some("worker_handoff")
+            ) {
+                "worker_handoff"
+            } else {
+                "blocked"
+            }
+        }
+    }
+    .to_string()
+}
+
 fn direct_work_loop(item_id: Option<&str>) -> DirectWorkLoop {
     DirectWorkLoop {
         item_id: item_id.map(str::to_string),
@@ -916,6 +1037,7 @@ fn queue_status_item_from_work_item(item: &WorkQueueItem) -> QueueStatusItem {
         priority: item.candidate.priority.clone(),
         area: item.candidate.area.clone(),
         queue_state: item.queue_state.clone(),
+        lifecycle_mode: item.lifecycle_mode.clone(),
         state_description: queue_state_description(&item.queue_state).to_string(),
         recommended_tool: item.recommended_tool.clone(),
         reason: item.reason.clone(),
@@ -929,6 +1051,7 @@ fn queue_status_item_from_inventory_item(item: &BacklogInventoryItem) -> QueueSt
         priority: item.priority.clone(),
         area: item.area.clone(),
         queue_state: "dependency_blocked".to_string(),
+        lifecycle_mode: "blocked".to_string(),
         state_description: queue_state_description("dependency_blocked").to_string(),
         recommended_tool: "inspect_item".to_string(),
         reason: if item.open_dependencies.is_empty() {
@@ -1841,6 +1964,7 @@ fn work_queue_item(
     };
     let (execution_path, completion_tool, task_plan_required_for_worktree, execution_guidance) =
         execution_metadata(&queue_state, &effective_policy);
+    let lifecycle_mode = item_lifecycle_mode(&queue_state, &effective_policy);
     let prepare_work_optional = queue_state == "direct_ready"
         && effective_policy.execution_path == execution_policy::DIRECT_EDIT
         && effective_policy.planning_gate == execution_policy::GATE_NONE;
@@ -1855,6 +1979,7 @@ fn work_queue_item(
         effective_policy,
         queue_state,
         execution_path,
+        lifecycle_mode,
         completion_tool,
         task_plan_required_for_worktree,
         prepare_work_optional,
@@ -1937,6 +2062,7 @@ fn apply_execution_metadata(item: &mut WorkQueueItem) {
     let (execution_path, completion_tool, task_plan_required_for_worktree, execution_guidance) =
         execution_metadata(&item.queue_state, &item.effective_policy);
     item.execution_path = execution_path;
+    item.lifecycle_mode = item_lifecycle_mode(&item.queue_state, &item.effective_policy);
     item.completion_tool = completion_tool;
     item.task_plan_required_for_worktree = task_plan_required_for_worktree;
     item.execution_guidance = execution_guidance;

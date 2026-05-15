@@ -27,8 +27,10 @@ model turns, and external worker execution.
 
 If the host supports deferred schema preloading, first read
 `platypus://guidance/tool-preload` and `platypus://tools/core-schemas`, or the
-`platypus-tool-preload` prompt. Call `inspect_toolsets` when compact discovery
-metadata would help.
+`platypus-tool-preload` prompt. These resources provide advisory search hints
+and selectors unless the host explicitly supports automatic schema
+registration. Call `inspect_toolsets` when compact discovery metadata would
+help.
 
 ## Exact Decision Table
 
@@ -159,6 +161,8 @@ After successful direct completion, use `inspect_work_queue` for the normal
 next item. `reconcile_project` is optional audit/recovery for direct work:
 call it when a tool failed, state is unclear, verification or finding evidence
 may be missing, or stale task lifecycle state needs inspection.
+For a concrete minimal direct example, read `docs/workflow.md` section
+`Minimal Direct Work Example` in repositories initialized from this server.
 
 The host should present this as natural assistance, not as a manual ceremony:
 explain what is being structured, ask for approval only when choices matter,

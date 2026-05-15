@@ -92,15 +92,17 @@ project session with the same deterministic opening sequence:
    `platypus-tool-preload`.
 3. If the client supports deferred schema preloading, call `inspect_toolsets`
    or read `platypus://tools/core-schemas` / `platypus-tool-preload` for
-   advisory discovery metadata. Toolsets are not required workflow steps or
-   separate MCP servers.
+   advisory discovery metadata. These entries are search hints and selectors
+   unless the host explicitly supports automatic schema registration. Toolsets
+   are not required workflow steps or separate MCP servers.
 4. Call `inspect_session`. If the client cannot use that broad snapshot, call
    `doctor_snapshot`, `inspect_status`, `inspect_workflow_config`,
    `inspect_queue_status`, then `inspect_work_queue` as needed.
 
 Tool schemas are delivered by the MCP client and may be deferred until a tool
 is discovered or selected. Schema preloading is a client convenience, not a
-Platypus requirement; when it is awkward, call the same tools on demand.
+Platypus requirement or guarantee; when it is awkward, call the same tools on
+demand.
 `inspect_session` and `inspect_work_queue` also return
 `schemas_likely_needed_next` with 1-4 likely next tool schemas. Claude entries
 include literal ToolSearch selectors and a response-level batch selector.

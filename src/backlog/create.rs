@@ -276,6 +276,13 @@ pub fn create_backlog_items(
 ) -> ActionResult<CreatedBacklogItemsData> {
     let action = "create_backlog_items";
     let preview = params.preview;
+    let detail = match normalize_creation_detail(params.detail.as_deref()) {
+        Ok(detail) => detail,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not create backlog items.", error)
+        }
+    };
+    let include_markdown = preview || detail == "verbose";
     let root = match resolve_root(default_root, params.root.as_deref()) {
         Ok(root) => root,
         Err(error) => {
@@ -520,6 +527,7 @@ pub fn create_backlog_items(
                 &item_type,
                 &epic,
                 &text,
+                include_markdown,
             ),
             text,
         });
@@ -563,6 +571,7 @@ pub fn create_backlog_items(
                 root: root.display().to_string(),
                 created: 0,
                 preview: true,
+                detail: detail.to_string(),
                 items,
                 validation,
             }),
@@ -624,6 +633,7 @@ pub fn create_backlog_items(
             root: root.display().to_string(),
             created: items.len(),
             preview: false,
+            detail: detail.to_string(),
             items,
             validation,
         }),
@@ -1162,6 +1172,7 @@ fn created_item_preview(
     item_type: &str,
     epic: &str,
     markdown: &str,
+    include_markdown: bool,
 ) -> CreatedBacklogItemPreview {
     CreatedBacklogItemPreview {
         title: normalized.title.clone(),
@@ -1174,7 +1185,23 @@ fn created_item_preview(
         goal: normalized.goal.clone(),
         implementation_contract: normalized.contract.clone(),
         acceptance: normalized.acceptance.clone(),
-        markdown: markdown.to_string(),
+        markdown_included: include_markdown,
+        markdown: include_markdown.then(|| markdown.to_string()),
+    }
+}
+
+fn normalize_creation_detail(value: Option<&str>) -> Result<&'static str, String> {
+    match value
+        .unwrap_or("compact")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "" | "compact" => Ok("compact"),
+        "verbose" => Ok("verbose"),
+        value => Err(format!(
+            "unsupported detail `{value}`; use compact or verbose"
+        )),
     }
 }
 
