@@ -428,7 +428,7 @@ parallel product development.
 
 If your MCP host supports tool discovery or schema preloading, read
 `platypus://guidance/tool-preload` or the `platypus-tool-preload` prompt and
-load only the group needed for the current phase:
+call `inspect_toolsets` when compact discovery metadata would help.
 
 `inspect_session` and `inspect_work_queue` return
 `schemas_likely_needed_next` with 1-4 likely next tool schemas. Use those hints
@@ -438,37 +438,9 @@ Codex-style text-search hosts should use `codex_tool_search_query` or
 `host_neutral_tool_search_query`. Other hosts should use `tool_name` or
 `host_neutral_query` values with their own discovery UI.
 
-- Startup Inspection Group at session start or after stale chat context:
-  `inspect_session`, `doctor_snapshot`, `inspect_status`,
-  `inspect_workflow_config`, `inspect_queue_status`.
-- Backlog Planning Group before backlog shaping or task-plan work:
-  `create_backlog_item`, `quick_create_backlog_item`,
-  `create_backlog_items`, `create_epic`, `list_epics`, `validate_backlog`,
-  `list_backlog`, `get_backlog_item`, `inspect_queue_status`, `inspect_work_queue`,
-  `inspect_item`, `write_task_plan`, `validate_task_plan`,
-  `inspect_task_plan`, `request_planning_approval`, `approval_respond`.
-- Direct Execution Group before manager-workspace direct edits:
-  `inspect_session`, `inspect_queue_status`, `inspect_work_queue`,
-  `prepare_work`, `complete_backlog_item`, `record_verification_evidence`,
-  `record_finding`, `validate_findings`, `reconcile_project`.
-- Worker Handoff Group before worktree handoff and external-worker execution:
-  `inspect_work_queue`, `inspect_session`, `prepare_work`,
-  `dispatch_ready_work`, `commit_planning_artifacts`, `generate_task_bundle`,
-  `inspect_task`, `inspect_task_events`, `events_replay`, `worktree_status`,
-  `inspect_worktree_changes`, `send_worker_guidance`, `start_worker_task`,
-  `record_worker_progress`, `complete_worker_task`, `finish_work`,
-  `run_task_verification`, `inspect_integration_gates`,
-  `integrate_worker_result`, `worktree_cleanup`.
-- Evidence And Findings Group before audit or follow-up work:
-  `record_evidence`, `record_verification_evidence`, `list_evidence`,
-  `record_finding`, `list_findings`, `validate_findings`,
-  `update_finding_disposition`.
-- Recovery Group after a failed tool result, `recovery_action`, or unclear
-  lifecycle state: `doctor_snapshot`, `inspect_session`, `inspect_work_queue`,
-  `events_replay`, `inspect_task_events`, `approval_list`,
-  `approval_respond`, `list_evidence`, `list_findings`, `validate_findings`,
-  `update_finding_disposition`, `inspect_integration_gates`,
-  `reconcile_project`.
+`inspect_toolsets` returns advisory groups for Startup, Backlog Planning,
+Direct Execution, Worker Handoff, Evidence And Findings, and Recovery. The
+groups are not required workflow steps and not separate MCP servers.
 
 Preloading is optional and host-specific. If the host cannot preload tool
 schemas, continue normally and call the same tools on demand.
@@ -478,10 +450,9 @@ schema is deferred, for example `select:mcp__platypus__inspect_session`. The
 `mcp__platypus__` prefix comes from the configured MCP server name and is not
 part of the Platypus tool name.
 
-Direct quick path: load Startup Inspection, call `inspect_session`, load Direct
-Execution, inspect for `direct_ready`, edit the manager workspace, then call
-`complete_backlog_item`. Call `prepare_work` first only when response-local
-guidance is useful.
+Direct quick path: call `inspect_session`, inspect for `direct_ready`, edit the
+manager workspace, then call `complete_backlog_item`. Call `prepare_work` first
+only when response-local guidance is useful.
 
 Alias and deprecation expectations: use `create_backlog_items` for atomic
 batches, `quick_create_backlog_item` only for simple single-item shorthand,
@@ -604,12 +575,11 @@ mod tests {
         assert!(agents.contains("write_task_plan"));
         assert!(!agents.contains("draft_task_plan"));
         assert!(agents.contains("Tool Preload"));
-        assert!(agents.contains("Startup Inspection Group"));
-        assert!(agents.contains("Backlog Planning Group"));
-        assert!(agents.contains("Direct Execution Group"));
-        assert!(agents.contains("Worker Handoff Group"));
-        assert!(agents.contains("Evidence And Findings Group"));
-        assert!(agents.contains("Recovery Group"));
+        assert!(agents.contains("inspect_toolsets"));
+        assert!(agents.contains("advisory groups"));
+        assert!(agents.contains("Backlog Planning"));
+        assert!(agents.contains("Worker Handoff"));
+        assert!(agents.contains("Evidence And Findings"));
         assert!(agents.contains("request_planning_approval"));
         assert!(agents.contains("prepare_work"));
         assert!(agents.contains("dispatch_ready_work"));
@@ -643,12 +613,11 @@ mod tests {
         assert!(claude.contains("write_task_plan"));
         assert!(!claude.contains("draft_task_plan"));
         assert!(claude.contains("Tool Preload"));
-        assert!(claude.contains("Startup Inspection Group"));
-        assert!(claude.contains("Backlog Planning Group"));
-        assert!(claude.contains("Direct Execution Group"));
-        assert!(claude.contains("Worker Handoff Group"));
-        assert!(claude.contains("Evidence And Findings Group"));
-        assert!(claude.contains("Recovery Group"));
+        assert!(claude.contains("inspect_toolsets"));
+        assert!(claude.contains("advisory groups"));
+        assert!(claude.contains("Backlog Planning"));
+        assert!(claude.contains("Worker Handoff"));
+        assert!(claude.contains("Evidence And Findings"));
         assert!(claude.contains("execution"));
         assert!(claude.contains("request_planning_approval"));
         assert!(claude.contains("prepare_work"));

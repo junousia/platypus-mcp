@@ -75,6 +75,47 @@ pub struct RootParams {
     pub root: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InspectToolsetsParams {
+    /// Optional toolset name to return. Use startup, backlog_planning,
+    /// direct_execution, worker_handoff, evidence_findings, or recovery.
+    pub toolset: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ToolsetData {
+    /// Total number of available Platypus toolsets.
+    pub total: usize,
+    /// Number of toolsets returned by this response.
+    pub returned: usize,
+    /// Toolset discovery records returned by this response.
+    pub toolsets: Vec<ToolsetInfo>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ToolsetInfo {
+    /// Stable toolset identifier.
+    pub name: String,
+    /// Human-readable display title for this toolset.
+    pub title: String,
+    /// Human-readable purpose for this toolset.
+    pub purpose: String,
+    /// Workflow phase or state where this toolset is useful.
+    pub when_to_use: String,
+    /// Recommended first Platypus MCP tool to call when entering this toolset.
+    pub recommended_first_tool: String,
+    /// Platypus MCP tool names included in this toolset.
+    pub tools: Vec<String>,
+    /// Claude ToolSearch selector that can load this toolset when the MCP
+    /// server is configured as `platypus`.
+    pub claude_selector: String,
+    /// Codex-oriented text query for tool_search or similar text-based tool
+    /// discovery.
+    pub codex_query: String,
+    /// Host-neutral search phrase for clients with their own discovery UI.
+    pub host_neutral_query: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum BacklogPrioritySchema {

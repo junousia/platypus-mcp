@@ -17,7 +17,7 @@ use crate::{
         GitHubIssueImportData, ImportGitHubIssuesParams, InitProjectParams,
         InspectDependencyGraphParams, InspectIntegrationGatesParams, InspectItemData,
         InspectItemParams, InspectQueueStatusParams, InspectSessionData, InspectSessionParams,
-        InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
+        InspectTaskEventsParams, InspectTaskParams, InspectToolsetsParams, InspectWorkQueueParams,
         InspectWorkerAssignmentParams, IntegrateWorkerResultParams, IntegrationGateData,
         LeaseListData, LeaseRecordData, LimitParams, ListEpicsData, ListEvidenceParams,
         ListFindingsParams, ListLeasesParams, PingData, PingParams, PrepareWorkData,
@@ -30,14 +30,14 @@ use crate::{
         StartWorkerExecutionParams, StorageCapabilityProbeData, StorageCapabilityProbeParams,
         TaskBundleData, TaskEventListData, TaskPlanData, TaskPlanItemParams, TaskPlanListData,
         TaskPlanQueryParams, TaskPlanValidationData, TaskPlanWriteData, TaskRecordData,
-        TaskVerificationRunData, UpdateBacklogItemParams, UpdateFindingDispositionParams,
-        UpdatedBacklogItemData, ValidateBacklogParams, ValidateFindingsParams, WorkQueueData,
-        WorkerAssignmentData, WorkerAssignmentEventData, WorkerGuidanceData,
-        WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams, WorktreeCleanupData,
-        WorktreeCleanupParams, WorktreeCreateParams, WorktreeData, WorktreeDiffData,
-        WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
+        TaskVerificationRunData, ToolsetData, UpdateBacklogItemParams,
+        UpdateFindingDispositionParams, UpdatedBacklogItemData, ValidateBacklogParams,
+        ValidateFindingsParams, WorkQueueData, WorkerAssignmentData, WorkerAssignmentEventData,
+        WorkerGuidanceData, WorkerResultIntegrationData, WorkflowConfigData, WorkflowConfigParams,
+        WorktreeCleanupData, WorktreeCleanupParams, WorktreeCreateParams, WorktreeData,
+        WorktreeDiffData, WorktreeDiffParams, WorktreeStatusParams, WriteTaskPlanParams,
     },
-    project, reconcile, storage, tasks, workspace,
+    project, reconcile, storage, tasks, toolsets, workspace,
 };
 use anyhow::Result as AnyhowResult;
 use rmcp::{
@@ -189,7 +189,7 @@ impl ServerHandler for PlatypusMcp {
             contents: vec![ResourceContents::TextResourceContents {
                 uri: entry.uri.to_string(),
                 mime_type: Some("text/markdown".to_string()),
-                text: entry.text.to_string(),
+                text: host_guidance::entry_text(entry),
                 meta: None,
             }],
         })
@@ -249,6 +249,25 @@ impl PlatypusMcp {
                 echo: params.message.unwrap_or_else(|| "pong".to_string()),
             },
         ))
+    }
+
+    #[tool(
+        title = "Inspect Toolsets",
+        description = "Return optional Platypus tool discovery groups without changing project state.",
+        annotations(
+            title = "Inspect Toolsets",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn inspect_toolsets(
+        &self,
+        Parameters(params): Parameters<InspectToolsetsParams>,
+    ) -> Json<ActionResult<ToolsetData>> {
+        Json(toolsets::inspect_toolsets(params))
     }
 
     #[tool(
@@ -1766,6 +1785,7 @@ mod tests {
         let names = server.tool_names();
         for expected in [
             "ping",
+            "inspect_toolsets",
             "inspect_status",
             "project_status",
             "inspect_session",
@@ -1848,6 +1868,29 @@ mod tests {
     }
 
     #[test]
+    fn toolset_registry_references_existing_tools() {
+        let server = PlatypusMcp::new();
+        let names = server.tool_names();
+
+        for toolset in crate::toolsets::TOOLSETS {
+            assert!(
+                names.contains(toolset.recommended_first_tool),
+                "{} recommended missing tool {}",
+                toolset.name,
+                toolset.recommended_first_tool
+            );
+            for tool in toolset.tools {
+                assert!(
+                    names.contains(*tool),
+                    "{} references missing tool {}",
+                    toolset.name,
+                    tool
+                );
+            }
+        }
+    }
+
+    #[test]
     fn active_guidance_uses_available_tool_names_and_published_aliases() {
         let server = PlatypusMcp::new();
         let names = server.tool_names();
@@ -1879,7 +1922,7 @@ mod tests {
 
         let guidance = host_guidance::GUIDANCE
             .iter()
-            .map(|entry| entry.text)
+            .map(host_guidance::entry_text)
             .collect::<Vec<_>>()
             .join("\n");
         assert!(guidance.contains("Tool Naming Map"));

@@ -89,9 +89,9 @@ project session with the same deterministic opening sequence:
    `platypus://guidance/tool-preload`, or the equivalent prompts
    `platypus-workflow`, `platypus-project-status`, and
    `platypus-tool-preload`.
-3. If the client supports deferred schema preloading, load the Startup
-   Inspection group first. Load Backlog Planning, Direct Execution, Worker
-   Handoff, Evidence And Findings, and Recovery only when that phase starts.
+3. If the client supports deferred schema preloading, call `inspect_toolsets`
+   or read `platypus-tool-preload` for advisory discovery metadata. Toolsets
+   are not required workflow steps or separate MCP servers.
 4. Call `inspect_session`. If the client cannot use that broad snapshot, call
    `doctor_snapshot`, `inspect_status`, `inspect_workflow_config`,
    `inspect_queue_status`, then `inspect_work_queue` as needed.
@@ -110,8 +110,9 @@ Claude Code can load deferred schemas with ToolSearch selectors such as
 MCP server name.
 
 The direct-work quick path is `inspect_session` -> queue inspection -> host
-file edits -> `complete_backlog_item`. When queue output says
-`prepare_work_optional=true`, `prepare_work` is optional and only returns
+file edits -> `complete_backlog_item`. Call `inspect_toolsets` only when the
+host needs compact discovery metadata for a workflow phase. When queue output
+says `prepare_work_optional=true`, `prepare_work` is optional and only returns
 response-local guidance. Use worker handoff only when the backlog item or
 workflow policy says `execution_path=worker_handoff`.
 

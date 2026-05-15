@@ -34,12 +34,12 @@ Equivalent prompts are available as `platypus-workflow`,
 `platypus-tool-preload`, `platypus-backlog-authoring`, `platypus-worker-handoff`,
 `platypus-integration-review`, and `platypus-recovery`.
 
-Tool preloading is optional and host-specific. Hosts that support deferred
-schema preloading should read `platypus-tool-preload` at session start, load
-Startup Inspection first, then load Backlog Planning, Direct Execution, Worker
-Handoff, Evidence And Findings, or Recovery only when the workflow reaches that
-phase. Hosts without preloading support should use the same tools normally as
-the workflow requires them.
+Tool preloading is optional and host-specific. Hosts can call
+`inspect_toolsets` or read `platypus-tool-preload` for compact discovery
+metadata covering Startup, Backlog Planning, Direct Execution, Worker Handoff,
+Evidence And Findings, and Recovery. Toolsets are not required workflow steps
+or separate MCP servers. Hosts without preloading support should use the same
+tools normally as the workflow requires them.
 
 ## Principles
 

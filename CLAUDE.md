@@ -23,10 +23,11 @@ back deterministically to `doctor_snapshot`, `inspect_status`,
 needed.
 
 Tool schemas are client-driven and may be deferred until discovery or
-selection. If Claude can preload schemas, load the Startup Inspection group
-first, then load Backlog Planning, Direct Execution, Worker Handoff, Evidence
-And Findings, or Recovery only when that phase starts. If preloading is awkward
-or unavailable, call the same tools on demand.
+selection. Use `inspect_toolsets` when Claude needs compact discovery metadata
+for Startup, Backlog Planning, Direct Execution, Worker Handoff, Evidence And
+Findings, or Recovery. These toolsets are advisory metadata, not required
+workflow steps and not separate MCP servers. If preloading is awkward or
+unavailable, call the same tools on demand.
 `inspect_session` and `inspect_work_queue` return
 `schemas_likely_needed_next` with 1-4 likely next tool schemas. Use the
 included literal ToolSearch selectors when loading deferred schemas. When
@@ -43,10 +44,10 @@ When Claude Code defers a Platypus tool schema, use ToolSearch with
 comes from the configured MCP server name; the actual Platypus tool names stay
 unprefixed in docs and tool results.
 
-Direct quick path: load Startup Inspection, call `inspect_session`, load Direct
-Execution, inspect for `direct_ready`, edit the manager workspace, then call
-`complete_backlog_item`. Call `prepare_work` first only when response-local
-guidance is useful. Prefer the structured `minimal_direct_loop` and
+Direct quick path: call `inspect_session`, inspect for `direct_ready`, edit the
+manager workspace, then call `complete_backlog_item`. Call `prepare_work` first
+only when response-local guidance is useful. Prefer the structured
+`minimal_direct_loop` and
 `recommended_tool=complete_backlog_item` over prose when both are present.
 For direct work, pass verification fields to `complete_backlog_item` and leave
 `record_auto_evidence` omitted unless explicit evidence already exists; separate

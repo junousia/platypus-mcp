@@ -23,6 +23,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     let tools = client.list_all_tools().await?;
     let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
 
+    assert!(tool_names.contains(&"inspect_toolsets"));
     assert!(tool_names.contains(&"inspect_status"));
     assert!(tool_names.contains(&"create_backlog_item"));
     assert!(tool_names.contains(&"quick_create_backlog_item"));
@@ -406,6 +407,58 @@ async fn stdio_server_updates_backlog_item_with_validation() -> anyhow::Result<(
         fs::read_to_string(project.path().join("backlog/items/PROJ-001.md"))?,
         before
     );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_inspects_toolsets() -> anyhow::Result<()> {
+    let client = start_client(None).await?;
+
+    let all = call_tool_json(&client, "inspect_toolsets", json!({})).await?;
+    assert_stage_status("inspect_toolsets all", &all, "completed");
+    assert_eq!(all["data"]["total"], 6);
+    assert_eq!(all["data"]["returned"], 6);
+    let toolsets = all["data"]["toolsets"].as_array().expect("toolsets");
+    assert!(toolsets.iter().any(|toolset| toolset["name"] == "startup"
+        && toolset["title"] == "Startup Inspection"
+        && toolset["recommended_first_tool"] == "inspect_session"
+        && toolset["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .any(|tool| tool == "inspect_toolsets")
+        && toolset["claude_selector"]
+            .as_str()
+            .unwrap_or("")
+            .contains("mcp__platypus__inspect_session")
+        && toolset["codex_query"]
+            .as_str()
+            .unwrap_or("")
+            .contains("inspect_session")));
+
+    let filtered = call_tool_json(
+        &client,
+        "inspect_toolsets",
+        json!({ "toolset": "direct-execution" }),
+    )
+    .await?;
+    assert_stage_status("inspect_toolsets filtered", &filtered, "completed");
+    assert_eq!(filtered["data"]["returned"], 1);
+    assert_eq!(filtered["data"]["toolsets"][0]["name"], "direct_execution");
+    assert_eq!(
+        filtered["data"]["toolsets"][0]["recommended_first_tool"],
+        "inspect_work_queue"
+    );
+
+    let unknown =
+        call_tool_json(&client, "inspect_toolsets", json!({ "toolset": "missing" })).await?;
+    assert_stage_status("inspect_toolsets unknown", &unknown, "failed");
+    assert!(unknown["next_action"]
+        .as_str()
+        .unwrap_or("")
+        .contains("startup"));
 
     client.cancel().await?;
     Ok(())

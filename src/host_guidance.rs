@@ -1,3 +1,4 @@
+use crate::toolsets;
 use rmcp::model::{AnnotateAble, Prompt, PromptMessage, PromptMessageRole, RawResource, Resource};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,7 +26,7 @@ model turns, and external worker execution.
 
 If the host supports deferred schema preloading, first read
 `platypus://guidance/tool-preload` or the `platypus-tool-preload` prompt and
-load the planning startup group.
+call `inspect_toolsets` when compact discovery metadata would help.
 
 ## Exact Decision Table
 
@@ -190,166 +191,8 @@ missing state from chat context.
 
 const TOOL_PRELOAD_TEXT: &str = r#"# Tool Preload Guidance
 
-Some MCP hosts defer tool schemas until a tool is discovered, searched, or
-selected. Platypus does not require any specific preload mechanism, but hosts
-that support one should load the common groups below to reduce planning and
-execution round trips.
-
-Preloading is optional and host-specific. If the host cannot preload schemas,
-continue normally and call the tools as needed. Do not depend on hidden client
-context for core state transitions.
-
-`inspect_session` and `inspect_work_queue` return
-`schemas_likely_needed_next` with 1-4 likely next tool schemas. Use those hints
-when the host supports deferred schema loading. Claude entries include literal
-ToolSearch selectors plus a response-level `claude_toolsearch_batch_selector`.
-Codex-style text-search hosts should use `codex_tool_search_query` or
-`host_neutral_tool_search_query`. Other hosts should use `tool_name` or
-`host_neutral_query` values with their own discovery UI.
-
-Claude Code uses deferred schema discovery through ToolSearch. When using
-Claude, select tools with `select:mcp__platypus__<tool>`, for example
-`select:mcp__platypus__inspect_session` or
-`select:mcp__platypus__complete_backlog_item`. The `mcp__platypus__` prefix
-comes from the MCP server name and is not part of the Platypus tool name.
-
-The direct-work quick path is: load Startup Inspection, call
-`inspect_session`, load Direct Execution, inspect for `direct_ready`, edit the
-manager workspace, then call `complete_backlog_item`. Call `prepare_work`
-first only when response-local guidance is useful.
-
-Alias and deprecation expectations: use `create_backlog_items` for atomic
-batches, `quick_create_backlog_item` only for simple single-item shorthand,
-`contract` only as an alias for `implementation_contract`, and
-`prepare_work` for optional direct guidance or worker handoff preparation. Do
-not include worker-profile fields in backlog items.
-
-## Tool Naming Map
-
-Prefer these host-facing tool names. Compatibility aliases remain callable, but
-guidance should use the preferred name unless it is explicitly documenting an
-alias.
-
-- `inspect_status`; alias `project_status`.
-- `inspect_worktree_changes`; low-level alias `worktree_diff`.
-- `prepare_work`; low-level handoff tools `prepare_worker_handoff` and
-  `prepare_worker_assignment`.
-- `start_worker_task`; alias `start_worker_execution`.
-- `record_worker_progress`; alias `record_worker_event`.
-- `finish_work`; low-level `complete_worker_task` and alias
-  `complete_worker_execution`.
-
-## Startup Inspection Group
-
-Load at session start or whenever chat context may be stale:
-
-- `doctor_snapshot`
-- `inspect_status`
-- `inspect_workflow_config`
-- `inspect_session`
-- `inspect_queue_status`
-
-## Backlog Planning Group
-
-Load before backlog shaping, item updates, task-plan work, or planning
-approvals:
-
-- `create_backlog_item`
-- `quick_create_backlog_item`
-- `create_backlog_items`
-- `create_epic`
-- `list_epics`
-- `validate_backlog`
-- `list_backlog`
-- `get_backlog_item`
-- `inspect_queue_status`
-- `inspect_work_queue`
-- `inspect_item`
-- `write_task_plan`
-- `validate_task_plan`
-- `inspect_task_plan`
-- `request_planning_approval`
-- `approval_respond`
-
-## Direct Execution Group
-
-Load before manager-workspace direct edits and direct completion:
-
-- `inspect_session`
-- `inspect_queue_status`
-- `inspect_work_queue`
-- `prepare_work`
-- `complete_backlog_item`
-- `record_verification_evidence`
-- `record_finding`
-- `validate_findings`
-- `reconcile_project`
-
-## Worker Handoff Group
-
-Load before worktree handoff, external-worker execution, verification, and
-integration:
-
-- `inspect_work_queue`
-- `inspect_session`
-- `prepare_work`
-- `dispatch_ready_work`
-- `commit_planning_artifacts`
-- `generate_task_bundle`
-- `inspect_task`
-- `inspect_task_events`
-- `events_replay`
-- `worktree_status`
-- `inspect_worktree_changes`
-- `send_worker_guidance`
-- `start_worker_task`
-- `record_worker_progress`
-- `complete_worker_task`
-- `finish_work`
-- `complete_backlog_item`
-- `run_task_verification`
-- `record_verification_evidence`
-- `record_finding`
-- `validate_findings`
-- `inspect_integration_gates`
-- `integrate_worker_result`
-- `worktree_cleanup`
-- `reconcile_project`
-
-## Evidence And Findings Group
-
-Load before recording or inspecting audit evidence and follow-up findings:
-
-- `record_evidence`
-- `record_verification_evidence`
-- `list_evidence`
-- `record_finding`
-- `list_findings`
-- `validate_findings`
-- `update_finding_disposition`
-
-## Recovery Group
-
-Load when a tool returns `failed`, `recovery_action`, or unclear lifecycle
-state:
-
-- `doctor_snapshot`
-- `inspect_session`
-- `inspect_work_queue`
-- `events_replay`
-- `inspect_task_events`
-- `approval_list`
-- `approval_respond`
-- `list_evidence`
-- `list_findings`
-- `validate_findings`
-- `update_finding_disposition`
-- `inspect_integration_gates`
-- `reconcile_project`
-
-Hosts may load additional tools when a user asks for lower-level control. These
-groups are advisory: if a host cannot preload schemas, call the same tools on
-demand when the workflow reaches that phase.
+This guidance is generated from the Platypus toolset registry at runtime.
+Use `entry_text` for canonical resource and prompt text.
 "#;
 
 const BACKLOG_AUTHORING_TEXT: &str = r#"# Backlog Authoring Guidance
@@ -607,7 +450,7 @@ pub fn resource_list() -> Vec<Resource> {
             raw.title = Some(entry.title.to_string());
             raw.description = Some(entry.description.to_string());
             raw.mime_type = Some("text/markdown".to_string());
-            raw.size = Some(entry.text.len() as u32);
+            raw.size = Some(entry_text(entry).len() as u32);
             raw.no_annotation()
         })
         .collect()
@@ -632,6 +475,17 @@ pub fn by_prompt_name(name: &str) -> Option<&'static GuidanceEntry> {
     GUIDANCE.iter().find(|entry| entry.name == name)
 }
 
+pub fn entry_text(entry: &GuidanceEntry) -> String {
+    if entry.uri == TOOL_PRELOAD_URI {
+        toolsets::tool_preload_markdown()
+    } else {
+        entry.text.to_string()
+    }
+}
+
 pub fn prompt_messages(entry: &GuidanceEntry) -> Vec<PromptMessage> {
-    vec![PromptMessage::new_text(PromptMessageRole::User, entry.text)]
+    vec![PromptMessage::new_text(
+        PromptMessageRole::User,
+        entry_text(entry),
+    )]
 }

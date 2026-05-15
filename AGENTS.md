@@ -69,10 +69,11 @@ by listing MCP resources and prompts. Read `platypus://guidance/workflow`,
 `platypus-tool-preload`.
 
 Tool schemas are client-driven and may be deferred until discovery or
-selection. If the host supports schema preloading, load the Startup Inspection
-group first, then load Backlog Planning, Direct Execution, Worker Handoff,
-Evidence And Findings, or Recovery only when that phase starts. If preloading
-is awkward or unavailable, call the same tools on demand.
+selection. Use `inspect_toolsets` when the host needs compact discovery
+metadata for Startup, Backlog Planning, Direct Execution, Worker Handoff,
+Evidence And Findings, or Recovery. These toolsets are advisory metadata, not
+required workflow steps and not separate MCP servers. If preloading is awkward
+or unavailable, call the same tools on demand.
 `inspect_session` and `inspect_work_queue` return
 `schemas_likely_needed_next` with 1-4 likely next tool schemas; Claude hints
 include literal ToolSearch selectors and a combined
@@ -86,10 +87,10 @@ Claude Code uses ToolSearch selectors such as
 from the configured server name. Codex and opencode may expose the same schemas
 through their own MCP discovery surfaces.
 
-Direct quick path: load Startup Inspection, call `inspect_session`, load Direct
-Execution, inspect for `direct_ready`, edit the manager workspace, then call
-`complete_backlog_item`. Call `prepare_work` first only when response-local
-guidance is useful. Prefer the structured `minimal_direct_loop` and
+Direct quick path: call `inspect_session`, inspect for `direct_ready`, edit the
+manager workspace, then call `complete_backlog_item`. Call `prepare_work` first
+only when response-local guidance is useful. Prefer the structured
+`minimal_direct_loop` and
 `recommended_tool=complete_backlog_item` over prose when both are present.
 For direct work, pass verification fields to `complete_backlog_item` and leave
 `record_auto_evidence` omitted unless explicit evidence already exists; separate
@@ -111,22 +112,33 @@ unavailable, fall back to `doctor_snapshot`, `inspect_status`,
 `inspect_workflow_config`, `inspect_queue_status`, then `inspect_work_queue` as
 needed.
 
-## Initial Tool Surface
+## Core Tool Surface
 
-The first production tool set should cover:
+The core MCP surface includes:
 
+- `inspect_toolsets`
+- `inspect_session`
 - `inspect_status`
+- `inspect_work_queue`
+- `inspect_queue_status`
 - `init_project`
 - `list_backlog`
 - `validate_backlog`
 - `get_backlog_item`
 - `create_backlog_item`
-- `dispatch_next_work`
-- `inspect_task_events`
-- `send_worker_guidance`
+- `create_backlog_items`
+- `prepare_work`
+- `complete_backlog_item`
+- `dispatch_ready_work`
+- `finish_work`
+- `inspect_integration_gates`
+- `integrate_worker_result`
+- `record_evidence`
 - `list_findings`
 - `validate_findings`
 - `update_finding_disposition`
+- `events_replay`
+- `doctor_snapshot`
 
 Near-term extensions:
 
@@ -136,8 +148,6 @@ Near-term extensions:
 - `worktree_cleanup`
 - `approval_list`
 - `approval_respond`
-- `events_replay`
-- `doctor_snapshot`
 
 ## Branch And PR Workflow
 

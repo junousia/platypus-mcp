@@ -45,13 +45,12 @@ Additional phase guidance:
   `platypus-integration-review`
 - Resource `platypus://guidance/recovery` / prompt `platypus-recovery`
 
-`platypus://guidance/tool-preload` names small optional groups for clients with
-deferred tool schemas: Startup Inspection, Backlog Planning, Direct Execution,
-Worker Handoff, Evidence And Findings, and Recovery. Tool schemas are exposed
-by the MCP client and may be loaded lazily; Platypus does not require a hidden
-preload mechanism. If schema preloading is awkward in Codex, Claude, opencode,
-or another host, call the same tools normally when the workflow reaches that
-phase.
+`platypus://guidance/tool-preload` and `inspect_toolsets` expose small optional
+discovery toolsets for clients with deferred tool schemas: Startup, Backlog
+Planning, Direct Execution, Worker Handoff, Evidence And Findings, and
+Recovery. Toolsets are metadata, not required workflow steps and not separate
+MCP servers. If schema preloading is awkward in Codex, Claude, opencode, or
+another host, call the same tools normally when the workflow reaches that phase.
 
 For Claude Code, deferred schemas are loaded with ToolSearch selectors such as
 `select:mcp__platypus__inspect_session` or
@@ -60,10 +59,10 @@ the configured MCP server name plus tool separator; use unprefixed names in
 Platypus docs and tool arguments. Codex and opencode expose the same tool
 schemas through their own MCP discovery UI.
 
-Direct quick path: read the startup guidance, call `inspect_session`, load the
-Direct Execution group, inspect for `direct_ready`, edit the manager
-workspace, then call `complete_backlog_item`. Call `prepare_work` first only
-when response-local guidance is useful.
+Direct quick path: read the startup guidance, call `inspect_session`, inspect
+for `direct_ready`, edit the manager workspace, then call
+`complete_backlog_item`. Call `prepare_work` first only when response-local
+guidance is useful.
 
 Alias and deprecation expectations: `contract` is only an alias for
 `implementation_contract`, `quick_create_backlog_item` is shorthand for simple
@@ -139,6 +138,10 @@ flowchart LR
 ### Project And Configuration
 
 - `ping`: health check.
+- `inspect_toolsets`: return optional discovery metadata for Startup, Backlog
+  Planning, Direct Execution, Worker Handoff, Evidence And Findings, and
+  Recovery without splitting the MCP server or creating required workflow
+  steps.
 - `init_project`: create missing project scaffold files. Fresh CLI bootstrap
   can also run this through `bootstrap <host> --init-project`.
 - `doctor_snapshot`: read-only setup recovery preflight. It checks scaffold
