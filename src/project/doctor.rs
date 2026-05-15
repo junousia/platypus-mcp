@@ -167,7 +167,7 @@ fn backlog_count_check(root: &Path) -> DoctorCheck {
             status: DoctorCheckStatus::Warn,
             summary: "No backlog items found.".to_string(),
             next_action: Some(
-                "Use the host model to decide concrete backlog items, then call create_backlog_items and validate_backlog."
+                "Use the host model to decide concrete backlog items, then call create_backlog_items and inspect_work_queue. validate_backlog is optional after successful typed creation."
                     .to_string(),
             ),
         }

@@ -13,10 +13,10 @@ use crate::{
         EvidenceRecordData, ExternalBacklogDraftData, ExternalReportApprovalData,
         ExternalReportDispatchData, ExternalReportDraftData, FindingDispositionData,
         FindingListData, FindingRecordData, FindingValidationData, FinishWorkData,
-        FinishWorkParams, GenerateTaskBundleParams, GitHubIssueImportData,
-        ImportGitHubIssuesParams, InitProjectParams, InspectDependencyGraphParams,
-        InspectIntegrationGatesParams, InspectItemData, InspectItemParams,
-        InspectQueueStatusParams, InspectSessionData, InspectSessionParams,
+        FinishWorkParams, GenerateTaskBundleParams, GetBacklogItemData, GetBacklogItemParams,
+        GitHubIssueImportData, ImportGitHubIssuesParams, InitProjectParams,
+        InspectDependencyGraphParams, InspectIntegrationGatesParams, InspectItemData,
+        InspectItemParams, InspectQueueStatusParams, InspectSessionData, InspectSessionParams,
         InspectTaskEventsParams, InspectTaskParams, InspectWorkQueueParams,
         InspectWorkerAssignmentParams, IntegrateWorkerResultParams, IntegrationGateData,
         LeaseListData, LeaseRecordData, LimitParams, ListEpicsData, ListEvidenceParams,
@@ -371,6 +371,25 @@ impl PlatypusMcp {
         Parameters(params): Parameters<InspectItemParams>,
     ) -> Json<ActionResult<InspectItemData>> {
         Json(guidance::inspect_item(&self.default_root, params))
+    }
+
+    #[tool(
+        title = "Get Backlog Item",
+        description = "Read one backlog item markdown by id without the heavier queue, finding, evidence, or task-plan inspection.",
+        annotations(
+            title = "Get Backlog Item",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        execution(task_support = "forbidden")
+    )]
+    pub async fn get_backlog_item(
+        &self,
+        Parameters(params): Parameters<GetBacklogItemParams>,
+    ) -> Json<ActionResult<GetBacklogItemData>> {
+        Json(guidance::get_backlog_item(&self.default_root, params))
     }
 
     #[tool(
@@ -1753,6 +1772,7 @@ mod tests {
             "inspect_work_queue",
             "inspect_queue_status",
             "inspect_item",
+            "get_backlog_item",
             "list_backlog",
             "inspect_backlog_inventory",
             "inspect_dependency_graph",

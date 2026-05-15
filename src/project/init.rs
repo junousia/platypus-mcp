@@ -240,13 +240,13 @@ state from chat history.
 | --- | --- | --- | --- | --- |
 | `unknown` | session start | state was not freshly inspected | call `inspect_session` | setup, project status, workflow config, and queue facts are known |
 | `needs_scaffold` | `doctor_snapshot` | scaffold files are missing | call `init_project`, then `doctor_snapshot` | scaffold blockers are gone |
-| `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `validate_backlog` | backlog validates and queue is inspected again |
+| `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `inspect_work_queue`; `validate_backlog` is optional after successful typed creation | backlog validates inline and queue is inspected again |
 | `dependency_blocked` | `inspect_work_queue` | `inventory.dependency_blocked_count > 0` and no runnable item is selected | call `inspect_item` on the first blocked item; close or create required dependencies | blocked dependencies are resolved |
 | `plan_missing` | `inspect_work_queue` | an item recommends `write_task_plan` | host model writes an explicit plan with `write_task_plan`, then calls `validate_task_plan` | task plan validates cleanly |
 | `approval_blocked` | `inspect_work_queue` | `queue_state == "approval_blocked"` | call `request_planning_approval`, then `approval_respond` | planning approval is recorded |
 | `config_blocked` | `inspect_work_queue` | `queue_state == "config_blocked"` | call `doctor_snapshot` and follow the reported recovery action | setup blocker is resolved |
 | `workspace_blocked` | `inspect_work_queue` | `queue_state == "workspace_blocked"` | commit, stash, or finish current manager-workspace changes | worker dispatch can safely create a worktree |
-| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | optionally call `prepare_work` for guidance, or edit the manager workspace directly, then call `complete_backlog_item` | direct completion evidence or closure commit exists |
+| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | edit the manager workspace, verify, then call `complete_backlog_item`; call `prepare_work` only for optional guidance | direct completion evidence or closure commit exists |
 | `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` for one item or `dispatch_ready_work` for a batch | `run_in_worktree` handoff exists |
 | `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree; call `finish_work` | `finish_work.host_action` is returned |
 | `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` | work is integrated or a specific blocker is reported |
@@ -279,6 +279,14 @@ Minimum viable direct-edit loop for tiny, user-approved work:
 edit the manager workspace, run relevant verification, then
 `complete_backlog_item`. When `inspect_work_queue.items[].prepare_work_optional`
 is true, `prepare_work` is optional and only returns response-local guidance.
+For direct completion, leave `record_auto_evidence` omitted and pass
+`verification_status`, `verification_summary`, and `verification_refs` in the
+same `complete_backlog_item` call unless explicit `evidence_refs` already cover
+the work.
+When multiple sessions might edit the same direct item, optionally acquire a
+task-scope lease with `acquire_lease(scope=task, target_id=<item id>)` before
+editing and release it after completion. Queue tools surface active direct
+claims through `active_lease_id`; the lease is only a claim, not completion.
 This keeps a durable completion record while avoiding worktree overhead. Use
 task plans, worker handoff, findings, and integration gates for long-lived or
 parallel product development.
@@ -308,9 +316,9 @@ Use the Platypus MCP tools to keep planning reproducible:
 - `create_backlog_items` atomically writes a related set and resolves
   `depends_on_keys`.
 - `validate_backlog` checks item and epic schema. Its next action follows
-  explicit execution policy: direct work continues through `prepare_work` and
-  `complete_backlog_item`; worker handoff keeps planning-commit guidance when
-  needed for worktree dispatch.
+  explicit execution policy: direct work continues through manager-workspace
+  edits, verification, and `complete_backlog_item`; worker handoff keeps
+  planning-commit guidance when needed for worktree dispatch.
 - `inspect_queue_status` shows compact queue counts, top ready work, top
   blocked work, and active tasks.
 - `inspect_work_queue` shows runnable items, full routing state, and task-plan
@@ -327,6 +335,10 @@ Use the Platypus MCP tools to keep planning reproducible:
 - Tiny direct edits may use the minimum loop:
   `inspect_session`, queue inspection, edit, verify, and
   `complete_backlog_item`.
+- `complete_backlog_item` records direct verification evidence automatically
+  when `record_auto_evidence` is omitted and verification fields are supplied.
+- `acquire_lease(scope=task, target_id=<item id>)` is an optional direct-work
+  claim for multi-session collision avoidance; release it after completion.
 
 Do not manually maintain queue indexes or runtime status in markdown. Queue
 state is computed from backlog metadata, task-plan readiness, Platypus runtime
@@ -361,13 +373,13 @@ history.
 | --- | --- | --- | --- |
 | `unknown` | session start | state was not freshly inspected | call `inspect_session` |
 | `needs_scaffold` | `doctor_snapshot` | scaffold files are missing | call `init_project`, then `doctor_snapshot` |
-| `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `validate_backlog` |
+| `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `inspect_work_queue`; `validate_backlog` is optional after successful typed creation |
 | `dependency_blocked` | `inspect_work_queue` | `inventory.dependency_blocked_count > 0` and no runnable item is selected | call `inspect_item`; close or create required dependencies |
 | `plan_missing` | `inspect_work_queue` | an item recommends `write_task_plan` | call `write_task_plan`, then `validate_task_plan` |
 | `approval_blocked` | `inspect_work_queue` | `queue_state == "approval_blocked"` | call `request_planning_approval`, then `approval_respond` |
 | `config_blocked` | `inspect_work_queue` | `queue_state == "config_blocked"` | call `doctor_snapshot` and follow the reported recovery action |
 | `workspace_blocked` | `inspect_work_queue` | `queue_state == "workspace_blocked"` | commit, stash, or finish current manager-workspace changes |
-| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | optionally call `prepare_work`; edit manager workspace, then `complete_backlog_item` |
+| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | edit manager workspace, verify, then `complete_backlog_item`; optional `prepare_work` only for guidance |
 | `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` or `dispatch_ready_work` |
 | `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree, then `finish_work` |
 | `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` |
@@ -400,6 +412,14 @@ Minimum viable direct-edit loop for tiny, user-approved work:
 edit the manager workspace, run relevant verification, then
 `complete_backlog_item`. When `inspect_work_queue.items[].prepare_work_optional`
 is true, `prepare_work` is optional and only returns response-local guidance.
+For direct completion, leave `record_auto_evidence` omitted and pass
+`verification_status`, `verification_summary`, and `verification_refs` in the
+same `complete_backlog_item` call unless explicit `evidence_refs` already cover
+the work.
+When multiple sessions might edit the same direct item, optionally acquire a
+task-scope lease with `acquire_lease(scope=task, target_id=<item id>)` before
+editing and release it after completion. Queue tools surface active direct
+claims through `active_lease_id`; the lease is only a claim, not completion.
 This keeps a durable completion record while avoiding worktree overhead. Use
 task plans, worker handoff, findings, and integration gates for long-lived or
 parallel product development.
@@ -413,7 +433,10 @@ load only the group needed for the current phase:
 `inspect_session` and `inspect_work_queue` return
 `schemas_likely_needed_next` with 1-4 likely next tool schemas. Use those hints
 when the host supports deferred schema loading. Claude entries include literal
-ToolSearch selectors such as `select:mcp__platypus__complete_backlog_item`.
+ToolSearch selectors plus a response-level `claude_toolsearch_batch_selector`.
+Codex-style text-search hosts should use `codex_tool_search_query` or
+`host_neutral_tool_search_query`. Other hosts should use `tool_name` or
+`host_neutral_query` values with their own discovery UI.
 
 - Startup Inspection Group at session start or after stale chat context:
   `inspect_session`, `doctor_snapshot`, `inspect_status`,
@@ -421,7 +444,7 @@ ToolSearch selectors such as `select:mcp__platypus__complete_backlog_item`.
 - Backlog Planning Group before backlog shaping or task-plan work:
   `create_backlog_item`, `quick_create_backlog_item`,
   `create_backlog_items`, `create_epic`, `list_epics`, `validate_backlog`,
-  `list_backlog`, `inspect_queue_status`, `inspect_work_queue`,
+  `list_backlog`, `get_backlog_item`, `inspect_queue_status`, `inspect_work_queue`,
   `inspect_item`, `write_task_plan`, `validate_task_plan`,
   `inspect_task_plan`, `request_planning_approval`, `approval_respond`.
 - Direct Execution Group before manager-workspace direct edits:
@@ -488,7 +511,9 @@ alias.
 - Keep task plans focused on requirements, design, and executable task slices;
   do not store implementation diary or completion state in plan YAML.
 - Use `record_finding` for limitations and required follow-up work.
-- Use `record_verification_evidence` before claiming verified completion.
+- Use `complete_backlog_item` verification fields for direct completion
+  evidence. Use `record_verification_evidence` for worker handoffs, additional
+  independent evidence, or recovery after failed completion.
 - Use `reconcile_project` when state is unclear.
 "#
     )

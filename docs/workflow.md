@@ -69,7 +69,7 @@ stateDiagram-v2
     Unknown --> QueueInspection: backlog exists
 
     NeedsScaffold --> QueueInspection: init_project then doctor_snapshot
-    EmptyBacklog --> QueueInspection: create_backlog_items then validate_backlog
+    EmptyBacklog --> QueueInspection: create_backlog_items, then inspect queue
 
     QueueInspection --> DirectReady: inspect_work_queue returns direct_ready
     QueueInspection --> PlanMissing: inspect_work_queue returns planning_blocked and missing plan
@@ -90,20 +90,21 @@ stateDiagram-v2
     ActiveWork --> IntegrationReview: inspect_task or inspect_integration_gates
     IntegrationReview --> QueueInspection: integrate_worker_result then reconcile_project
     DependencyBlocked --> QueueInspection: close dependencies or inspect_item
-    ClosedQueue --> QueueInspection: create_backlog_items then validate_backlog
+    ClosedQueue --> QueueInspection: create_backlog_items, then inspect queue
 ```
 
 | State | How to identify it | Required next action |
 | --- | --- | --- |
 | Unknown | Session start or stale chat context | `inspect_session` |
 | Needs scaffold | `doctor_snapshot` reports missing project files | `init_project`, then rerun `doctor_snapshot` |
-| Empty backlog | `inspect_work_queue` reports no items | Host decides concrete items, then `create_backlog_items` and `validate_backlog` |
+| Empty backlog | `inspect_work_queue` reports no items | Host decides concrete items, then `create_backlog_items` and `inspect_work_queue`; `validate_backlog` is optional after successful typed creation |
 | Dependency blocked | `inspect_work_queue.inventory.dependency_blocked_count > 0` | `inspect_item` on the blocked item; close or create its dependencies |
 | Plan missing | `inspect_work_queue.items[].recommended_tool == "write_task_plan"` | Host writes exact plan with `write_task_plan`, then `validate_task_plan` |
 | Approval blocked | `queue_state == "approval_blocked"` | `request_planning_approval`, then `approval_respond` |
 | Config blocked | `queue_state == "config_blocked"` | `doctor_snapshot` and the reported recovery action |
 | Workspace blocked | `queue_state == "workspace_blocked"` | Commit, stash, or finish the manager-workspace change before worker dispatch |
-| Direct ready | `queue_state == "direct_ready"` | optional `prepare_work`, edit manager workspace, `complete_backlog_item` |
+| Direct ready | `queue_state == "direct_ready"` | edit manager workspace, verify, `complete_backlog_item`; optional `prepare_work` only for guidance |
+| Direct claimed | `queue_state == "active"` with `active_lease_id` | continue, renew, or release the task-scope lease before starting duplicate direct work |
 | Worker ready | `queue_state == "ready"` | `prepare_work` for one item or `dispatch_ready_work` for batch handoff |
 | Active work | `queue_state == "active"` or existing task id | `inspect_task`, `inspect_task_events`, `finish_work`, or recovery action |
 | Pending integration | `queue_state == "completed_pending_integration"` | `inspect_integration_gates`, then `integrate_worker_result` |
@@ -115,14 +116,14 @@ Queue tools emit exactly these queue states:
 
 | Queue state | Meaning | Follow-up |
 | --- | --- | --- |
-| `direct_ready` | direct manager-workspace work is executable | optional `prepare_work`, edit, `complete_backlog_item` |
+| `direct_ready` | direct manager-workspace work is executable | edit, verify, `complete_backlog_item`; optional `prepare_work` only for guidance |
 | `ready` | worker handoff can be prepared | `prepare_work` or `dispatch_ready_work` |
 | `planning_blocked` | a required task plan is missing or invalid | `write_task_plan`, then `validate_task_plan` |
 | `approval_blocked` | planning approval is required before execution | `request_planning_approval`, then `approval_respond` |
 | `dependency_blocked` | backlog dependencies are still open | `inspect_item` and close or create the dependencies |
 | `config_blocked` | project setup blocks worktree dispatch | `doctor_snapshot` and the reported recovery action |
 | `workspace_blocked` | manager workspace changes block worker dispatch | commit, stash, or finish those changes |
-| `active` | a task lifecycle already exists | `inspect_task`, `inspect_task_events`, or the recommended active-task tool |
+| `active` | a task lifecycle or direct-work lease already exists | inspect the active task, or use `list_leases`, `renew_lease`, or `release_lease` for direct claims |
 | `completed_pending_integration` | worker output is complete and awaiting integration | `inspect_integration_gates`, then `integrate_worker_result` |
 
 `prepare_work.prepared_state` is `direct_guidance`, `worktree_prepared`,
@@ -167,8 +168,10 @@ mutations, when the host needs a detailed payload, or when a previous chat
 turn may be stale.
 `inspect_session` and `inspect_work_queue` include
 `schemas_likely_needed_next` with 1-4 likely next tool schemas. Claude hints
-include literal ToolSearch selectors; Codex and opencode callers should use the
-plain `tool_name` values with their own discovery UI.
+include literal ToolSearch selectors and a response-level batch selector.
+Codex-style text-search hosts should use `codex_tool_search_query` or
+response-level `host_neutral_tool_search_query`; opencode and other callers can
+use `tool_name` or `host_neutral_query` values with their own discovery UI.
 
 `init_project` also installs project-local agent and workflow guidance. That is
 intentional: once an MCP host enters an initialized directory, normal goal
@@ -193,27 +196,28 @@ mechanism is verified.
 4. Use `update_backlog_item` for typed corrections or refinements after an item
    exists. Do this instead of hand-editing markdown when the change is a
    supported schema or section update.
-5. Run `validate_backlog`. Its `next_action` follows explicit execution
-   policy: direct-ready queues continue through `prepare_work` and
-   `complete_backlog_item`; worker-handoff queues still recommend committing
-   planning artifacts before worktree dispatch when needed.
+5. After successful `create_backlog_item(s)`, inline validation has already
+   passed. Call `inspect_work_queue` to continue. Run `validate_backlog` only
+   after manual markdown edits or when an explicit audit result is useful.
 6. Use `inspect_queue_status` for compact queue counts, top ready work, top
    blocked work, active tasks, and one-line queue-state descriptions.
 7. Use `inspect_work_queue` when the host needs full runnable candidates,
    active task state, dependency-blocked items, closed items, task-plan state,
    setup blockers, and recommended tool parameters.
-8. Use `inspect_item` when one backlog item needs full state: markdown
+8. Use `get_backlog_item` when the host only needs the bounded markdown for one
+   item. Use `inspect_item` when one backlog item needs full state: markdown
    sections, dependencies, closure state, task plan, findings, evidence, and
    the recommended next tool.
 9. Use `list_backlog` only when a compact runnable-candidate list is enough.
    Use `queue_state` as the authoritative routing signal: `direct_ready` means
-   the host can proceed through `prepare_work` and complete with
+   the host should edit the manager workspace, verify, and complete with
    `complete_backlog_item`; `ready` means worker/worktree preparation is
    possible; blocked states identify the specific recovery path.
 
 Validation does not make planning commits mandatory for direct work. Direct
-items can continue through `prepare_work` and complete with
-`complete_backlog_item`; commit first only when the host wants a checkpoint.
+items can edit the manager workspace and complete with
+`complete_backlog_item`; call `prepare_work` only for optional guidance and
+commit first only when the host wants a checkpoint.
 Worker-handoff items need committed planning context before creating worktrees.
 Use `commit_planning_artifacts` when backlog or task-plan files are the only
 pending manager-workspace changes.
@@ -366,6 +370,14 @@ is recorded. `complete_backlog_item` records direct completion evidence, a
 backlog event, and optionally a closure commit for explicit changed files. For
 worker work, the worker should operate in the assigned worktree, not in the
 manager workspace.
+
+When multiple sessions might edit the same direct item, optionally call
+`acquire_lease` with `scope=task` and `target_id=<item id>` before editing.
+This creates a lightweight active claim without a worker task. Queue inspection
+surfaces the claim through `active_lease_id` and compact `active_leases`; use
+`renew_lease` to keep working or `release_lease` after completion. This claim
+is optional for small solo edits and should not replace `complete_backlog_item`.
+
 After successful direct completion, call `inspect_work_queue` to continue.
 Run `reconcile_project` only when recovery guidance is needed, state is
 unclear, or an audit pass is desired.
@@ -409,7 +421,20 @@ so reconciliation can report the remaining gap.
 
 ## Evidence, Findings, And Reconciliation
 
-- Use `record_verification_evidence` for verification results.
+- For direct manager-workspace completion, prefer the automatic evidence fields
+  on `complete_backlog_item`: pass `verification_status`,
+  `verification_summary`, and `verification_refs` while leaving
+  `record_auto_evidence` omitted. This records completion and verification
+  evidence in one durable transition.
+- Use `record_verification_evidence` for worker-handoff verification, extra
+  independent evidence, or recovery when a direct completion call could not
+  record evidence.
+- Treat `complete_backlog_item.warnings` as review prompts, not hard failures.
+  Missing or unchanged `changed_files` can be valid for non-file, exploratory,
+  or already-committed direct work, but the warning should be explained through
+  evidence or the completion summary. Untracked paths are detected through Git
+  status, and unchanged Platypus-owned files such as backlog metadata do not
+  produce a noisy changed-file warning.
 - Use `record_evidence` kinds consistently:
   - `note`: generic rationale, manual review note, or completion context
   - `file_summary`: changed-file or inspected-surface summary

@@ -1,14 +1,14 @@
 use crate::{
     assignments, backlog, dispatch, events, evidence, execution_mode, findings, guidance,
     models::{
-        ActionResult, ActionStatus, CompleteBacklogItemData, CompleteBacklogItemParams,
-        CompleteWorkerExecutionParams, CompletionClosureState, CompletionCommitOutcome,
-        DispatchReadyWorkData, DispatchReadyWorkItem, DispatchReadyWorkParams, EvidenceRecord,
-        FinishWorkData, FinishWorkFindingInput, FinishWorkParams, GeneratedEvidenceSummary,
-        HostAction, IntegrateWorkerResultParams, PrepareWorkData, PrepareWorkParams,
-        QueueStatusData, ReconcileParams, RecordEvidenceParams, RecordFindingParams,
-        RecordVerificationEvidenceParams, WorkQueueData, WorkQueueItem, WorkerAssignment,
-        WorktreeDiffData, WorktreeDiffParams,
+        ActionResult, ActionStatus, CompleteBacklogItemCompact, CompleteBacklogItemData,
+        CompleteBacklogItemParams, CompleteWorkerExecutionParams, CompletionClosureState,
+        CompletionCommitOutcome, DispatchReadyWorkData, DispatchReadyWorkItem,
+        DispatchReadyWorkParams, EvidenceRecord, FinishWorkData, FinishWorkFindingInput,
+        FinishWorkParams, GeneratedEvidenceSummary, HostAction, IntegrateWorkerResultParams,
+        PrepareWorkData, PrepareWorkParams, QueueStatusData, ReconcileParams, RecordEvidenceParams,
+        RecordFindingParams, RecordVerificationEvidenceParams, WorkQueueData, WorkQueueItem,
+        WorkerAssignment, WorktreeDiffData, WorktreeDiffParams,
     },
     reconcile, workspace,
 };
@@ -300,6 +300,12 @@ pub fn complete_backlog_item(
             "summary is required",
         );
     }
+    let detail = match completion_detail(params.detail.as_deref()) {
+        Ok(detail) => detail,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not complete backlog item.", error)
+        }
+    };
     let inventory = backlog::inspect_backlog_inventory(default_root, params.root.as_deref(), None);
     let (root, already_closed) = match inventory {
         ActionResult {
@@ -337,23 +343,39 @@ pub fn complete_backlog_item(
                 let (queue_status, queue_status_error) =
                     completion_queue_status(default_root, &root);
                 let closure = already_closed_closure(Path::new(&root), &item_id);
+                let commit_outcome =
+                    completion_commit_outcome(params.commit.unwrap_or(false), None, true);
+                let generated_evidence = Vec::new();
+                let compact = completion_compact(
+                    &item_id,
+                    true,
+                    &closure,
+                    &commit_outcome,
+                    None,
+                    params.record_auto_evidence.unwrap_or(true),
+                    &generated_evidence,
+                    &[],
+                    queue_status.as_ref(),
+                    "Backlog item was already closed.",
+                );
+                let (queue_status, queue_status_error) =
+                    verbose_queue_status(detail, queue_status, queue_status_error);
                 Some(CompleteBacklogItemData {
                     root,
                     item_id,
                     summary: summary.to_string(),
+                    detail: detail.to_string(),
+                    compact,
+                    warnings: Vec::new(),
                     changed_files: params.changed_files,
                     evidence: Vec::new(),
                     auto_evidence_enabled: params.record_auto_evidence.unwrap_or(true),
-                    generated_evidence: Vec::new(),
+                    generated_evidence,
                     event: None,
                     commit: None,
                     closed: true,
                     closure,
-                    commit_outcome: completion_commit_outcome(
-                        params.commit.unwrap_or(false),
-                        None,
-                        true,
-                    ),
+                    commit_outcome,
                     queue_status,
                     queue_status_error,
                     host_action: HostAction {
@@ -393,6 +415,7 @@ pub fn complete_backlog_item(
             return ActionResult::failed(action, "Could not complete backlog item.", error);
         }
     }
+    let warnings = changed_file_warnings(root_path, &changed_files);
     let mut evidence_records = Vec::new();
     if record_auto_evidence {
         let completion_evidence = evidence::record_evidence(
@@ -605,10 +628,33 @@ pub fn complete_backlog_item(
         ],
     };
     let (queue_status, queue_status_error) = completion_queue_status(default_root, &root);
+    let closure = completion_closure(
+        true,
+        true,
+        commit_outcome.commit.clone(),
+        completion_evidence_refs,
+    );
+    let compact = completion_compact(
+        &item_id,
+        true,
+        &closure,
+        &commit_outcome,
+        commit.clone(),
+        record_auto_evidence,
+        &generated_evidence,
+        &warnings,
+        queue_status.as_ref(),
+        &format!("Completed direct backlog item `{item_id}`."),
+    );
+    let (queue_status, queue_status_error) =
+        verbose_queue_status(detail, queue_status, queue_status_error);
     let data = CompleteBacklogItemData {
         root,
         item_id: item_id.clone(),
         summary: summary.to_string(),
+        detail: detail.to_string(),
+        compact,
+        warnings,
         changed_files,
         evidence: evidence_records,
         auto_evidence_enabled: record_auto_evidence,
@@ -616,12 +662,7 @@ pub fn complete_backlog_item(
         event,
         commit,
         closed: true,
-        closure: completion_closure(
-            true,
-            true,
-            commit_outcome.commit.clone(),
-            completion_evidence_refs,
-        ),
+        closure,
         commit_outcome,
         queue_status,
         queue_status_error,
@@ -651,6 +692,57 @@ fn completion_queue_status(
             data: Some(data), ..
         } => (Some(data), None),
         ActionResult { summary, error, .. } => (None, Some(error.unwrap_or(summary))),
+    }
+}
+
+fn completion_detail(detail: Option<&str>) -> Result<&'static str, String> {
+    match detail.unwrap_or("compact").trim() {
+        "" | "compact" => Ok("compact"),
+        "verbose" => Ok("verbose"),
+        value => Err(format!(
+            "unsupported detail `{value}`; use compact or verbose"
+        )),
+    }
+}
+
+fn verbose_queue_status(
+    detail: &str,
+    queue_status: Option<QueueStatusData>,
+    queue_status_error: Option<String>,
+) -> (Option<QueueStatusData>, Option<String>) {
+    if detail == "verbose" {
+        (queue_status, queue_status_error)
+    } else {
+        (None, None)
+    }
+}
+
+fn completion_compact(
+    item_id: &str,
+    closed: bool,
+    closure: &CompletionClosureState,
+    commit_outcome: &CompletionCommitOutcome,
+    commit: Option<String>,
+    auto_evidence_enabled: bool,
+    generated_evidence: &[GeneratedEvidenceSummary],
+    warnings: &[String],
+    queue_status: Option<&QueueStatusData>,
+    summary: &str,
+) -> CompleteBacklogItemCompact {
+    let next_ready = queue_status.and_then(|queue| queue.top_ready_items.first());
+    CompleteBacklogItemCompact {
+        item_id: item_id.to_string(),
+        closed,
+        closure_source: closure.source.clone(),
+        commit_status: commit_outcome.status.clone(),
+        commit,
+        auto_evidence_enabled,
+        generated_evidence: generated_evidence.to_vec(),
+        warnings: warnings.to_vec(),
+        queue_state: queue_status.map(|queue| queue.queue_state.clone()),
+        next_ready_item_id: next_ready.map(|item| item.item_id.clone()),
+        recommended_tool: queue_status.map(|queue| queue.recommended_tool.clone()),
+        summary: summary.to_string(),
     }
 }
 
@@ -1643,6 +1735,56 @@ fn validate_explicit_completion_evidence(
     Ok(())
 }
 
+fn changed_file_warnings(root: &Path, paths: &[String]) -> Vec<String> {
+    if paths.is_empty() {
+        return vec![
+            "changed_files is empty; include touched paths when files changed or provide evidence_refs for non-file work."
+                .to_string(),
+        ];
+    }
+    let mut warnings = Vec::new();
+    for path in paths {
+        if !root.join(path).exists() {
+            warnings.push(format!(
+                "changed_files includes `{path}`, but that path does not exist in the manager workspace."
+            ));
+            continue;
+        }
+        let output = Command::new("git")
+            .args([
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--",
+                path,
+            ])
+            .current_dir(root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+        if let Ok(output) = output {
+            if output.status.success() && String::from_utf8_lossy(&output.stdout).trim().is_empty()
+            {
+                if is_platypus_owned_changed_file(path) {
+                    continue;
+                }
+                warnings.push(format!(
+                    "changed_files includes `{path}`, but Git does not report local changes for it."
+                ));
+            }
+        }
+    }
+    warnings
+}
+
+fn is_platypus_owned_changed_file(path: &str) -> bool {
+    path == "platy.yaml"
+        || path == "WORKFLOW.md"
+        || path == "AGENTS.md"
+        || path == "CLAUDE.md"
+        || path.starts_with("backlog/")
+}
+
 fn completion_refs(
     changed_files: &[String],
     evidence_refs: &[String],
@@ -1920,6 +2062,7 @@ mod tests {
                 record_auto_evidence: None,
                 commit: Some(false),
                 commit_message: None,
+                detail: Some("verbose".to_string()),
             },
         );
         let data = completed.data.expect("complete data");
@@ -1996,6 +2139,7 @@ mod tests {
                 record_auto_evidence: None,
                 commit: Some(true),
                 commit_message: Some("Finish readme direct work".to_string()),
+                detail: None,
             },
         );
         let data = completed.data.expect("complete data");
@@ -2057,6 +2201,7 @@ mod tests {
                 record_auto_evidence: None,
                 commit: Some(false),
                 commit_message: None,
+                detail: None,
             },
         );
         assert_eq!(first.status, ActionStatus::Completed);
@@ -2076,6 +2221,7 @@ mod tests {
                 record_auto_evidence: None,
                 commit: Some(true),
                 commit_message: None,
+                detail: Some("verbose".to_string()),
             },
         );
         let data = skipped.data.expect("skip data");
@@ -2130,6 +2276,7 @@ mod tests {
                 record_auto_evidence: None,
                 commit: Some(false),
                 commit_message: None,
+                detail: None,
             },
         );
         let data = skipped.data.expect("skip data");
@@ -2195,6 +2342,7 @@ mod tests {
                 record_auto_evidence: Some(false),
                 commit: Some(false),
                 commit_message: None,
+                detail: None,
             },
         );
         let data = completed.data.expect("complete data");
@@ -2248,6 +2396,7 @@ mod tests {
                 record_auto_evidence: Some(false),
                 commit: Some(false),
                 commit_message: None,
+                detail: None,
             },
         );
 
@@ -2257,6 +2406,139 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .contains("unknown: EVD-999"));
+    }
+
+    #[test]
+    fn complete_backlog_item_warns_about_missing_or_unchanged_files() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Readme docs",
+            "docs",
+            "docs",
+            &["README.md"],
+        );
+        fs::write(project.path().join("README.md"), "# Existing\n").expect("readme");
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+
+        let completed = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Reviewed the readme.".to_string(),
+                changed_files: vec!["README.md".to_string(), "MISSING.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: Some("Manual review only.".to_string()),
+                verification_refs: vec!["manual:review".to_string()],
+                evidence_refs: Vec::new(),
+                finding_refs: Vec::new(),
+                record_auto_evidence: None,
+                commit: Some(false),
+                commit_message: None,
+                detail: None,
+            },
+        );
+        let data = completed.data.expect("complete data");
+
+        assert_eq!(completed.status, ActionStatus::Completed);
+        assert!(data
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Git does not report local changes")));
+        assert!(data
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("does not exist")));
+        assert_eq!(data.compact.warnings, data.warnings);
+    }
+
+    #[test]
+    fn complete_backlog_item_recognizes_untracked_changed_files() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Feedback docs",
+            "docs",
+            "docs",
+            &["FEEDBACK.md"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+        fs::write(project.path().join("FEEDBACK.md"), "Useful feedback.\n").expect("feedback");
+
+        let completed = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Captured feedback.".to_string(),
+                changed_files: vec!["FEEDBACK.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: Some("Manual review only.".to_string()),
+                verification_refs: vec!["manual:review".to_string()],
+                evidence_refs: Vec::new(),
+                finding_refs: Vec::new(),
+                record_auto_evidence: None,
+                commit: Some(false),
+                commit_message: None,
+                detail: None,
+            },
+        );
+        let data = completed.data.expect("complete data");
+
+        assert_eq!(completed.status, ActionStatus::Completed);
+        assert!(!data
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Git does not report local changes")));
+    }
+
+    #[test]
+    fn complete_backlog_item_does_not_warn_for_unchanged_platypus_files() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Backlog docs",
+            "docs",
+            "docs",
+            &["backlog/items/PROJ-001.md"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+
+        let completed = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Reviewed backlog metadata.".to_string(),
+                changed_files: vec!["backlog/items/PROJ-001.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: Some("Manual review only.".to_string()),
+                verification_refs: vec!["manual:review".to_string()],
+                evidence_refs: Vec::new(),
+                finding_refs: Vec::new(),
+                record_auto_evidence: None,
+                commit: Some(false),
+                commit_message: None,
+                detail: None,
+            },
+        );
+        let data = completed.data.expect("complete data");
+
+        assert_eq!(completed.status, ActionStatus::Completed);
+        assert!(!data
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Git does not report local changes")));
     }
 
     #[test]

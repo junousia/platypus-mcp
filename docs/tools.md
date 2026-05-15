@@ -93,16 +93,19 @@ alias.
    `inspect_session`.
 2. Shape backlog: the host model decides concrete item boundaries, then calls
    `create_backlog_item`, `create_backlog_items`, `update_backlog_item`,
-   `validate_backlog`, `list_backlog`, `draft_external_backlog_items`, and
-   `import_github_issues`.
+   `validate_backlog`, `list_backlog`, `get_backlog_item`,
+   `draft_external_backlog_items`, and `import_github_issues`.
 3. Plan non-trivial work: `write_task_plan`,
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
 4. Inspect the executable queue: `inspect_queue_status` for compact triage,
    then `inspect_work_queue` when the host needs full item state and next-tool
    parameters. `inspect_session` and `inspect_work_queue` include
    `schemas_likely_needed_next` with 1-4 likely next tool schemas. Claude hints
-   include literal ToolSearch selectors; Codex and opencode callers should use
-   the plain `tool_name` values with their own discovery UI.
+   include literal ToolSearch selectors and a response-level batch selector.
+   Codex and other text-search hosts should use `codex_tool_search_query` or
+   response-level `host_neutral_tool_search_query`; opencode and other callers
+   can use `tool_name` or `host_neutral_query` values with their own discovery
+   UI.
 5. Prepare work: prefer `prepare_work`. It follows durable execution policy
    from `workflow.execution` and backlog item `execution_path`/`planning_gate`.
    It returns `direct_edit` guidance for manager-workspace work, or a
@@ -199,6 +202,9 @@ make smoke-storage
   `prepare_work` and `complete_backlog_item`; worker-handoff queues keep the
   `commit_planning_artifacts` guidance needed before worktree dispatch.
 - `list_backlog`: list runnable backlog candidates.
+- `get_backlog_item`: read one backlog item markdown by id with bounded output.
+  Use this when the host only needs the item text, not queue, finding,
+  evidence, or task-plan state.
 - `inspect_queue_status`: compact queue summary for dashboards and chat
   replies. It returns counts, top ready items, top blocked items, active tasks,
   state descriptions, closed evidence counts, and the recommended next tool
@@ -354,14 +360,33 @@ trailers.
 - `complete_backlog_item`: complete a direct host-work item without a worker
   task. It records direct completion evidence, a replayable backlog event, and
   can optionally create a closure commit for explicit `changed_files` with
-  `commit=true`. The response includes `generated_evidence` IDs and summaries
-  for records created by the completion call. Leave `record_auto_evidence`
-  omitted to preserve default traceability, or set `record_auto_evidence=false`
-  only when `evidence_refs` already point to explicit evidence records managed
-  by the host. Use this for `prepare_work` host actions of kind `direct_edit`.
+  `commit=true`. The default response uses `detail=compact`: it includes
+  closure, commit, generated evidence, and next-tool summaries but omits the
+  full queue snapshot. Use `detail=verbose` only when debugging queue state
+  after completion. The response includes `generated_evidence` IDs and
+  summaries for records created by the completion call. Leave
+  `record_auto_evidence` omitted to preserve default traceability; then pass
+  `verification_status`, `verification_summary`, and `verification_refs` in the
+  same `complete_backlog_item` call instead of separately calling
+  `record_verification_evidence`. Set `record_auto_evidence=false` only when
+  `evidence_refs` already point to explicit evidence records managed by the
+  host. Use this for `prepare_work` host actions of kind `direct_edit`.
+  The tool returns warning-only `warnings` when `changed_files` is empty, points
+  at missing paths, or names paths that Git does not currently report as
+  changed; these warnings do not block valid non-file or already-committed
+  direct work. Untracked paths are detected through Git status, and unchanged
+  Platypus-owned files such as backlog metadata are not reported as noisy
+  changed-file warnings.
   After successful direct completion, inspect the queue for the normal next
   item; run `reconcile_project` only for audit, unclear state, failed tools, or
   suspected evidence/finding gaps.
+- `acquire_lease` / `renew_lease` / `release_lease`: optional collision control
+  for direct work. To claim a direct backlog item without creating a worker
+  task, acquire a task-scope lease with `scope=task`, `target_id=<item id>`,
+  and a short `ttl_seconds`. `inspect_work_queue` and `inspect_queue_status`
+  surface active item leases as active work so another session does not pick up
+  the same direct item. Release the lease after `complete_backlog_item`, or
+  let it expire if the session is abandoned.
 - `dispatch_ready_work`: lower-level batch dispatch for executable backlog
   work. It only accepts durable `worker_handoff` items whose planning gates are
   satisfied. It checks Git readiness, dispatches up to `max_tasks` runnable
@@ -436,6 +461,9 @@ trailers.
   against an isolated in-memory backend.
 - `inspect_task_events`: replay task-scoped events.
 - `record_evidence` / `record_verification_evidence`: persist audit evidence.
+  For direct work, prefer the automatic evidence fields on
+  `complete_backlog_item`; use these tools for extra independent evidence,
+  worker-handoff verification, or recovery after a failed completion attempt.
   Use `note` for generic rationale, `file_summary` for changed-file review,
   `verification` for command/manual check results, `commit` for Git closure or
   verification trailers, `worker_finding` for worker-reported risks,
@@ -465,10 +493,11 @@ trailers.
 }
 ```
 
-When a backlog item is runnable, the result recommends `prepare_work`.
-For direct items it returns manager-workspace edit guidance. For worker-handoff
-items it may return task ids, assignment ids, worktree paths, and per-item
-skipped or failed reasons in one response. After worker handoff, use
+When a backlog item is runnable, direct-ready results recommend
+`complete_backlog_item` and include `minimal_direct_loop`. Call `prepare_work`
+only when optional response-local guidance is useful. Worker-handoff items use
+`prepare_work` or `dispatch_ready_work` to return task ids, assignment ids,
+worktree paths, and per-item skipped or failed reasons. After worker handoff, use
 `start_worker_task` when you need an explicit running transition, then
 `record_worker_progress` while
 the assignment is running. Same-session host flows can complete a prepared

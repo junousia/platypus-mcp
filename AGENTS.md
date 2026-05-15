@@ -75,8 +75,11 @@ Evidence And Findings, or Recovery only when that phase starts. If preloading
 is awkward or unavailable, call the same tools on demand.
 `inspect_session` and `inspect_work_queue` return
 `schemas_likely_needed_next` with 1-4 likely next tool schemas; Claude hints
-include literal ToolSearch selectors and other hosts can use the plain
-`tool_name` values.
+include literal ToolSearch selectors and a combined
+`claude_toolsearch_batch_selector`. Codex-style text-search hosts should use
+`codex_tool_search_query` or the response-level
+`host_neutral_tool_search_query`. Other hosts should use `tool_name` or
+`host_neutral_query` values with their own discovery UI.
 
 Claude Code uses ToolSearch selectors such as
 `select:mcp__platypus__inspect_session`; the `mcp__platypus__` prefix comes
@@ -86,7 +89,16 @@ through their own MCP discovery surfaces.
 Direct quick path: load Startup Inspection, call `inspect_session`, load Direct
 Execution, inspect for `direct_ready`, edit the manager workspace, then call
 `complete_backlog_item`. Call `prepare_work` first only when response-local
-guidance is useful.
+guidance is useful. Prefer the structured `minimal_direct_loop` and
+`recommended_tool=complete_backlog_item` over prose when both are present.
+For direct work, pass verification fields to `complete_backlog_item` and leave
+`record_auto_evidence` omitted unless explicit evidence already exists; separate
+`record_verification_evidence` calls are for extra evidence, worker handoff, or
+recovery.
+If multiple sessions might edit the same direct item, optionally claim it with
+`acquire_lease(scope=task, target_id=<item id>)`, renew while working, and
+release after `complete_backlog_item`. Queue tools show these claims through
+`active_lease_id`; the lease is not a completion record.
 
 Tool naming map: prefer `inspect_status` over alias `project_status`,
 `inspect_worktree_changes` over low-level `worktree_diff`, `start_worker_task`
@@ -107,6 +119,7 @@ The first production tool set should cover:
 - `init_project`
 - `list_backlog`
 - `validate_backlog`
+- `get_backlog_item`
 - `create_backlog_item`
 - `dispatch_next_work`
 - `inspect_task_events`

@@ -235,16 +235,23 @@ pub fn create_backlog_item(
         );
     }
     let validation = backlog_validation_data(&root, &validation, true);
-    ActionResult::completed(
-        action,
-        format!("Created backlog item {}.", item_id),
-        CreatedBacklogItemData {
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Completed,
+        summary: format!("Created backlog item {}.", item_id),
+        next_action: Some(
+            "Inline validation passed. Call inspect_work_queue to continue; run validate_backlog only after manual edits or when an explicit audit record is needed."
+                .to_string(),
+        ),
+        recovery_action: None,
+        data: Some(CreatedBacklogItemData {
             item_id,
             path: item_path.display().to_string(),
             created: true,
             validation,
-        },
-    )
+        }),
+        error: None,
+    }
 }
 
 pub fn quick_create_backlog_item(
@@ -536,17 +543,24 @@ pub fn create_backlog_items(
                 preview: write.preview,
             })
             .collect::<Vec<_>>();
-        return ActionResult::completed(
-            action,
-            format!("Previewed {} backlog item(s).", items.len()),
-            CreatedBacklogItemsData {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Completed,
+            summary: format!("Previewed {} backlog item(s).", items.len()),
+            next_action: Some(
+                "Review the preview, then call create_backlog_items with preview=false to write the batch."
+                    .to_string(),
+            ),
+            recovery_action: None,
+            data: Some(CreatedBacklogItemsData {
                 root: root.display().to_string(),
                 created: 0,
                 preview: true,
                 items,
                 validation,
-            },
-        );
+            }),
+            error: None,
+        };
     }
 
     let mut written_paths = Vec::new();
@@ -590,17 +604,24 @@ pub fn create_backlog_items(
             preview: write.preview,
         })
         .collect::<Vec<_>>();
-    ActionResult::completed(
-        action,
-        format!("Created {} backlog item(s).", items.len()),
-        CreatedBacklogItemsData {
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Completed,
+        summary: format!("Created {} backlog item(s).", items.len()),
+        next_action: Some(
+            "Inline validation passed. Call inspect_work_queue to continue; run validate_backlog only after manual edits or when an explicit audit record is needed."
+                .to_string(),
+        ),
+        recovery_action: None,
+        data: Some(CreatedBacklogItemsData {
             root: root.display().to_string(),
             created: items.len(),
             preview: false,
             items,
             validation,
-        },
-    )
+        }),
+        error: None,
+    }
 }
 
 fn failed_with_next<T: serde::Serialize + schemars::JsonSchema>(

@@ -36,13 +36,13 @@ detecting tool and do not infer hidden state from chat history.
 | --- | --- | --- | --- | --- |
 | `unknown` | session start | state was not freshly inspected | call `inspect_session` | setup, project status, workflow config, and queue facts are known |
 | `needs_scaffold` | `doctor_snapshot` | scaffold files are missing | call `init_project`, then `doctor_snapshot` | scaffold blockers are gone |
-| `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `validate_backlog` | backlog validates and queue is inspected again |
+| `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `inspect_work_queue`; `validate_backlog` is optional after successful typed creation | backlog validates inline and queue is inspected again |
 | `dependency_blocked` | `inspect_work_queue` | `inventory.dependency_blocked_count > 0` and no runnable item is selected | call `inspect_item` on the first blocked item; close or create required dependencies | blocked dependencies are resolved |
 | `plan_missing` | `inspect_work_queue` | an item recommends `write_task_plan` | host model writes an explicit plan with `write_task_plan`, then calls `validate_task_plan` | task plan validates cleanly |
 | `approval_blocked` | `inspect_work_queue` | `queue_state == "approval_blocked"` | call `request_planning_approval`, then `approval_respond` | planning approval is recorded |
 | `config_blocked` | `inspect_work_queue` | `queue_state == "config_blocked"` | call `doctor_snapshot` and follow the reported recovery action | setup blocker is resolved |
 | `workspace_blocked` | `inspect_work_queue` | `queue_state == "workspace_blocked"` | commit, stash, or finish current manager-workspace changes | worker dispatch can safely create a worktree |
-| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | optionally call `prepare_work` for guidance, or edit the manager workspace directly, then call `complete_backlog_item` | direct completion evidence or closure commit exists |
+| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | edit the manager workspace, verify, then call `complete_backlog_item`; call `prepare_work` only for optional guidance | direct completion evidence or closure commit exists |
 | `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` for one item or `dispatch_ready_work` for a batch | `run_in_worktree` handoff exists |
 | `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree; call `finish_work` | `finish_work.host_action` is returned |
 | `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` | work is integrated or a specific blocker is reported |
@@ -55,7 +55,8 @@ state name and follow the paired tool instead of inventing a hidden lifecycle.
 
 | Output | Emitted by | Meaning | Follow-up |
 | --- | --- | --- | --- |
-| `direct_ready` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | direct manager-workspace work is executable | optional `prepare_work`, edit, `complete_backlog_item` |
+| `direct_ready` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | direct manager-workspace work is executable | edit, verify, `complete_backlog_item`; optional `prepare_work` only for guidance |
+| `active` with `active_lease_id` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | direct manager-workspace work is already claimed by a task-scope lease | continue, renew, or release the lease before starting duplicate direct work |
 | `ready` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | worker handoff can be prepared | `prepare_work` or `dispatch_ready_work` |
 | `planning_blocked` | queue tools | a required task plan is missing or invalid | `write_task_plan`, then `validate_task_plan` |
 | `approval_blocked` | queue tools | planning approval is required before execution | `request_planning_approval`, then `approval_respond` |
@@ -117,10 +118,9 @@ straight to broad edits. Convert the goal into a controlled loop:
 4. For tracked control, create a small concrete backlog set with
    `create_backlog_item` or `create_backlog_items`. Keep items independently
    reviewable and executable.
-5. Run `validate_backlog` after backlog writes. Its next action follows
-   explicit execution policy: direct work continues through `prepare_work` and
-   `complete_backlog_item`; worker handoff keeps planning-commit guidance when
-   needed for worktree dispatch.
+5. After successful `create_backlog_item(s)`, inline validation has already
+   passed. Call `inspect_work_queue` to continue. Run `validate_backlog` only
+   after manual markdown edits or when an explicit audit result is useful.
 6. Use `inspect_queue_status` for compact queue counts and top ready/blocked
    work. Use `inspect_work_queue` when full readiness, task-plan state, active
    work, setup blockers, and next-tool parameters are needed.
@@ -202,7 +202,10 @@ context for core state transitions.
 `inspect_session` and `inspect_work_queue` return
 `schemas_likely_needed_next` with 1-4 likely next tool schemas. Use those hints
 when the host supports deferred schema loading. Claude entries include literal
-ToolSearch selectors such as `select:mcp__platypus__complete_backlog_item`.
+ToolSearch selectors plus a response-level `claude_toolsearch_batch_selector`.
+Codex-style text-search hosts should use `codex_tool_search_query` or
+`host_neutral_tool_search_query`. Other hosts should use `tool_name` or
+`host_neutral_query` values with their own discovery UI.
 
 Claude Code uses deferred schema discovery through ToolSearch. When using
 Claude, select tools with `select:mcp__platypus__<tool>`, for example
@@ -258,6 +261,7 @@ approvals:
 - `list_epics`
 - `validate_backlog`
 - `list_backlog`
+- `get_backlog_item`
 - `inspect_queue_status`
 - `inspect_work_queue`
 - `inspect_item`
@@ -440,6 +444,24 @@ assignment directly; it auto-starts prepared assignments by default. Set
 `auto_start_if_prepared=false` when strict running-only completion is required.
 For direct manager-workspace edits returned by `prepare_work`, do not call
 `finish_work`; call `complete_backlog_item`.
+
+For direct completion, leave `record_auto_evidence` omitted and pass
+`verification_status`, `verification_summary`, and `verification_refs` to
+`complete_backlog_item` unless you already have explicit `evidence_refs`.
+That single call records completion and verification evidence. Use
+`record_verification_evidence` for additional independent evidence,
+worker-handoff verification, or recovery after a failed completion call.
+
+When direct work may be edited by multiple sessions, use the existing lease
+tools as an optional claim: `acquire_lease(scope=task, target_id=<item id>)`
+before editing, `renew_lease` while working, and `release_lease` after
+`complete_backlog_item`. Queue tools surface these claims as active work through
+`active_lease_id` and compact `active_leases`. A claim is not a completion
+record and should not replace `complete_backlog_item`.
+
+Review `complete_backlog_item.warnings`. Missing, empty, or unchanged
+`changed_files` are warning-only because non-file and already-committed work can
+be valid; explain them through evidence or completion summary when relevant.
 
 Do not run worker edits in the manager workspace. Use `send_worker_guidance`
 for steering active work.
