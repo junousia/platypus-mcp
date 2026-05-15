@@ -236,7 +236,15 @@ pi install -l /path/to/platypus-mcp
 ```
 
 The extension forwards each `platypus_*` Pi tool to the Rust tool CLI with the
-Platypus root fixed to Pi's current working directory.
+Platypus root fixed to Pi's current working directory. The normal Pi workflow
+uses dedicated typed tools for startup and execution, including
+`platypus_inspect_session`, `platypus_inspect_work_queue`,
+`platypus_create_backlog_items`, `platypus_prepare_work`,
+`platypus_complete_backlog_item`, `platypus_finish_work`,
+`platypus_record_evidence`, `platypus_list_findings`,
+`platypus_update_finding_disposition`, and `platypus_doctor_snapshot`.
+`platypus_call_tool` remains available only as a generic escape hatch for tools
+that do not yet have a dedicated Pi wrapper.
 
 Add `--init-project` for fresh repositories so `AGENTS.md`, `CLAUDE.md`,
 `WORKFLOW.md`, `platy.yaml`, and `backlog/` are created alongside host MCP

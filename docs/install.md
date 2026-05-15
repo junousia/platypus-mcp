@@ -250,6 +250,16 @@ If the check reports that the binary cannot be resolved, install the server with
 `cargo install platypus-mcp`, install a Pi npm package that contains a bundled
 platform binary, or set `PLATYPUS_MCP_BIN` to a working `platypus-mcp` path.
 
+The Pi extension exposes dedicated typed `platypus_*` tools for the showcase
+workflow instead of asking the agent to fill a generic JSON passthrough. The
+normal set is `platypus_inspect_session`, `platypus_inspect_work_queue`,
+`platypus_create_backlog_items`, `platypus_prepare_work`,
+`platypus_complete_backlog_item`, `platypus_finish_work`,
+`platypus_record_evidence`, `platypus_list_findings`,
+`platypus_update_finding_disposition`, `platypus_events_replay`, and
+`platypus_doctor_snapshot`. Use `platypus_call_tool` only when a less common
+Rust MCP tool has no dedicated Pi wrapper yet.
+
 ## First Project Smoke Flow
 
 After configuring the client, ask the MCP host to follow the Harness Startup

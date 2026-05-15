@@ -11,6 +11,7 @@ type PlatypusTool = {
 	name: string;
 	description: string;
 	promptSnippet?: string;
+	parameters?: unknown;
 };
 
 type ReadyItem = {
@@ -54,6 +55,345 @@ const passthroughParameters = Type.Object(
 			"Arguments forwarded to the matching Platypus MCP tool. The project root is fixed to the current pi working directory and cannot be overridden.",
 	},
 );
+
+const noArgs = (description: string) =>
+	Type.Object(
+		{},
+		{
+			additionalProperties: false,
+			description,
+		},
+	);
+
+const optionalLimit = (maximum = 200) =>
+	Type.Optional(
+		Type.Integer({
+			description: `Maximum number of records to return, from 1 to ${maximum}.`,
+			minimum: 1,
+			maximum,
+		}),
+	);
+
+const stringList = (description: string) =>
+	Type.Optional(
+		Type.Array(Type.String({ minLength: 1 }), {
+			description,
+			default: [],
+		}),
+	);
+
+const itemId = (description = "Backlog item identifier, for example MCP-123.") =>
+	Type.String({
+		description,
+		pattern: "^[A-Z]+-[0-9]{3}$",
+	});
+
+const taskId = Type.String({ description: "Task identifier returned by Platypus work preparation or dispatch." });
+const assignmentId = Type.String({ description: "Worker assignment identifier returned by Platypus work preparation." });
+
+const priority = Type.Union([Type.Literal("P0"), Type.Literal("P1"), Type.Literal("P2")], {
+	description: "Backlog priority. Use P0 for urgent/foundational work, P1 for important follow-up, and P2 for lower-priority polish.",
+});
+
+const itemType = Type.Union(
+	[Type.Literal("foundation"), Type.Literal("feature"), Type.Literal("safety"), Type.Literal("ux"), Type.Literal("test"), Type.Literal("docs")],
+	{ description: "Backlog item type." },
+);
+
+const executionPath = Type.Union([Type.Literal("direct_edit"), Type.Literal("worker_handoff")], {
+	description: "Durable execution path. direct_edit means edit the manager workspace; worker_handoff means prepare isolated handoff state.",
+});
+
+const planningGate = Type.Union([Type.Literal("none"), Type.Literal("task_plan"), Type.Literal("approved_task_plan")], {
+	description: "Planning gate required before work can start.",
+});
+
+const verificationStatus = Type.Union(
+	[Type.Literal("passed"), Type.Literal("failed"), Type.Literal("skipped"), Type.Literal("not_run")],
+	{ description: "Verification status for the completed work." },
+);
+
+const workerStatus = Type.Union([Type.Literal("completed"), Type.Literal("failed"), Type.Literal("cancelled")], {
+	description: "Terminal status for a worker handoff result.",
+});
+
+const evidenceKind = Type.Union(
+	[
+		Type.Literal("commit"),
+		Type.Literal("verification"),
+		Type.Literal("file_summary"),
+		Type.Literal("worker_finding"),
+		Type.Literal("manager_disposition"),
+		Type.Literal("external_report"),
+		Type.Literal("note"),
+	],
+	{ description: "Evidence kind." },
+);
+
+const findingSeverity = Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high"), Type.Literal("critical")], {
+	description: "Severity of a worker-reported or manager-recorded finding.",
+});
+
+const findingDisposition = Type.Union(
+	[
+		Type.Literal("open"),
+		Type.Literal("accepted"),
+		Type.Literal("resolved"),
+		Type.Literal("rejected"),
+		Type.Literal("deferred"),
+		Type.Literal("duplicate"),
+	],
+	{ description: "Disposition state for a finding." },
+);
+
+const detailLevel = Type.Union([Type.Literal("compact"), Type.Literal("verbose")], {
+	description: "Response detail level. Use compact for normal workflow and verbose when debugging.",
+});
+
+const externalRef = Type.Object(
+	{
+		kind: Type.Optional(Type.String({ description: "Reference type, for example issue, pr, url, or note." })),
+		id: Type.Optional(Type.String({ description: "Provider-specific external identifier." })),
+		url: Type.Optional(Type.String({ description: "Canonical URL for this external reference." })),
+		title: Type.Optional(Type.String({ description: "Short label for this external reference." })),
+	},
+	{
+		additionalProperties: true,
+		description: "External reference attached to a backlog item.",
+	},
+);
+
+const findingInput = Type.Object(
+	{
+		title: Type.String({ description: "Human-readable finding title." }),
+		summary: Type.String({ description: "What was found and why it matters." }),
+		severity: Type.Optional(findingSeverity),
+		required: Type.Optional(Type.Boolean({ description: "Whether this finding must be dispositioned before final integration." })),
+		owner: Type.Optional(Type.String({ description: "Owner or responsible party." })),
+		evidence_refs: stringList("Evidence references that support this finding."),
+	},
+	{
+		additionalProperties: false,
+		description: "Follow-up finding discovered during worker execution.",
+	},
+);
+
+const backlogItemShape = {
+	client_key: Type.Optional(Type.String({ description: "Caller-local key used by depends_on_keys inside the same batch." })),
+	depends_on_keys: stringList("Client keys from this same batch that this item depends on."),
+	id: Type.Optional(itemId("Explicit backlog item id. Usually omit and let Platypus allocate one.")),
+	id_prefix: Type.Optional(Type.String({ description: "Uppercase prefix used when allocating an id.", pattern: "^[A-Z]+$" })),
+	title: Type.Optional(Type.String({ description: "Human-readable title. Omit when goal is enough for Platypus to derive a usable title." })),
+	priority: Type.Optional(priority),
+	type: Type.Optional(itemType),
+	area: Type.Optional(Type.String({ description: "Primary area or product surface." })),
+	epic: Type.Optional(Type.String({ description: "Existing epic id. Defaults to general when omitted." })),
+	depends_on: stringList("Existing backlog item ids that must be complete before this item."),
+	owned_surfaces: stringList("Relative paths or top-level areas expected to change."),
+	external_refs: Type.Optional(Type.Array(externalRef, { description: "External references attached to this item." })),
+	execution_path: Type.Optional(executionPath),
+	planning_gate: Type.Optional(planningGate),
+	goal: Type.Optional(Type.String({ description: "Goal text that drives this item. Omit only when title already describes the work clearly." })),
+	implementation_contract: Type.Optional(Type.String({ description: "Specific implementation contract. Do not invent fake details." })),
+	contract: Type.Optional(Type.String({ description: "Alias for implementation_contract. Provide only one of these fields." })),
+	acceptance: stringList("Acceptance criteria for this item."),
+	notes: Type.Optional(Type.String({ description: "Optional notes." })),
+};
+
+const CORE_TYPED_TOOL_NAMES = new Set<string>([
+	"inspect_session",
+	"inspect_status",
+	"inspect_work_queue",
+	"inspect_queue_status",
+	"init_project",
+	"list_backlog",
+	"validate_backlog",
+	"get_backlog_item",
+	"create_backlog_item",
+	"create_backlog_items",
+	"prepare_work",
+	"complete_backlog_item",
+	"finish_work",
+	"record_evidence",
+	"list_findings",
+	"validate_findings",
+	"update_finding_disposition",
+	"events_replay",
+	"doctor_snapshot",
+	"inspect_workflow_config",
+]);
+
+const coreToolParameters: Record<string, unknown> = {
+	inspect_session: Type.Object(
+		{
+			limit: optionalLimit(),
+			detail: Type.Optional(detailLevel),
+		},
+		{ additionalProperties: false, description: "Inspect session startup state and queue guidance." },
+	),
+	inspect_status: noArgs("Inspect high-level Platypus project status."),
+	inspect_work_queue: Type.Object(
+		{
+			limit: optionalLimit(),
+		},
+		{ additionalProperties: false, description: "Inspect ready, blocked, and active backlog work." },
+	),
+	inspect_queue_status: Type.Object(
+		{
+			limit: optionalLimit(50),
+		},
+		{ additionalProperties: false, description: "Inspect compact queue counts and top items." },
+	),
+	init_project: Type.Object(
+		{
+			project_name: Type.Optional(Type.String({ description: "Project name written into Platypus configuration." })),
+			overwrite: Type.Optional(Type.Boolean({ description: "Overwrite existing project guidance files." })),
+		},
+		{ additionalProperties: false, description: "Initialize Platypus project guidance files in Pi's current working directory." },
+	),
+	list_backlog: Type.Object(
+		{
+			limit: optionalLimit(),
+		},
+		{ additionalProperties: false, description: "List Platypus backlog items." },
+	),
+	validate_backlog: Type.Object(
+		{
+			include_errors: Type.Optional(Type.Boolean({ description: "Include validation error details." })),
+		},
+		{ additionalProperties: false, description: "Validate backlog files." },
+	),
+	get_backlog_item: Type.Object(
+		{
+			item_id: itemId(),
+		},
+		{ additionalProperties: false, description: "Inspect one backlog item." },
+	),
+	create_backlog_item: Type.Object(backlogItemShape, {
+		additionalProperties: false,
+		description: "Create one backlog item. The project root is fixed by Pi and must not be supplied.",
+	}),
+	create_backlog_items: Type.Object(
+		{
+			id_prefix: Type.Optional(Type.String({ description: "Default uppercase id prefix for items without explicit ids.", pattern: "^[A-Z]+$" })),
+			items: Type.Array(Type.Object(backlogItemShape, { additionalProperties: false }), {
+				description: "Backlog items to create atomically. If any item is invalid, no items are written.",
+				minItems: 1,
+			}),
+			preview: Type.Optional(Type.Boolean({ description: "Preview without writing files." })),
+			detail: Type.Optional(detailLevel),
+		},
+		{ additionalProperties: false, description: "Create multiple backlog items atomically." },
+	),
+	prepare_work: Type.Object(
+		{
+			item_id: Type.Optional(itemId()),
+			max_tasks: optionalLimit(10),
+			worker: Type.Optional(Type.String({ description: "Worker name to record for a worker handoff." })),
+			claimant: Type.Optional(Type.String({ description: "Name recorded as the task claimant." })),
+			execution_mode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("manual_handoff")], { description: "Execution mode to prepare." })),
+			auto_commit_artifacts: Type.Optional(Type.Boolean({ description: "Auto-commit only Platypus planning artifacts when they are the only workspace changes." })),
+			verification_command: stringList("Verification command to run or record for this item."),
+			include_queue_snapshot: Type.Optional(Type.Boolean({ description: "Include the full queue snapshot in the response." })),
+		},
+		{ additionalProperties: false, description: "Prepare direct guidance or a worker handoff." },
+	),
+	complete_backlog_item: Type.Object(
+		{
+			item_id: itemId(),
+			summary: Type.String({ description: "Human-readable summary of the completed direct work." }),
+			changed_files: stringList("Files changed by the direct work, relative to the project root."),
+			verification_status: Type.Optional(verificationStatus),
+			verification_summary: Type.Optional(Type.String({ description: "Summary of verification performed." })),
+			verification_refs: stringList("Commands, files, commits, URLs, or evidence ids supporting verification."),
+			evidence_refs: stringList("Existing evidence identifiers or references supporting completion."),
+			finding_refs: stringList("Finding identifiers reviewed for this completion."),
+			record_auto_evidence: Type.Optional(Type.Boolean({ description: "Automatically record completion and verification evidence. Defaults to true." })),
+			commit: Type.Optional(Type.Boolean({ description: "Create a Git closure commit with Platypus trailers." })),
+			commit_message: Type.Optional(Type.String({ description: "Optional closure commit subject when commit is true." })),
+			detail: Type.Optional(detailLevel),
+		},
+		{ additionalProperties: false, description: "Complete a direct-edit backlog item." },
+	),
+	finish_work: Type.Object(
+		{
+			item_id: Type.Optional(itemId("Backlog item id for direct-work recovery guidance.")),
+			assignment_id: Type.Optional(assignmentId),
+			task_id: Type.Optional(taskId),
+			status: Type.Optional(workerStatus),
+			summary: Type.String({ description: "Human-readable worker result summary." }),
+			changed_files: stringList("Files changed by the worker, relative to the task worktree."),
+			verification_status: Type.Optional(verificationStatus),
+			verification_summary: Type.Optional(Type.String({ description: "Summary of verification performed by the worker." })),
+			verification_refs: stringList("Commands, files, commits, URLs, or evidence ids supporting verification."),
+			findings: Type.Optional(Type.Array(findingInput, { description: "Findings or follow-up work discovered during implementation." })),
+			findings_reviewed: Type.Optional(Type.Boolean({ description: "Set true only when the worker explicitly checked for follow-up findings and found none." })),
+			auto_start_if_prepared: Type.Optional(Type.Boolean({ description: "Allow prepared assignments to be auto-started before completion." })),
+			integrate_if_ready: Type.Optional(Type.Boolean({ description: "Integrate the completed task when verification and finding gates permit it." })),
+			allow_unverified: Type.Optional(Type.Boolean({ description: "Explicitly permit integration without separate verification evidence." })),
+			integration_strategy: Type.Optional(Type.Union([Type.Literal("merge_commit"), Type.Literal("fast_forward"), Type.Literal("squash"), Type.Literal("apply_changed_files")], { description: "Integration strategy override." })),
+			cleanup_after: Type.Optional(Type.Boolean({ description: "Remove the task worktree after successful integration when clean." })),
+		},
+		{ additionalProperties: false, description: "Finish worker-handoff work and optionally integrate it." },
+	),
+	record_evidence: Type.Object(
+		{
+			id: Type.Optional(Type.String({ description: "Explicit evidence id. Usually omit." })),
+			source_item_id: Type.Optional(itemId("Source backlog item id.")),
+			source_task_id: Type.Optional(taskId),
+			kind: evidenceKind,
+			summary: Type.String({ description: "Human-readable evidence summary." }),
+			refs: stringList("References such as commands, files, commits, URLs, or evidence ids."),
+			metadata: Type.Optional(Type.Object({}, { additionalProperties: true, description: "Free-form evidence metadata." })),
+		},
+		{ additionalProperties: false, description: "Record traceability evidence." },
+	),
+	list_findings: Type.Object(
+		{
+			source_item_id: Type.Optional(itemId("Source backlog item id.")),
+			source_task_id: Type.Optional(taskId),
+			status: Type.Optional(findingDisposition),
+			limit: optionalLimit(100),
+		},
+		{ additionalProperties: false, description: "List findings." },
+	),
+	validate_findings: Type.Object(
+		{
+			source_item_id: Type.Optional(itemId("Source backlog item id.")),
+			source_task_id: Type.Optional(taskId),
+		},
+		{ additionalProperties: false, description: "Validate required finding disposition state." },
+	),
+	update_finding_disposition: Type.Object(
+		{
+			finding_id: Type.String({ description: "Finding identifier." }),
+			status: findingDisposition,
+			owner: Type.Optional(Type.String({ description: "Owner or responsible party." })),
+			disposition_reason: Type.Optional(Type.String({ description: "Reason for the disposition decision." })),
+			evidence_refs: stringList("Evidence references supporting this disposition."),
+			metadata: Type.Optional(Type.Object({}, { additionalProperties: true, description: "Free-form disposition metadata." })),
+		},
+		{ additionalProperties: false, description: "Update a finding disposition." },
+	),
+	events_replay: Type.Object(
+		{
+			task_id: Type.Optional(taskId),
+			scope: Type.Optional(Type.String({ description: "Event scope filter, for example project, task, backlog, or evidence." })),
+			limit: optionalLimit(),
+		},
+		{ additionalProperties: false, description: "Replay recent Platypus events." },
+	),
+	doctor_snapshot: noArgs("Inspect diagnostics and recovery guidance."),
+	inspect_workflow_config: noArgs("Inspect workflow execution and integration policy."),
+};
+
+function parametersForTool(name: string): unknown {
+	const parameters = coreToolParameters[name];
+	if (CORE_TYPED_TOOL_NAMES.has(name) && !parameters) {
+		throw new Error(`Platypus Pi core tool ${name} is missing typed parameters.`);
+	}
+	return parameters ?? passthroughParameters;
+}
 
 const platypusTools: PlatypusTool[] = [
 	{
@@ -548,7 +888,7 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 			label: `Platypus ${tool.name}`,
 			description: tool.description,
 			promptSnippet: tool.promptSnippet,
-			parameters: passthroughParameters,
+			parameters: tool.parameters ?? parametersForTool(tool.name),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				const result = await runPlatypusTool(pi, ctx, tool.name, params as JsonObject);
 				const snapshot = snapshotFromDetails(result.details);

@@ -68,6 +68,12 @@ the configured MCP server name plus tool separator; use unprefixed names in
 Platypus docs and tool arguments. Codex and opencode expose the same tool
 schemas through their own MCP discovery UI.
 
+Pi exposes the normal workflow through dedicated typed wrappers with the
+`platypus_` prefix. Prefer those wrappers for startup, queue inspection, backlog
+creation, direct completion, worker completion, evidence/findings, events, and
+doctor diagnostics. `platypus_call_tool` is intentionally retained as a generic
+escape hatch for uncommon tools, but it is not the normal showcase path.
+
 Direct quick path: read the startup guidance, call `inspect_session`, inspect
 for `direct_ready`, edit the manager workspace, then call
 `complete_backlog_item`. Call `prepare_work` first only when response-local

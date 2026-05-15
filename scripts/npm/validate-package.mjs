@@ -23,6 +23,29 @@ const requiredMetadata = {
   ],
 };
 
+const requiredCoreTypedTools = [
+  "inspect_session",
+  "inspect_status",
+  "inspect_work_queue",
+  "inspect_queue_status",
+  "init_project",
+  "list_backlog",
+  "validate_backlog",
+  "get_backlog_item",
+  "create_backlog_item",
+  "create_backlog_items",
+  "prepare_work",
+  "complete_backlog_item",
+  "finish_work",
+  "record_evidence",
+  "list_findings",
+  "validate_findings",
+  "update_finding_disposition",
+  "events_replay",
+  "doctor_snapshot",
+  "inspect_workflow_config",
+];
+
 const forbiddenPrefixes = [
   "target/",
   ".platy/",
@@ -100,6 +123,32 @@ if (!metadata || typeof metadata !== "object") {
   if (!platformPackages || typeof platformPackages !== "object" || Object.keys(platformPackages).length === 0) {
     metadataErrors.push("platypusMcp.platformBinaryPackages must document supported optional binary packages");
   }
+}
+
+const extensionSource = readFileSync("extensions/platypus/index.ts", "utf8");
+const typedToolSetMatch = extensionSource.match(/CORE_TYPED_TOOL_NAMES\s*=\s*new Set<string>\(\[([\s\S]*?)\]\)/);
+if (!typedToolSetMatch) {
+  metadataErrors.push("extensions/platypus/index.ts must define CORE_TYPED_TOOL_NAMES");
+} else {
+  const typedToolSetSource = typedToolSetMatch[1];
+  for (const toolName of requiredCoreTypedTools) {
+    if (!typedToolSetSource.includes(`"${toolName}"`)) {
+      metadataErrors.push(`Core Pi tool ${toolName} must be listed in CORE_TYPED_TOOL_NAMES`);
+    }
+  }
+}
+for (const toolName of requiredCoreTypedTools) {
+  const typedObjectPattern = new RegExp(`\\b${toolName}:\\s*(?:Type\\.|noArgs\\()`);
+  if (!typedObjectPattern.test(extensionSource)) {
+    metadataErrors.push(`Core Pi tool ${toolName} must define explicit typed parameters`);
+  }
+  const directPassthroughPattern = new RegExp(`name:\\s*"${toolName}"[\\s\\S]{0,500}parameters:\\s*passthroughParameters`);
+  if (directPassthroughPattern.test(extensionSource)) {
+    metadataErrors.push(`Core Pi tool ${toolName} must not register passthroughParameters directly`);
+  }
+}
+if (!extensionSource.includes("platypus_call_tool")) {
+  metadataErrors.push("Pi extension must keep platypus_call_tool as the generic escape hatch");
 }
 
 const packedFiles = Array.isArray(pack?.files) ? pack.files : [];
