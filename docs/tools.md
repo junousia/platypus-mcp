@@ -84,6 +84,11 @@ execution. The review prompt asks the agent to use durable direction and
 engineering standards, separate blocking issues from improvement suggestions,
 and turn approved revisions into typed `platypus_create_backlog_items`
 previews or `platypus_update_backlog_item` calls.
+Use `/platy-plan-review [item-id]` for implementation planning before
+non-trivial work starts. It asks the agent to decide between response-local
+direct guidance and durable task-plan creation, and typed wrappers are exposed
+for `platypus_write_task_plan`, `platypus_validate_task_plan`,
+`platypus_inspect_task_plan`, and `platypus_list_task_plans`.
 
 A concrete minimal direct-work example is documented in
 [docs/workflow.md](workflow.md#minimal-direct-work-example). Use it for

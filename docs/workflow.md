@@ -317,20 +317,26 @@ need to memorize the underlying MCP tool surface:
    improvement suggestions, and use `platypus_create_backlog_items` with
    `preview=true` or `platypus_update_backlog_item` only after the revision is
    approved.
-5. If the queue is empty, run `/platy-plan`. The agent should inspect the
+5. Run `/platy-plan-review [item-id]` before non-trivial work starts. The agent
+   should state whether response-local direct planning is enough or whether a
+   durable task plan is required by policy or user approval, then include
+   expected surfaces, tests, risks, verification command, and completion
+   evidence. Durable plans should be written with `platypus_write_task_plan`
+   and validated with `platypus_validate_task_plan`.
+6. If the queue is empty, run `/platy-plan`. The agent should inspect the
    session, ask for missing product direction, and then call
    `platypus_create_backlog_items` with concrete titles, goals, acceptance
    criteria, owned surfaces, execution paths, and planning gates.
-6. Run `/platy-start` to ask the agent to work on the next ready item. The
+7. Run `/platy-start` to ask the agent to work on the next ready item. The
    prompt names the target item and tells the agent to finish with
    `platypus_complete_backlog_item`.
-7. Run `/platy-complete` when implementation is done but the agent has not yet
+8. Run `/platy-complete` when implementation is done but the agent has not yet
    closed the item. The required fields are `item_id`, `summary`,
    `changed_files`, `verification_status`, `verification_summary`, and
    `verification_refs`.
-8. Run `/platy-direction-revise` or `/platy-standards-revise` to revise
+9. Run `/platy-direction-revise` or `/platy-standards-revise` to revise
    captured guidance without rerunning the whole setup flow.
-9. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
+10. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
 
 These commands surface current state and exact tools, but they do not choose a
 product direction for the user. The agent remains responsible for judgement and

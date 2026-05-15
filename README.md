@@ -262,13 +262,16 @@ The Pi happy path is intentionally short:
 4. `/platy-story-review` asks the agent to review a draft or existing backlog
    item for concrete goal, acceptance criteria, dependencies, planning mode,
    owned surfaces, and expected evidence before execution.
-5. `/platy-plan` asks the agent to create concrete backlog items when the queue
+5. `/platy-plan-review` asks the agent to produce a lightweight implementation
+   review for the next ready item or a selected item, creating durable task
+   plans only when policy or user approval calls for them.
+6. `/platy-plan` asks the agent to create concrete backlog items when the queue
    is empty.
-6. `/platy-start` asks the agent to work the next ready item and complete it
+7. `/platy-start` asks the agent to work the next ready item and complete it
    with `platypus_complete_backlog_item`.
-7. `/platy-direction-revise` and `/platy-standards-revise` revisit captured
+8. `/platy-direction-revise` and `/platy-standards-revise` revisit captured
    guidance without rerunning the whole setup flow.
-8. `/platy-doctor` shows setup or recovery guidance when work is blocked.
+9. `/platy-doctor` shows setup or recovery guidance when work is blocked.
 
 Add `--init-project` for fresh repositories so `AGENTS.md`, `CLAUDE.md`,
 `WORKFLOW.md`, `platy.yaml`, `backlog/`, durable direction files, and

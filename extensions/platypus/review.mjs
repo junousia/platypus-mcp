@@ -73,3 +73,32 @@ export function buildStoryReviewPrompt(input = "") {
 		"For approved revisions, use platypus_create_backlog_items with preview=true before creating new work, or platypus_update_backlog_item for existing items.",
 	].join(" ");
 }
+
+export function implementationPlanReviewExpectation(policy = {}) {
+	const executionPath = policy.execution_path ?? "direct_edit";
+	const planningGate = policy.planning_gate ?? "none";
+	const durable = executionPath === "worker_handoff" || planningGate === "task_plan" || planningGate === "approved_task_plan";
+	return {
+		mode: durable ? "durable_task_plan" : "direct_response_local",
+		durable_task_plan_required: durable,
+		reason: durable
+			? "Worker handoff or planning gate requires a strict task plan before execution."
+			: "Direct edit with planning_gate=none may use response-local implementation guidance.",
+	};
+}
+
+export function buildImplementationPlanReviewPrompt(input = "") {
+	const trimmed = String(input ?? "").trim();
+	const subject = trimmed.length > 0
+		? `Review implementation planning for backlog item or draft: ${trimmed}`
+		: "Review implementation planning for the next ready Platypus item.";
+	return [
+		subject,
+		"First call platypus_inspect_session and platypus_inspect_work_queue. If an item id is supplied, call platypus_get_backlog_item.",
+		"Inspect durable project direction and docs/engineering.md before proposing implementation structure.",
+		"State whether the work should use direct response-local planning, standard task planning, or full task planning. Explain the reason from execution_path, planning_gate, complexity, and user intent.",
+		"Include expected files/modules, test strategy, risks, verification command, and completion evidence.",
+		"For direct items with planning_gate=none, response-local guidance is enough unless the user asks for a durable plan.",
+		"For worker_handoff, task_plan, approved_task_plan, or user-approved durable planning, call platypus_write_task_plan and then platypus_validate_task_plan.",
+	].join(" ");
+}

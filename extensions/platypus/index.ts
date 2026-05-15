@@ -21,7 +21,10 @@ import {
 	shouldShowGuidance,
 	snapshotFromDetails,
 } from "./renderers.mjs";
-import { buildStoryReviewPrompt } from "./review.mjs";
+import {
+	buildImplementationPlanReviewPrompt,
+	buildStoryReviewPrompt,
+} from "./review.mjs";
 import { runPlatypusTool as runPlatypusToolRuntime } from "./runtime.mjs";
 
 type JsonObject = Record<string, unknown>;
@@ -130,6 +133,10 @@ const verificationStatus = Type.Union(
 	{ description: "Verification status for the completed work." },
 );
 
+const taskPlanMode = Type.Union([Type.Literal("minimal"), Type.Literal("standard"), Type.Literal("full")], {
+	description: "Task plan mode. Use minimal for small direct work, standard for normal planned work, and full for broader review-sensitive work.",
+});
+
 const workerStatus = Type.Union([Type.Literal("completed"), Type.Literal("failed"), Type.Literal("cancelled")], {
 	description: "Terminal status for a worker handoff result.",
 });
@@ -237,6 +244,50 @@ const backlogUpdateShape = {
 	force_closed: Type.Optional(Type.Boolean({ description: "Allow updating an item already closed by Git trailer or direct completion." })),
 };
 
+const taskPlanRequirement = Type.Object(
+	{
+		id: Type.String({ description: "Stable requirement id, for example R1." }),
+		text: Type.String({ description: "Requirement text." }),
+	},
+	{ additionalProperties: false, description: "Task plan requirement." },
+);
+
+const taskPlanDesign = Type.Object(
+	{
+		summary: Type.String({ description: "Implementation design summary." }),
+		owned_surfaces: Type.Array(Type.String({ minLength: 1 }), { description: "Owned files, modules, or directories for this plan." }),
+		notes: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "Optional design notes." })),
+	},
+	{ additionalProperties: false, description: "Task plan design section." },
+);
+
+const plannedTask = Type.Object(
+	{
+		id: Type.String({ description: "Stable task id, for example MCP-123-T001." }),
+		title: Type.String({ description: "Task title." }),
+		goal: Type.String({ description: "Task goal." }),
+		requirement_refs: Type.Array(Type.String({ minLength: 1 }), { description: "Requirement ids covered by this task." }),
+		depends_on: Type.Array(Type.String({ minLength: 1 }), { description: "Task ids that must complete first." }),
+		owned_surfaces: Type.Array(Type.String({ minLength: 1 }), { description: "Owned files, modules, or directories for this task." }),
+		verification: Type.Array(Type.String({ minLength: 1 }), { description: "Verification commands or evidence for this task." }),
+		acceptance: Type.Array(Type.String({ minLength: 1 }), { description: "Task acceptance criteria." }),
+		notes: Type.Optional(Type.Union([Type.Array(Type.String({ minLength: 1 })), Type.Null()], { description: "Optional task notes." })),
+	},
+	{ additionalProperties: false, description: "Executable task slice inside a task plan." },
+);
+
+const taskPlanFile = Type.Object(
+	{
+		item_id: itemId("Backlog item id for this task plan."),
+		version: Type.Optional(Type.Integer({ description: "Task plan schema version. Defaults to 1.", minimum: 1 })),
+		mode: taskPlanMode,
+		requirements: Type.Array(taskPlanRequirement, { description: "Requirements captured by the task plan.", minItems: 1 }),
+		design: taskPlanDesign,
+		tasks: Type.Array(plannedTask, { description: "Planned implementation tasks.", minItems: 1 }),
+	},
+	{ additionalProperties: false, description: "Strict task plan file content." },
+);
+
 const CORE_TYPED_TOOL_NAMES = new Set<string>([
 	"inspect_session",
 	"inspect_status",
@@ -249,6 +300,10 @@ const CORE_TYPED_TOOL_NAMES = new Set<string>([
 	"create_backlog_item",
 	"create_backlog_items",
 	"update_backlog_item",
+	"write_task_plan",
+	"validate_task_plan",
+	"inspect_task_plan",
+	"list_task_plans",
 	"prepare_work",
 	"complete_backlog_item",
 	"finish_work",
@@ -327,6 +382,34 @@ const coreToolParameters: Record<string, unknown> = {
 		additionalProperties: false,
 		description: "Update one existing backlog item after review. The project root is fixed by Pi and must not be supplied.",
 	}),
+	write_task_plan: Type.Object(
+		{
+			item_id: itemId("Backlog item id for this task plan."),
+			plan: taskPlanFile,
+			overwrite: Type.Optional(Type.Boolean({ description: "Overwrite an existing task plan." })),
+		},
+		{ additionalProperties: false, description: "Write and validate a strict task plan." },
+	),
+	validate_task_plan: Type.Object(
+		{
+			item_id: Type.Optional(itemId("Optional backlog item id to validate one task plan.")),
+			include_errors: Type.Optional(Type.Boolean({ description: "Include validation error details." })),
+		},
+		{ additionalProperties: false, description: "Validate strict task plan files." },
+	),
+	inspect_task_plan: Type.Object(
+		{
+			item_id: itemId("Backlog item id for the task plan to inspect."),
+		},
+		{ additionalProperties: false, description: "Read one committed task plan." },
+	),
+	list_task_plans: Type.Object(
+		{
+			item_id: Type.Optional(itemId("Optional backlog item id filter.")),
+			include_errors: Type.Optional(Type.Boolean({ description: "Include validation error details." })),
+		},
+		{ additionalProperties: false, description: "List committed task plans." },
+	),
 	prepare_work: Type.Object(
 		{
 			item_id: Type.Optional(itemId()),
@@ -487,6 +570,22 @@ const platypusTools: PlatypusTool[] = [
 	{
 		name: "update_backlog_item",
 		description: "Update one reviewed Platypus backlog item from typed arguments.",
+	},
+	{
+		name: "write_task_plan",
+		description: "Write and validate one strict Platypus task plan.",
+	},
+	{
+		name: "validate_task_plan",
+		description: "Validate Platypus task plan files.",
+	},
+	{
+		name: "inspect_task_plan",
+		description: "Inspect one Platypus task plan.",
+	},
+	{
+		name: "list_task_plans",
+		description: "List Platypus task plans.",
 	},
 	{
 		name: "prepare_work",
@@ -776,6 +875,15 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
 			const input = Array.isArray(args) ? args.join(" ") : String(args ?? "");
 			pi.sendUserMessage(buildStoryReviewPrompt(input), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+		},
+	});
+
+	pi.registerCommand("platy-plan-review", {
+		description: "Review implementation planning before work starts",
+		handler: async (args, ctx) => {
+			if (!latestSnapshot) await refreshSnapshot(ctx);
+			const input = Array.isArray(args) ? args.join(" ") : String(args ?? "");
+			pi.sendUserMessage(buildImplementationPlanReviewPrompt(input), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
 

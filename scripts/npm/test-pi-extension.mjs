@@ -25,8 +25,10 @@ import {
 	runPlatypusTool,
 } from "../../extensions/platypus/runtime.mjs";
 import {
+	buildImplementationPlanReviewPrompt,
 	buildStoryReviewPrompt,
 	formatStoryReview,
+	implementationPlanReviewExpectation,
 	reviewStoryDraft,
 } from "../../extensions/platypus/review.mjs";
 
@@ -149,6 +151,15 @@ assert.match(buildEngineeringStandardsPrompt({ revision: true }), /Review and re
 assert.match(buildStoryReviewPrompt("MCP-132"), /platypus_get_backlog_item/);
 assert.match(buildStoryReviewPrompt("draft a better auth story"), /Blocking issues/);
 assert.match(buildStoryReviewPrompt(), /Ask the user/);
+assert.match(buildImplementationPlanReviewPrompt(), /next ready Platypus item/);
+assert.match(buildImplementationPlanReviewPrompt("MCP-133"), /platypus_get_backlog_item/);
+assert.match(buildImplementationPlanReviewPrompt("MCP-133"), /platypus_write_task_plan/);
+const directPlan = implementationPlanReviewExpectation({ execution_path: "direct_edit", planning_gate: "none" });
+assert.equal(directPlan.mode, "direct_response_local");
+assert.equal(directPlan.durable_task_plan_required, false);
+const durablePlan = implementationPlanReviewExpectation({ execution_path: "worker_handoff", planning_gate: "task_plan" });
+assert.equal(durablePlan.mode, "durable_task_plan");
+assert.equal(durablePlan.durable_task_plan_required, true);
 
 const vagueReview = reviewStoryDraft({ title: "Auth", goal: "Do auth" });
 assert.equal(vagueReview.status, "blocked");
@@ -220,6 +231,10 @@ for (const toolName of [
 	"inspect_work_queue",
 	"create_backlog_items",
 	"update_backlog_item",
+	"write_task_plan",
+	"validate_task_plan",
+	"inspect_task_plan",
+	"list_task_plans",
 	"prepare_work",
 	"complete_backlog_item",
 	"doctor_snapshot",

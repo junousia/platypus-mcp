@@ -10,6 +10,7 @@ export const PI_COMMAND_NAMES = [
 	"platy-standards",
 	"platy-standards-revise",
 	"platy-story-review",
+	"platy-plan-review",
 	"platy-start",
 	"platy-complete",
 	"platy-doctor",
