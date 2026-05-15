@@ -49,13 +49,16 @@ packing the npm artifact or publish matching platform-specific binary packages.
 Validate npm package contents from the repository root:
 
 ```bash
+make pi-extension-test
 make npm-package
 make release-check
 ```
 
-The npm validation uses `npm pack --dry-run` and checks that the package keeps
-extension files and binary resolver metadata while excluding build caches,
-local state, backlog files, and secrets.
+The Pi extension test harness uses fake command execution and renderer fixtures,
+so it does not require a live Pi agent or network access. The npm validation
+uses `npm pack --dry-run` and checks that the package keeps extension files and
+binary resolver metadata while excluding build caches, local state, backlog
+files, test-only harness files, and secrets.
 Release validation can set `PLATYPUS_NPM_REQUIRE_BINARY=1` after staging a
 platform binary under `bin/` or `vendor/`; the check then requires an
 executable package-local binary candidate.

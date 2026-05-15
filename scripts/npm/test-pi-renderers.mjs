@@ -67,6 +67,25 @@ assert.deepEqual(completion, [
 	"Next ready: MCP-126",
 ]);
 
+const created = renderToolResultLines({
+	details: {
+		action: "create_backlog_items",
+		status: "completed",
+		summary: "Created 2 backlog items.",
+		data: {
+			created_items: [
+				{ item_id: "MCP-127", title: "Add Pi extension test harness" },
+				{ item_id: "MCP-128", title: "Add Pi showcase feedback exercise" },
+			],
+		},
+	},
+});
+assert.deepEqual(created, [
+	"✓ Created 2 backlog items.",
+	"  • MCP-127 — Add Pi extension test harness",
+	"  • MCP-128 — Add Pi showcase feedback exercise",
+]);
+
 const skipped = renderToolResultLines({
 	details: {
 		action: "validate_backlog",

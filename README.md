@@ -141,6 +141,7 @@ silicon (`darwin-arm64`) package-local binaries under
 `vendor/<platform>/platypus-mcp`. Validate npm package contents with:
 
 ```bash
+make pi-extension-test
 make npm-package
 ```
 
@@ -245,6 +246,10 @@ uses dedicated typed tools for startup and execution, including
 `platypus_update_finding_disposition`, and `platypus_doctor_snapshot`.
 `platypus_call_tool` remains available only as a generic escape hatch for tools
 that do not yet have a dedicated Pi wrapper.
+
+The Pi extension has deterministic local harness tests for command prompt
+generation, tool execution wrappers, binary resolution guidance, and renderer
+fixtures. Run them with `make pi-extension-test`; `make check` includes them.
 
 The Pi happy path is intentionally short:
 

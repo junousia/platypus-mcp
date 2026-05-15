@@ -321,6 +321,12 @@ These commands surface current state and exact tools, but they do not choose a
 product direction for the user. The agent remains responsible for judgement and
 for asking clarifying questions when the goal is underspecified.
 
+The Pi package has a deterministic extension harness covering command prompt
+generation, fake Platypus tool execution, binary-resolution recovery guidance,
+project-root forwarding, and renderer snapshots for queue, creation,
+completion, doctor, and empty states. Run `make pi-extension-test` while
+iterating on Pi UI or command behavior; it is included in `make check`.
+
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime
 status, task attempts, PR metadata, or closure state.

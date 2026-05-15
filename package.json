@@ -21,7 +21,8 @@
   "scripts": {
     "package:dry-run": "npm pack --dry-run",
     "pi:renderers:test": "node scripts/npm/test-pi-renderers.mjs",
-    "package:validate": "node scripts/npm/test-pi-renderers.mjs && node scripts/npm/validate-package.mjs",
+    "pi:extension:test": "node scripts/npm/test-pi-renderers.mjs && node scripts/npm/test-pi-extension.mjs",
+    "package:validate": "npm run pi:extension:test && node scripts/npm/validate-package.mjs",
     "publish:dry-run": "npm publish --dry-run --access public",
     "publish:release": "npm publish --access public"
   },

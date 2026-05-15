@@ -1,9 +1,14 @@
-import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import {
+	buildCompletePrompt,
+	buildPlanPrompt,
+	buildShortcutStartPrompt,
+	buildStartPrompt,
+	noReadyItemMessage,
+} from "./commands.mjs";
 import {
 	compactStatus,
 	renderDashboardLines,
@@ -11,6 +16,7 @@ import {
 	shouldShowGuidance,
 	snapshotFromDetails,
 } from "./renderers.mjs";
+import { runPlatypusTool as runPlatypusToolRuntime } from "./runtime.mjs";
 
 type JsonObject = Record<string, unknown>;
 
@@ -49,8 +55,6 @@ type PlatypusSnapshot = {
 };
 
 const PACKAGE_ROOT = resolve(import.meta.dirname, "../..");
-const require = createRequire(import.meta.url);
-const DEFAULT_TIMEOUT_MS = 120_000;
 const STATUS_KEY = "platypus";
 const WIDGET_KEY = "platypus-queue";
 
@@ -505,174 +509,8 @@ const platypusTools: PlatypusTool[] = [
 	},
 ];
 
-function executableName(): string {
-	return process.platform === "win32" ? "platypus-mcp.exe" : "platypus-mcp";
-}
-
-function existingBinaryPath(path: string): string | undefined {
-	return existsSync(path) ? path : undefined;
-}
-
-function packageBinaryPath(): string | undefined {
-	const name = executableName();
-	const platformKey = `${process.platform}-${process.arch}`;
-	const candidates = [
-		join(PACKAGE_ROOT, "bin", name),
-		join(PACKAGE_ROOT, "bin", platformKey, name),
-		join(PACKAGE_ROOT, "vendor", platformKey, name),
-	];
-	for (const candidate of candidates) {
-		const found = existingBinaryPath(candidate);
-		if (found) return found;
-	}
-
-	const optionalPackageNames = [
-		`@platypus/mcp-${platformKey}`,
-		`platypus-mcp-${platformKey}`,
-	];
-	for (const packageName of optionalPackageNames) {
-		try {
-			const packageJsonPath = require.resolve(`${packageName}/package.json`, { paths: [PACKAGE_ROOT] });
-			const packageRoot = resolve(packageJsonPath, "..");
-			const optionalCandidates = [join(packageRoot, "bin", name), join(packageRoot, name)];
-			for (const candidate of optionalCandidates) {
-				const found = existingBinaryPath(candidate);
-				if (found) return found;
-			}
-		} catch {
-			// Optional platform package is not installed for this platform.
-		}
-	}
-	return undefined;
-}
-
-function missingBinaryGuidance(command: string): string {
-	return [
-		`Could not run Platypus MCP binary (${command}).`,
-		"Tried binary resolution order:",
-		"1. PLATYPUS_MCP_BIN override.",
-		"2. Package-local prebuilt binary under bin/ or vendor/ for this platform.",
-		"3. Development checkout Cargo.toml fallback.",
-		"4. platypus-mcp on PATH.",
-		"Install platypus-mcp with `cargo install platypus-mcp`, install a Platypus npm package that includes the platform binary, or set PLATYPUS_MCP_BIN to a working binary path.",
-	].join("\n");
-}
-
-function commandForTool(cwd: string, toolName: string, params: JsonObject): { command: string; args: string[] } {
-	const cleanParams = { ...params };
-	delete cleanParams.root;
-
-	const payload = JSON.stringify(cleanParams);
-	const configuredBinary = process.env.PLATYPUS_MCP_BIN;
-	if (configuredBinary) {
-		return {
-			command: configuredBinary,
-			args: ["tool", "--root", cwd, toolName, payload],
-		};
-	}
-
-	const packagedBinary = packageBinaryPath();
-	if (packagedBinary) {
-		return {
-			command: packagedBinary,
-			args: ["tool", "--root", cwd, toolName, payload],
-		};
-	}
-
-	const manifestPath = resolve(PACKAGE_ROOT, "Cargo.toml");
-	if (existsSync(manifestPath)) {
-		return {
-			command: "cargo",
-			args: ["run", "--manifest-path", manifestPath, "--quiet", "--", "tool", "--root", cwd, toolName, payload],
-		};
-	}
-
-	return {
-		command: "platypus-mcp",
-		args: ["tool", "--root", cwd, toolName, payload],
-	};
-}
-
-function parseTimeout(): number {
-	const configured = process.env.PLATYPUS_PI_TIMEOUT_MS;
-	if (!configured) return DEFAULT_TIMEOUT_MS;
-	const parsed = Number(configured);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
-}
-
-function formatResult(toolName: string, stdout: string, stderr: string): { text: string; details: JsonObject } {
-	const trimmed = stdout.trim();
-	let details: JsonObject = {};
-	if (trimmed) {
-		try {
-			const parsed = JSON.parse(trimmed);
-			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-				details = parsed as JsonObject;
-			}
-		} catch {
-			details = { raw_stdout: trimmed };
-		}
-	}
-	if (stderr.trim()) {
-		details = { ...details, stderr: stderr.trim() };
-	}
-
-	return {
-		text: trimmed || `Platypus tool ${toolName} completed with no stdout.`,
-		details,
-	};
-}
-
 async function runPlatypusTool(pi: ExtensionAPI, ctx: ExtensionContext, toolName: string, params: JsonObject) {
-	const { command, args } = commandForTool(ctx.cwd, toolName, params);
-	let result;
-	try {
-		result = await pi.exec(command, args, {
-			signal: ctx.signal,
-			timeout: parseTimeout(),
-		});
-	} catch (error: unknown) {
-		const message = error instanceof Error ? error.message : String(error);
-		const guidance = missingBinaryGuidance(command);
-		return {
-			content: [
-				{
-					type: "text" as const,
-					text: `${guidance}\n\nUnderlying error: ${message}`,
-				},
-			],
-			details: {
-				status: "failed",
-				command,
-				error: message,
-			},
-			isError: true,
-		};
-	}
-
-	const formatted = formatResult(toolName, result.stdout ?? "", result.stderr ?? "");
-	if (result.code !== 0) {
-		return {
-			content: [
-				{
-					type: "text" as const,
-					text: `Platypus tool ${toolName} failed with exit code ${result.code}.\n\n${formatted.text}`,
-				},
-			],
-			details: {
-				...formatted.details,
-				status: "failed",
-				exit_code: result.code,
-				command,
-			},
-			isError: true,
-		};
-	}
-
-	return {
-		content: [{ type: "text" as const, text: formatted.text }],
-		details: formatted.details,
-	};
+	return runPlatypusToolRuntime(pi, ctx, toolName, params, { packageRoot: PACKAGE_ROOT });
 }
 
 function renderDashboardText(snapshot?: PlatypusSnapshot, expanded = false): string {
@@ -863,13 +701,7 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		description: "Ask the agent to create concrete Platypus backlog items from the current goal",
 		handler: async (_args, ctx) => {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
-			const prompt = [
-				"Shape the current project goal into concrete Platypus backlog items.",
-				"First call platypus_inspect_session and inspect repository context if needed.",
-				"Then call platypus_create_backlog_items with concrete titles, goals, acceptance criteria, owned_surfaces, execution_path, and planning_gate.",
-				"Present the created items and the next ready item. Ask for missing product direction instead of inventing details.",
-			].join(" ");
-			pi.sendUserMessage(prompt, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+			pi.sendUserMessage(buildPlanPrompt(), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
 
@@ -879,15 +711,10 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
 			const item = latestSnapshot?.readyItems[0];
 			if (!item) {
-				if (ctx.hasUI) ctx.ui.notify("No ready Platypus item to start. Use /platy-plan to create work or /platy-doctor to inspect recovery guidance.", "warning");
+				if (ctx.hasUI) ctx.ui.notify(noReadyItemMessage(), "warning");
 				return;
 			}
-			const prompt = [
-				`Work on Platypus backlog item ${item.id}: ${item.title}.`,
-				"Call platypus_get_backlog_item or platypus_inspect_work_queue if you need the acceptance criteria.",
-				"Make only the necessary project changes, run verification, then call platypus_complete_backlog_item with item_id, summary, changed_files, verification_status, verification_summary, and verification_refs.",
-			].join(" ");
-			pi.sendUserMessage(prompt, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+			pi.sendUserMessage(buildStartPrompt(item), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
 
@@ -895,11 +722,7 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		description: "Prompt the agent to complete the current direct Platypus item",
 		handler: async (_args, ctx) => {
 			const item = latestSnapshot?.readyItems[0];
-			const target = item ? `${item.id} (${item.title})` : "the current direct-ready Platypus item";
-			pi.sendUserMessage(
-				`If implementation and verification are complete, call platypus_complete_backlog_item for ${target} with item_id, summary, changed_files, verification_status, verification_summary, and verification_refs. If anything is missing, explain what remains first.`,
-				ctx.isIdle() ? undefined : { deliverAs: "followUp" },
-			);
+			pi.sendUserMessage(buildCompletePrompt(item), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
 
@@ -944,10 +767,10 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
 			const item = latestSnapshot?.readyItems[0];
 			if (!item) {
-				if (ctx.hasUI) ctx.ui.notify("No ready Platypus item to start. Use /platy-plan to create work or /platy-doctor to inspect recovery guidance.", "warning");
+				if (ctx.hasUI) ctx.ui.notify(noReadyItemMessage(), "warning");
 				return;
 			}
-			pi.sendUserMessage(`Work on Platypus backlog item ${item.id}: ${item.title}. Complete it with platypus_complete_backlog_item after verification.`, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+			pi.sendUserMessage(buildShortcutStartPrompt(item), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
 

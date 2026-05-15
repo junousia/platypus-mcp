@@ -6,7 +6,9 @@ import { join } from "node:path";
 const requiredFiles = new Set([
   "package.json",
   "extensions/platypus/index.ts",
+  "extensions/platypus/commands.mjs",
   "extensions/platypus/renderers.mjs",
+  "extensions/platypus/runtime.mjs",
 ]);
 
 const requiredMetadata = {
@@ -115,6 +117,7 @@ const files = Array.isArray(pack?.files) ? pack.files.map((file) => file.path) :
 const fileSet = new Set(files);
 const missing = [...requiredFiles].filter((file) => !fileSet.has(file));
 const forbidden = files.filter((file) => forbiddenPrefixes.some((prefix) => file === prefix || file.startsWith(prefix)));
+const forbiddenTestArtifacts = files.filter((file) => /(^|\/)test-pi-.*\.mjs$/.test(file));
 
 let metadataErrors = [];
 const metadata = JSON.parse(readFileSync("package.json", "utf8")).platypusMcp;
@@ -203,9 +206,10 @@ for (const platform of requiredPlatforms) {
   }
 }
 
-if (missing.length > 0 || forbidden.length > 0 || metadataErrors.length > 0) {
+if (missing.length > 0 || forbidden.length > 0 || forbiddenTestArtifacts.length > 0 || metadataErrors.length > 0) {
   if (missing.length > 0) console.error(`Missing required npm package files: ${missing.join(", ")}`);
   if (forbidden.length > 0) console.error(`Forbidden npm package files: ${forbidden.join(", ")}`);
+  if (forbiddenTestArtifacts.length > 0) console.error(`Test-only npm package files must not be packed: ${forbiddenTestArtifacts.join(", ")}`);
   for (const error of metadataErrors) console.error(error);
   process.exit(1);
 }

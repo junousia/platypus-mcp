@@ -12,7 +12,7 @@ ARGS ?=
 
 .PHONY: \
 	help \
-	check ci lint fmt-check fmt format test test-lib test-stdio test-one \
+	check ci lint fmt-check fmt format test test-lib test-stdio test-one pi-extension-test \
 	build doc clean package publish-dry-run publish npm-package npm-package-dry-run npm-publish-dry-run npm-publish release-check \
 	run run-root smoke smoke-queue smoke-storage \
 	feedback opencode-feedback claude-feedback codex-feedback \
@@ -35,6 +35,7 @@ help: ## Show categorized developer commands.
 	@printf '  \033[36mtest-lib\033[0m    Run library/unit tests\n'
 	@printf '  \033[36mtest-stdio\033[0m  Run stdio protocol integration tests\n'
 	@printf '  \033[36mtest-one\033[0m    Run a filtered test: make test-one TEST=name\n\n'
+	@printf '  \033[36mpi-extension-test\033[0m Run deterministic Pi extension harness tests\n\n'
 	@printf '\033[1mBuild And Docs\033[0m\n'
 	@printf '  \033[36mbuild\033[0m       Build debug binary\n'
 	@printf '  \033[36mdoc\033[0m         Build Rust API docs without dependencies\n'
@@ -85,7 +86,7 @@ help: ## Show categorized developer commands.
 	@printf '  CODEX_DANGEROUS=1 to bypass Codex approvals and sandboxing in the temp project\n'
 	@printf '  CODEX_DRY_RUN=1 to bootstrap and smoke-check without invoking Codex\n'
 
-check: lint test ## Format check, build-check, and run all tests.
+check: lint test pi-extension-test ## Format check, build-check, and run all tests.
 
 ci: check ## Alias for check.
 
@@ -115,6 +116,9 @@ test-one: ## Run a filtered test: make test-one TEST=name.
 		exit 2; \
 	fi
 	$(CARGO) test $(TEST) $(ARGS)
+
+pi-extension-test: ## Run deterministic Pi extension harness tests.
+	npm_config_cache=$(NPM_CACHE_DIR) npm run pi:extension:test
 
 build: ## Build debug binary.
 	$(CARGO) build
