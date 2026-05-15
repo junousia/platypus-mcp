@@ -3,6 +3,7 @@ SHELL := /bin/sh
 CARGO ?= cargo
 ROOT ?= $(CURDIR)
 MAX_TASKS ?= 1
+NPM_CACHE_DIR ?= $(CURDIR)/.platy/npm-cache
 TEST ?=
 ARGS ?=
 
@@ -11,7 +12,7 @@ ARGS ?=
 .PHONY: \
 	help \
 	check ci lint fmt-check fmt format test test-lib test-stdio test-one \
-	build doc clean package publish-dry-run publish \
+	build doc clean package publish-dry-run publish npm-package npm-package-dry-run release-check \
 	run run-root smoke smoke-queue smoke-storage \
 	feedback opencode-feedback claude-feedback codex-feedback \
 	metadata version
@@ -39,6 +40,9 @@ help: ## Show categorized developer commands.
 	@printf '  \033[36mpackage\033[0m     Verify crates.io package contents\n'
 	@printf '  \033[36mpublish-dry-run\033[0m Validate crates.io publishing without uploading\n'
 	@printf '  \033[36mpublish\033[0m     Publish the crate to crates.io\n'
+	@printf '  \033[36mnpm-package\033[0m Validate npm package contents\n'
+	@printf '  \033[36mnpm-package-dry-run\033[0m Show npm package dry-run output\n'
+	@printf '  \033[36mrelease-check\033[0m Validate Rust and npm release packaging\n'
 	@printf '  \033[36mclean\033[0m       Remove Cargo build output\n\n'
 	@printf '\033[1mRun\033[0m\n'
 	@printf '  \033[36mrun\033[0m         Run stdio MCP server in the current directory\n'
@@ -122,6 +126,14 @@ publish-dry-run: ## Validate crates.io publishing without uploading.
 
 publish: ## Publish the crate to crates.io.
 	$(CARGO) publish
+
+npm-package: ## Validate npm package contents.
+	npm_config_cache=$(NPM_CACHE_DIR) npm run package:validate
+
+npm-package-dry-run: ## Show npm package dry-run output.
+	npm_config_cache=$(NPM_CACHE_DIR) npm run package:dry-run
+
+release-check: publish-dry-run npm-package ## Validate Rust and npm release packaging.
 
 clean: ## Remove Cargo build output.
 	$(CARGO) clean

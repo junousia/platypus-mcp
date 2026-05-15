@@ -27,6 +27,37 @@ The installed binary is:
 platypus-mcp
 ```
 
+## Pi npm Package Binary Resolution
+
+The Pi npm package is expected to make the `platypus-mcp` server available for
+normal installed users without requiring Cargo during `npm install`. The Pi
+extension resolves the binary in this order:
+
+1. `PLATYPUS_MCP_BIN`, for local testing or custom installations.
+2. A package-local prebuilt binary under `bin/` or `vendor/` for the current
+   platform, or a matching optional platform binary package.
+3. The repository `Cargo.toml` fallback when running from a development
+   checkout.
+4. `platypus-mcp` on `PATH`, such as a `cargo install platypus-mcp` install.
+
+If none is available, Pi reports actionable guidance instead of silently
+requiring Cargo. Release builds should add the relevant platform binary before
+packing the npm artifact or publish matching platform-specific binary packages.
+
+Validate npm package contents from the repository root:
+
+```bash
+make npm-package
+make release-check
+```
+
+The npm validation uses `npm pack --dry-run` and checks that the package keeps
+extension files and binary resolver metadata while excluding build caches,
+local state, backlog files, and secrets.
+Release validation can set `PLATYPUS_NPM_REQUIRE_BINARY=1` after staging a
+platform binary under `bin/` or `vendor/`; the check then requires an
+executable package-local binary candidate.
+
 Configure an MCP host:
 
 ```bash

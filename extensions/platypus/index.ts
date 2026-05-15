@@ -1,5 +1,6 @@
+import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -40,6 +41,7 @@ type PlatypusSnapshot = {
 };
 
 const PACKAGE_ROOT = resolve(import.meta.dirname, "../..");
+const require = createRequire(import.meta.url);
 const DEFAULT_TIMEOUT_MS = 120_000;
 const STATUS_KEY = "platypus";
 const WIDGET_KEY = "platypus-queue";
@@ -156,6 +158,59 @@ const platypusTools: PlatypusTool[] = [
 	},
 ];
 
+function executableName(): string {
+	return process.platform === "win32" ? "platypus-mcp.exe" : "platypus-mcp";
+}
+
+function existingBinaryPath(path: string): string | undefined {
+	return existsSync(path) ? path : undefined;
+}
+
+function packageBinaryPath(): string | undefined {
+	const name = executableName();
+	const platformKey = `${process.platform}-${process.arch}`;
+	const candidates = [
+		join(PACKAGE_ROOT, "bin", name),
+		join(PACKAGE_ROOT, "bin", platformKey, name),
+		join(PACKAGE_ROOT, "vendor", platformKey, name),
+	];
+	for (const candidate of candidates) {
+		const found = existingBinaryPath(candidate);
+		if (found) return found;
+	}
+
+	const optionalPackageNames = [
+		`@platypus/mcp-${platformKey}`,
+		`platypus-mcp-${platformKey}`,
+	];
+	for (const packageName of optionalPackageNames) {
+		try {
+			const packageJsonPath = require.resolve(`${packageName}/package.json`, { paths: [PACKAGE_ROOT] });
+			const packageRoot = resolve(packageJsonPath, "..");
+			const optionalCandidates = [join(packageRoot, "bin", name), join(packageRoot, name)];
+			for (const candidate of optionalCandidates) {
+				const found = existingBinaryPath(candidate);
+				if (found) return found;
+			}
+		} catch {
+			// Optional platform package is not installed for this platform.
+		}
+	}
+	return undefined;
+}
+
+function missingBinaryGuidance(command: string): string {
+	return [
+		`Could not run Platypus MCP binary (${command}).`,
+		"Tried binary resolution order:",
+		"1. PLATYPUS_MCP_BIN override.",
+		"2. Package-local prebuilt binary under bin/ or vendor/ for this platform.",
+		"3. Development checkout Cargo.toml fallback.",
+		"4. platypus-mcp on PATH.",
+		"Install platypus-mcp with `cargo install platypus-mcp`, install a Platypus npm package that includes the platform binary, or set PLATYPUS_MCP_BIN to a working binary path.",
+	].join("\n");
+}
+
 function commandForTool(cwd: string, toolName: string, params: JsonObject): { command: string; args: string[] } {
 	const cleanParams = { ...params };
 	delete cleanParams.root;
@@ -165,6 +220,14 @@ function commandForTool(cwd: string, toolName: string, params: JsonObject): { co
 	if (configuredBinary) {
 		return {
 			command: configuredBinary,
+			args: ["tool", "--root", cwd, toolName, payload],
+		};
+	}
+
+	const packagedBinary = packageBinaryPath();
+	if (packagedBinary) {
+		return {
+			command: packagedBinary,
 			args: ["tool", "--root", cwd, toolName, payload],
 		};
 	}
@@ -215,10 +278,30 @@ function formatResult(toolName: string, stdout: string, stderr: string): { text:
 
 async function runPlatypusTool(pi: ExtensionAPI, ctx: ExtensionContext, toolName: string, params: JsonObject) {
 	const { command, args } = commandForTool(ctx.cwd, toolName, params);
-	const result = await pi.exec(command, args, {
-		signal: ctx.signal,
-		timeout: parseTimeout(),
-	});
+	let result;
+	try {
+		result = await pi.exec(command, args, {
+			signal: ctx.signal,
+			timeout: parseTimeout(),
+		});
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		const guidance = missingBinaryGuidance(command);
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: `${guidance}\n\nUnderlying error: ${message}`,
+				},
+			],
+			details: {
+				status: "failed",
+				command,
+				error: message,
+			},
+			isError: true,
+		};
+	}
 
 	const formatted = formatResult(toolName, result.stdout ?? "", result.stderr ?? "");
 	if (result.code !== 0) {

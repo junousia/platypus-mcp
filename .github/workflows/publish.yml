@@ -23,6 +23,35 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  npm-package:
+    name: Validate npm package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Node version
+        run: |
+          node --version
+          npm --version
+
+      - name: Show Rust version
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Build Linux npm binary
+        run: |
+          cargo build --release
+          mkdir -p vendor/linux-x64
+          cp target/release/platypus-mcp vendor/linux-x64/platypus-mcp
+          chmod 755 vendor/linux-x64/platypus-mcp
+
+      - name: Validate npm package contents
+        env:
+          PLATYPUS_NPM_REQUIRE_BINARY: "1"
+        run: make npm-package
+
   crates-io:
     name: Publish crate
     runs-on: ubuntu-latest
