@@ -7,6 +7,8 @@ export const PI_COMMAND_NAMES = [
 	"platy-plan",
 	"platy-direction",
 	"platy-direction-revise",
+	"platy-standards",
+	"platy-standards-revise",
 	"platy-start",
 	"platy-complete",
 	"platy-doctor",
@@ -27,6 +29,7 @@ export function buildStartPrompt(item) {
 	return [
 		`Work on Platypus backlog item ${item.id}: ${item.title}.`,
 		"Call platypus_get_backlog_item or platypus_inspect_work_queue if you need the acceptance criteria.",
+		"Inspect docs/engineering.md if present and follow its implementation structure, verification expectations, and definition of done.",
 		"Make only the necessary project changes, run verification, then call platypus_complete_backlog_item with item_id, summary, changed_files, verification_status, verification_summary, and verification_refs.",
 	].join(" ");
 }
@@ -37,7 +40,7 @@ export function buildShortcutStartPrompt(item) {
 
 export function buildCompletePrompt(item) {
 	const target = item ? `${item.id} (${item.title})` : "the current direct-ready Platypus item";
-	return `If implementation and verification are complete, call platypus_complete_backlog_item for ${target} with item_id, summary, changed_files, verification_status, verification_summary, and verification_refs. If anything is missing, explain what remains first.`;
+	return `If implementation and verification are complete and the project-specific definition of done in docs/engineering.md has been satisfied or explicitly addressed, call platypus_complete_backlog_item for ${target} with item_id, summary, changed_files, verification_status, verification_summary, and verification_refs. If anything is missing, explain what remains first.`;
 }
 
 export function noReadyItemMessage() {

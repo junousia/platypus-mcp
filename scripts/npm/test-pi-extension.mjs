@@ -14,6 +14,7 @@ import {
 import {
 	PROJECT_DIRECTION_FILES,
 	buildDirectionPrompt,
+	buildEngineeringStandardsPrompt,
 	readProjectDirectionSummary,
 } from "../../extensions/platypus/direction.mjs";
 import {
@@ -128,13 +129,18 @@ const item = { id: "MCP-127", title: "Add Pi extension test harness" };
 assert.match(buildPlanPrompt(), /platypus_create_backlog_items/);
 assert.match(buildStartPrompt(item), /MCP-127: Add Pi extension test harness/);
 assert.match(buildStartPrompt(item), /platypus_complete_backlog_item/);
+assert.match(buildStartPrompt(item), /docs\/engineering\.md/);
 assert.match(buildShortcutStartPrompt(item), /after verification/);
 assert.match(buildCompletePrompt(item), /MCP-127 \(Add Pi extension test harness\)/);
+assert.match(buildCompletePrompt(item), /definition of done/);
 assert.match(buildCompletePrompt(undefined), /current direct-ready Platypus item/);
 assert.match(noReadyItemMessage(), /No ready Platypus item/);
 assert.match(buildDirectionPrompt(), /product domain/);
 assert.match(buildDirectionPrompt(), /Do not keep direction only in chat/);
 assert.match(buildDirectionPrompt({ revision: true }), /Review and revise/);
+assert.match(buildEngineeringStandardsPrompt(), /module boundaries/);
+assert.match(buildEngineeringStandardsPrompt(), /docs\/engineering\.md/);
+assert.match(buildEngineeringStandardsPrompt({ revision: true }), /Review and revise/);
 
 const directionRoot = mkdtempSync(join(tmpdir(), "platypus-pi-direction-"));
 try {
@@ -146,13 +152,15 @@ try {
 	let partialDirection = readProjectDirectionSummary(directionRoot);
 	assert.equal(partialDirection.status, "partial");
 	assert.match(partialDirection.text, /durable project tooling/);
-	assert.deepEqual(partialDirection.missing, ["docs/architecture.md", "docs/testing.md"]);
+	assert.deepEqual(partialDirection.missing, ["docs/architecture.md", "docs/testing.md", "docs/engineering.md"]);
 	writeFileSync(join(directionRoot, "docs", "architecture.md"), "# Architecture Direction\n\n## Stack\n- Rust MCP server\n");
 	writeFileSync(join(directionRoot, "docs", "testing.md"), "# Testing Direction\n\n## Verification\n- make check\n");
+	writeFileSync(join(directionRoot, "docs", "engineering.md"), "# Engineering Standards\n\n## Definition Of Done\n- Implementation is verified\n");
 	const completeDirection = readProjectDirectionSummary(directionRoot);
 	assert.equal(completeDirection.status, "ready");
 	assert.match(completeDirection.text, /docs\/architecture\.md/);
 	assert.match(completeDirection.text, /make check/);
+	assert.match(completeDirection.text, /Implementation is verified/);
 } finally {
 	rmSync(directionRoot, { recursive: true, force: true });
 }

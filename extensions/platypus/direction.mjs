@@ -5,6 +5,7 @@ export const PROJECT_DIRECTION_FILES = [
 	"docs/product.md",
 	"docs/architecture.md",
 	"docs/testing.md",
+	"docs/engineering.md",
 ];
 
 const MAX_FILE_BYTES = 16_384;
@@ -70,5 +71,19 @@ export function buildDirectionPrompt(options = {}) {
 		"Ask concise questions covering product domain, target users, stack preferences, deployment target, testing expectations, UI/UX quality bar, security/privacy concerns, performance constraints, and preferred repository structure.",
 		"Write or update the direction files with the answers. Do not keep direction only in chat.",
 		"After updating files, summarize the captured direction and then use it when shaping backlog items.",
+	].join(" ");
+}
+
+export function buildEngineeringStandardsPrompt(options = {}) {
+	const revision = options.revision === true;
+	const opening = revision
+		? "Review and revise the durable Platypus engineering standards."
+		: "Guide the user through durable Platypus engineering standards setup.";
+	return [
+		opening,
+		"First call platypus_inspect_session and inspect docs/engineering.md plus product, architecture, and testing direction if present.",
+		"Ask concise questions covering module boundaries, code organization, test strategy, required verification commands, UI design language, commit and PR expectations, evidence expectations, and definition of done.",
+		"Write or update docs/engineering.md with explicit project-specific standards. Do not hardcode a stack or keep standards only in chat.",
+		"After updating standards, summarize the definition of done and use it when planning, starting, reviewing, and completing work.",
 	].join(" ");
 }

@@ -256,17 +256,21 @@ The Pi happy path is intentionally short:
 1. `/platy-refresh` or `/platy-ready` shows current queue state.
 2. `/platy-direction` asks the agent to capture durable product, architecture,
    and testing direction in repository docs when direction is missing or stale.
-3. `/platy-plan` asks the agent to create concrete backlog items when the queue
+3. `/platy-standards` asks the agent to capture module boundaries, code
+   organization, verification, UI, review, evidence, and definition-of-done
+   expectations in `docs/engineering.md`.
+4. `/platy-plan` asks the agent to create concrete backlog items when the queue
    is empty.
-4. `/platy-start` asks the agent to work the next ready item and complete it
+5. `/platy-start` asks the agent to work the next ready item and complete it
    with `platypus_complete_backlog_item`.
-5. `/platy-direction-revise` revisits captured direction without rerunning the
-   whole setup flow.
-6. `/platy-doctor` shows setup or recovery guidance when work is blocked.
+6. `/platy-direction-revise` and `/platy-standards-revise` revisit captured
+   guidance without rerunning the whole setup flow.
+7. `/platy-doctor` shows setup or recovery guidance when work is blocked.
 
 Add `--init-project` for fresh repositories so `AGENTS.md`, `CLAUDE.md`,
-`WORKFLOW.md`, `platy.yaml`, `backlog/`, and durable direction files under
-`docs/` are created alongside host MCP configuration or Pi package settings.
+`WORKFLOW.md`, `platy.yaml`, `backlog/`, durable direction files, and
+engineering standards under `docs/` are created alongside host MCP
+configuration or Pi package settings.
 
 If your host defers tool schemas, read resource
 `platypus://guidance/tool-preload` or prompt `platypus-tool-preload` at session

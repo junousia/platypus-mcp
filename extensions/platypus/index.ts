@@ -10,6 +10,7 @@ import {
 	noReadyItemMessage,
 } from "./commands.mjs";
 import {
+	buildEngineeringStandardsPrompt,
 	buildDirectionPrompt,
 	readProjectDirectionSummary,
 } from "./direction.mjs";
@@ -721,6 +722,21 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		description: "Revise existing durable project direction",
 		handler: async (_args, ctx) => {
 			pi.sendUserMessage(buildDirectionPrompt({ revision: true }), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+		},
+	});
+
+	pi.registerCommand("platy-standards", {
+		description: "Capture durable project engineering standards",
+		handler: async (_args, ctx) => {
+			if (!latestSnapshot) await refreshSnapshot(ctx);
+			pi.sendUserMessage(buildEngineeringStandardsPrompt(), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+		},
+	});
+
+	pi.registerCommand("platy-standards-revise", {
+		description: "Revise durable project engineering standards",
+		handler: async (_args, ctx) => {
+			pi.sendUserMessage(buildEngineeringStandardsPrompt({ revision: true }), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
 

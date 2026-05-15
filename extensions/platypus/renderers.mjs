@@ -202,5 +202,5 @@ export function renderToolResultLines(result, options = {}) {
 }
 
 export function shouldShowGuidance(prompt) {
-	return /\b(backlog|platypus|platy|what\s+next|next\s+item|queue|status|complete|completion|plan|planning|story|stories|work\s+item|work\s+items|direction|setup|onboard)\b/i.test(prompt);
+	return /\b(backlog|platypus|platy|what\s+next|next\s+item|queue|status|complete|completion|plan|planning|story|stories|work\s+item|work\s+items|direction|setup|onboard|standards|engineering|definition\s+of\s+done)\b/i.test(prompt);
 }

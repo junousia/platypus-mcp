@@ -144,6 +144,10 @@ fn scaffold_files(project_name: &str) -> Vec<(&'static str, String)> {
             architecture_direction_doc(project_name),
         ),
         ("docs/testing.md", testing_direction_doc(project_name)),
+        (
+            "docs/engineering.md",
+            engineering_standards_doc(project_name),
+        ),
         ("backlog/README.md", backlog_readme()),
         ("backlog/epics/general.md", general_epic()),
         ("backlog/templates/item.md", item_template()),
@@ -238,9 +242,10 @@ reviewable task plans, and implementation should run through isolated task
 worktrees before integration.
 
 Durable project direction lives in `docs/product.md`,
-`docs/architecture.md`, and `docs/testing.md`. Inspect and update those files
-before shaping backlog items when the product goal, stack, quality bar, or
-verification expectations are unclear.
+`docs/architecture.md`, `docs/testing.md`, and `docs/engineering.md`. Inspect
+and update those files before shaping backlog items when the product goal,
+stack, quality bar, verification expectations, or definition of done are
+unclear.
 
 ## Operating Loop
 
@@ -473,6 +478,60 @@ required checks, or acceptance evidence changes.
     )
 }
 
+fn engineering_standards_doc(project_name: &str) -> String {
+    format!(
+        r#"# Engineering Standards
+
+Durable engineering standards for `{}`. Update this before agents start
+implementation when structure, testing, review, evidence, or completion
+expectations change.
+
+## Module Boundaries
+
+- Ownership boundaries: _TBD_
+- Public interfaces and contracts: _TBD_
+- Forbidden coupling or shortcuts: _TBD_
+
+## Code Organization
+
+- Preferred layout: _TBD_
+- Naming conventions: _TBD_
+- Generated code policy: _TBD_
+
+## Test Strategy
+
+- Required test levels: _TBD_
+- Test data and fixture rules: _TBD_
+- Flaky or slow test policy: _TBD_
+
+## Required Verification Commands
+
+- Before completion: _TBD_
+- Before integration or release: _TBD_
+
+## UI Design Language
+
+- Visual language: _TBD_
+- Interaction and accessibility expectations: _TBD_
+
+## Commit And PR Expectations
+
+- Commit scope: _TBD_
+- Review or PR requirements: _TBD_
+
+## Evidence Expectations
+
+- Evidence to record: _TBD_
+- Findings and follow-up rules: _TBD_
+
+## Definition Of Done
+
+- _TBD_
+"#,
+        project_name
+    )
+}
+
 fn agents_doc() -> String {
     agent_guidance_doc("Agent Instructions")
 }
@@ -489,9 +548,10 @@ surface. When the MCP server is available, prefer Platypus tools over ad hoc
 task tracking.
 
 Durable project direction lives in `docs/product.md`,
-`docs/architecture.md`, and `docs/testing.md`. Inspect those files before
-planning new backlog items, and update them when the user changes product
-goals, stack preferences, quality expectations, or verification policy.
+`docs/architecture.md`, `docs/testing.md`, and `docs/engineering.md`. Inspect
+those files before planning new backlog items, and update them when the user
+changes product goals, stack preferences, quality expectations, verification
+policy, or definition of done.
 
 ## Startup
 
@@ -584,9 +644,10 @@ surface. When the MCP server is available, prefer Platypus tools over ad hoc
 file edits or informal task tracking.
 
 Durable project direction lives in `docs/product.md`,
-`docs/architecture.md`, and `docs/testing.md`. Inspect those files before
-planning new backlog items, and update them when the user changes product
-goals, stack preferences, quality expectations, or verification policy.
+`docs/architecture.md`, `docs/testing.md`, and `docs/engineering.md`. Inspect
+those files before planning new backlog items, and update them when the user
+changes product goals, stack preferences, quality expectations, verification
+policy, or definition of done.
 
 ## Default Flow
 
@@ -779,6 +840,7 @@ mod tests {
         let agents = fs::read_to_string(temp.path().join("AGENTS.md")).expect("agents");
         assert!(agents.contains("spec-driven development"));
         assert!(agents.contains("docs/product.md"));
+        assert!(agents.contains("docs/engineering.md"));
         assert!(agents.contains("inspect_queue_status"));
         assert!(agents.contains("inspect_work_queue"));
         assert!(agents.contains("first matching state"));
@@ -818,6 +880,7 @@ mod tests {
         let claude = fs::read_to_string(temp.path().join("CLAUDE.md")).expect("claude");
         assert!(claude.contains("spec-driven development"));
         assert!(claude.contains("docs/product.md"));
+        assert!(claude.contains("docs/engineering.md"));
         assert!(claude.contains("Claude Instructions"));
         assert!(claude.contains("inspect_queue_status"));
         assert!(claude.contains("inspect_work_queue"));
@@ -859,6 +922,7 @@ mod tests {
         let workflow = fs::read_to_string(temp.path().join("WORKFLOW.md")).expect("workflow");
         assert!(workflow.contains("matching state wins"));
         assert!(workflow.contains("docs/product.md"));
+        assert!(workflow.contains("docs/engineering.md"));
         assert!(workflow.contains("queue_state == \"direct_ready\""));
         assert!(workflow.contains("completed_pending_integration"));
         assert!(workflow.contains("approval_blocked"));
@@ -895,6 +959,11 @@ mod tests {
             fs::read_to_string(temp.path().join("docs/testing.md")).expect("testing direction");
         assert!(testing.contains("Required Verification"));
         assert!(testing.contains("Evidence Expectations"));
+        let engineering = fs::read_to_string(temp.path().join("docs/engineering.md"))
+            .expect("engineering standards");
+        assert!(engineering.contains("Module Boundaries"));
+        assert!(engineering.contains("Required Verification Commands"));
+        assert!(engineering.contains("Definition Of Done"));
         assert!(!temp.path().join("backlog/index.md").exists());
         assert!(temp.path().join("backlog/epics/general.md").is_file());
         assert!(temp.path().join("backlog/templates/plan.yaml").is_file());
@@ -938,6 +1007,7 @@ mod tests {
         );
         assert!(temp.path().join("docs/architecture.md").is_file());
         assert!(temp.path().join("docs/testing.md").is_file());
+        assert!(temp.path().join("docs/engineering.md").is_file());
         let gitignore = fs::read_to_string(temp.path().join(".gitignore")).expect("gitignore");
         assert!(gitignore.contains("custom-ignore"));
         assert!(gitignore.contains(".platy/"));

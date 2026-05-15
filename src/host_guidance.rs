@@ -119,9 +119,9 @@ straight to broad edits. Convert the goal into a controlled loop:
    server supplies facts, schemas, validation, and state transitions; it does
    not classify broad goals.
 3. Inspect durable project direction in `docs/product.md`,
-   `docs/architecture.md`, and `docs/testing.md` when present. If direction is
-   missing or stale, ask concise questions and update those files before
-   creating backlog items.
+   `docs/architecture.md`, `docs/testing.md`, and `docs/engineering.md` when
+   present. If direction or engineering standards are missing or stale, ask
+   concise questions and update those files before creating backlog items.
 4. For tiny scaffolds, the host may edit directly after user approval. No
    Platypus scaffold tool is involved: use the host's native file edits or
    scaffold command, commit the baseline, then return to Platypus for follow-up
