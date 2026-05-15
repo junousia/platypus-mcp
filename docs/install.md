@@ -36,8 +36,8 @@ extension resolves the binary in this order:
 1. `PLATYPUS_MCP_BIN`, for local testing or custom installations.
 2. A package-local prebuilt binary under `bin/platypus-mcp`,
    `bin/<platform>/platypus-mcp`, or `vendor/<platform>/platypus-mcp`, or a
-   matching optional platform binary package. Apple silicon uses platform key
-   `darwin-arm64`.
+   matching optional platform binary package. Current release platform keys are
+   `linux-x64`, `linux-arm64`, `darwin-x64`, and `darwin-arm64`.
 3. The repository `Cargo.toml` fallback when running from a development
    checkout.
 4. `platypus-mcp` on `PATH`, such as a `cargo install platypus-mcp` install.
@@ -61,17 +61,20 @@ platform binary under `bin/` or `vendor/`; the check then requires an
 executable package-local binary candidate.
 Set `NPM_REQUIRED_PLATFORMS=darwin-arm64` or
 `PLATYPUS_NPM_REQUIRED_PLATFORMS=darwin-arm64` to require a specific packaged
-platform binary. The publish workflow validates `linux-x64` on Linux and
-`darwin-arm64` on a macOS arm64 runner by staging:
+platform binary. The publish workflow validates Linux x64, Linux arm64, macOS
+Intel, and macOS arm64 runners by staging:
 
 ```text
 vendor/linux-x64/platypus-mcp
+vendor/linux-arm64/platypus-mcp
+vendor/darwin-x64/platypus-mcp
 vendor/darwin-arm64/platypus-mcp
 ```
 
-The Apple silicon build uses Rust target `aarch64-apple-darwin`. The binary is
-not currently codesigned or notarized; add that as a separate release hardening
-step if macOS distribution warnings become a blocker.
+The Apple silicon build uses Rust target `aarch64-apple-darwin`; the other
+release binaries are built on native hosted runners. The macOS binaries are not
+currently codesigned or notarized; add that as a separate release hardening step
+if macOS distribution warnings become a blocker.
 
 Configure an MCP host:
 

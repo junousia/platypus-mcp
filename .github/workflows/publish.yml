@@ -21,7 +21,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  NPM_RELEASE_PLATFORMS: linux-x64,darwin-arm64
+  NPM_RELEASE_PLATFORMS: linux-x64,linux-arm64,darwin-x64,darwin-arm64
 
 jobs:
   npm-package:
@@ -33,6 +33,14 @@ jobs:
         include:
           - platform: linux-x64
             runs_on: ubuntu-latest
+            cargo_target: ""
+            binary_path: target/release/platypus-mcp
+          - platform: linux-arm64
+            runs_on: ubuntu-24.04-arm
+            cargo_target: ""
+            binary_path: target/release/platypus-mcp
+          - platform: darwin-x64
+            runs_on: macos-15-intel
             cargo_target: ""
             binary_path: target/release/platypus-mcp
           - platform: darwin-arm64

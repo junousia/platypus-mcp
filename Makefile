@@ -64,7 +64,7 @@ help: ## Show categorized developer commands.
 	@printf '\033[1mVariables\033[0m\n'
 	@printf '  ROOT=%s\n' '$(ROOT)'
 	@printf '  MAX_TASKS=%s\n' '$(MAX_TASKS)'
-	@printf '  NPM_REQUIRED_PLATFORMS=linux-x64,darwin-arm64 for strict npm binary validation\n'
+	@printf '  NPM_REQUIRED_PLATFORMS=linux-x64,linux-arm64,darwin-x64,darwin-arm64 for strict npm binary validation\n'
 	@printf '  TEST=%s\n' '$(TEST)'
 	@printf '  ARGS=%s\n' '$(ARGS)'
 	@printf '  PROJECT_ROOT=/path/to/new/temp/project for *-feedback\n'

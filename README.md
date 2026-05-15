@@ -136,9 +136,9 @@ The Pi npm package resolves the MCP binary in this order: `PLATYPUS_MCP_BIN`, a
 package-local or optional platform prebuilt binary, a development checkout
 `Cargo.toml` fallback, then `platypus-mcp` on `PATH`. Normal npm installs should
 not need to compile Rust during postinstall. Release validation currently
-stages and checks Linux x64 and Apple silicon (`darwin-arm64`) package-local
-binaries under `vendor/<platform>/platypus-mcp`. Validate npm package contents
-with:
+stages and checks Linux x64, Linux arm64, macOS Intel (`darwin-x64`), and Apple
+silicon (`darwin-arm64`) package-local binaries under
+`vendor/<platform>/platypus-mcp`. Validate npm package contents with:
 
 ```bash
 make npm-package
