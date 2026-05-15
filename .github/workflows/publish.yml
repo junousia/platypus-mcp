@@ -100,8 +100,33 @@ jobs:
       - name: Validate package
         run: make publish-dry-run
 
+      - name: Check crates.io version
+        id: crate-version
+        run: |
+          crate_name="$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["packages"][0]["name"])')"
+          crate_version="$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          http_status="$(curl -sS -o /tmp/crate-version.json -w "%{http_code}" \
+            "https://crates.io/api/v1/crates/${crate_name}/${crate_version}")"
+          case "${http_status}" in
+            200)
+              echo "published=true" >> "${GITHUB_OUTPUT}"
+              echo "${crate_name} ${crate_version} already exists on crates.io; skipping upload."
+              ;;
+            404)
+              echo "published=false" >> "${GITHUB_OUTPUT}"
+              echo "${crate_name} ${crate_version} is not published yet."
+              ;;
+            *)
+              echo "Could not determine crates.io publish state for ${crate_name} ${crate_version}; HTTP ${http_status}" >&2
+              cat /tmp/crate-version.json >&2 || true
+              exit 2
+              ;;
+          esac
+
       - name: Publish to crates.io
-        if: github.event_name == 'release' || inputs.dry_run == false
+        if: (github.event_name == 'release' || inputs.dry_run == false) && steps.crate-version.outputs.published != 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
@@ -110,6 +135,10 @@ jobs:
             exit 2
           fi
           make publish
+
+      - name: Skip crates.io publish
+        if: (github.event_name == 'release' || inputs.dry_run == false) && steps.crate-version.outputs.published == 'true'
+        run: echo "Crate version already exists on crates.io; treating publish as complete for rerun idempotency."
 
   npm-publish:
     name: Publish npm package
@@ -163,8 +192,25 @@ jobs:
           PLATYPUS_NPM_REQUIRED_PLATFORMS: ${{ env.NPM_RELEASE_PLATFORMS }}
         run: make npm-publish-dry-run
 
+      - name: Check npm package version
+        id: npm-version
+        run: |
+          package_name="$(node -p "require('./package.json').name")"
+          package_version="$(node -p "require('./package.json').version")"
+          if npm view "${package_name}@${package_version}" version --registry https://registry.npmjs.org >/tmp/npm-version.txt 2>/tmp/npm-version.err; then
+            echo "published=true" >> "${GITHUB_OUTPUT}"
+            echo "${package_name} ${package_version} already exists on npm; skipping upload."
+          elif grep -Eq 'E404|404 Not Found|No match found' /tmp/npm-version.err; then
+            echo "published=false" >> "${GITHUB_OUTPUT}"
+            echo "${package_name} ${package_version} is not published yet."
+          else
+            echo "Could not determine npm publish state for ${package_name} ${package_version}." >&2
+            cat /tmp/npm-version.err >&2
+            exit 2
+          fi
+
       - name: Publish to npm
-        if: github.event_name == 'release' || inputs.dry_run == false
+        if: (github.event_name == 'release' || inputs.dry_run == false) && steps.npm-version.outputs.published != 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PLATYPUS_NPM_REQUIRE_BINARY: "1"
@@ -175,3 +221,7 @@ jobs:
             exit 2
           fi
           make npm-publish
+
+      - name: Skip npm publish
+        if: (github.event_name == 'release' || inputs.dry_run == false) && steps.npm-version.outputs.published == 'true'
+        run: echo "npm package version already exists; treating publish as complete for rerun idempotency."
