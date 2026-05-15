@@ -278,5 +278,5 @@ intended.
 Release uploads are idempotent by package version. If a release partially
 publishes, for example crates.io succeeds but npm fails because the token needs
 to be replaced, update the secret and rerun the workflow. The workflow validates
-the package again, skips already-published versions, and continues with the
-remaining upload.
+the package again, treats an already-published crate as complete, skips
+already-published npm versions, and continues with the remaining upload.

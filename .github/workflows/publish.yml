@@ -100,33 +100,8 @@ jobs:
       - name: Validate package
         run: make publish-dry-run
 
-      - name: Check crates.io version
-        id: crate-version
-        run: |
-          crate_name="$(cargo metadata --no-deps --format-version 1 \
-            | python3 -c 'import json, sys; print(json.load(sys.stdin)["packages"][0]["name"])')"
-          crate_version="$(cargo metadata --no-deps --format-version 1 \
-            | python3 -c 'import json, sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
-          http_status="$(curl -sS -o /tmp/crate-version.json -w "%{http_code}" \
-            "https://crates.io/api/v1/crates/${crate_name}/${crate_version}")"
-          case "${http_status}" in
-            200)
-              echo "published=true" >> "${GITHUB_OUTPUT}"
-              echo "${crate_name} ${crate_version} already exists on crates.io; skipping upload."
-              ;;
-            404)
-              echo "published=false" >> "${GITHUB_OUTPUT}"
-              echo "${crate_name} ${crate_version} is not published yet."
-              ;;
-            *)
-              echo "Could not determine crates.io publish state for ${crate_name} ${crate_version}; HTTP ${http_status}" >&2
-              cat /tmp/crate-version.json >&2 || true
-              exit 2
-              ;;
-          esac
-
       - name: Publish to crates.io
-        if: (github.event_name == 'release' || inputs.dry_run == false) && steps.crate-version.outputs.published != 'true'
+        if: github.event_name == 'release' || inputs.dry_run == false
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
@@ -134,11 +109,20 @@ jobs:
             echo "CARGO_REGISTRY_TOKEN secret is required for publishing." >&2
             exit 2
           fi
-          make publish
-
-      - name: Skip crates.io publish
-        if: (github.event_name == 'release' || inputs.dry_run == false) && steps.crate-version.outputs.published == 'true'
-        run: echo "Crate version already exists on crates.io; treating publish as complete for rerun idempotency."
+          set +e
+          make publish > /tmp/cargo-publish.out 2> /tmp/cargo-publish.err
+          code="$?"
+          set -e
+          cat /tmp/cargo-publish.out
+          cat /tmp/cargo-publish.err >&2
+          if [ "${code}" -eq 0 ]; then
+            exit 0
+          fi
+          if grep -Eiq 'already exists|previously uploaded' /tmp/cargo-publish.out /tmp/cargo-publish.err; then
+            echo "Crate version already exists on crates.io; treating publish as complete for rerun idempotency."
+            exit 0
+          fi
+          exit "${code}"
 
   npm-publish:
     name: Publish npm package
