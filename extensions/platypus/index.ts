@@ -687,6 +687,13 @@ function guidanceForSnapshot(snapshot?: PlatypusSnapshot): string | undefined {
 			"When working a direct_ready Platypus item, use the direct loop: inspect acceptance criteria, edit the manager workspace, verify, then call platypus_complete_backlog_item with summary, changed_files, and verification_status.",
 			"Call platypus_prepare_work only when response-local guidance or worker handoff is useful.",
 		);
+	} else if ((snapshot.total ?? 0) === 0) {
+		lines.push(
+			"The backlog is empty. Ask the user for the product goal if needed, then call platypus_create_backlog_items with concrete items, acceptance criteria, owned_surfaces, execution_path, and planning_gate.",
+			"Do not invent implementation details that are not implied by the user goal or repository state.",
+		);
+	} else {
+		lines.push("No item is ready right now. Use platypus_inspect_work_queue or platypus_doctor_snapshot to explain blockers and the next safe action.");
 	}
 	return lines.join("\n");
 }
@@ -838,8 +845,31 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
 			const text = latestSnapshot?.readyItems[0]
 				? renderDashboardText({ ...latestSnapshot, blockedItems: [] }, true)
-				: "No runnable Platypus backlog item is currently ready.";
+				: "No runnable Platypus backlog item is currently ready. Use /platy-plan to ask the agent to shape backlog items or /platy-doctor for recovery guidance.";
 			if (ctx.hasUI) ctx.ui.notify(text, latestSnapshot?.readyItems[0] ? "info" : "warning");
+		},
+	});
+
+	pi.registerCommand("platy-next", {
+		description: "Show the current Platypus next action",
+		handler: async (_args, ctx) => {
+			if (!latestSnapshot) await refreshSnapshot(ctx);
+			const text = latestSnapshot?.nextAction ?? renderDashboardText(latestSnapshot, true);
+			if (ctx.hasUI) ctx.ui.notify(text, "info");
+		},
+	});
+
+	pi.registerCommand("platy-plan", {
+		description: "Ask the agent to create concrete Platypus backlog items from the current goal",
+		handler: async (_args, ctx) => {
+			if (!latestSnapshot) await refreshSnapshot(ctx);
+			const prompt = [
+				"Shape the current project goal into concrete Platypus backlog items.",
+				"First call platypus_inspect_session and inspect repository context if needed.",
+				"Then call platypus_create_backlog_items with concrete titles, goals, acceptance criteria, owned_surfaces, execution_path, and planning_gate.",
+				"Present the created items and the next ready item. Ask for missing product direction instead of inventing details.",
+			].join(" ");
+			pi.sendUserMessage(prompt, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
 
@@ -849,10 +879,14 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
 			const item = latestSnapshot?.readyItems[0];
 			if (!item) {
-				if (ctx.hasUI) ctx.ui.notify("No ready Platypus item to start.", "warning");
+				if (ctx.hasUI) ctx.ui.notify("No ready Platypus item to start. Use /platy-plan to create work or /platy-doctor to inspect recovery guidance.", "warning");
 				return;
 			}
-			const prompt = `Work on Platypus backlog item ${item.id}: ${item.title}. Inspect its acceptance criteria, make only the necessary project changes, run verification, then complete the item with platypus_complete_backlog_item.`;
+			const prompt = [
+				`Work on Platypus backlog item ${item.id}: ${item.title}.`,
+				"Call platypus_get_backlog_item or platypus_inspect_work_queue if you need the acceptance criteria.",
+				"Make only the necessary project changes, run verification, then call platypus_complete_backlog_item with item_id, summary, changed_files, verification_status, verification_summary, and verification_refs.",
+			].join(" ");
 			pi.sendUserMessage(prompt, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
@@ -863,9 +897,18 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 			const item = latestSnapshot?.readyItems[0];
 			const target = item ? `${item.id} (${item.title})` : "the current direct-ready Platypus item";
 			pi.sendUserMessage(
-				`If implementation and verification are complete, call platypus_complete_backlog_item for ${target} with a concise summary, changed_files, and verification_status. If anything is missing, explain what remains first.`,
+				`If implementation and verification are complete, call platypus_complete_backlog_item for ${target} with item_id, summary, changed_files, verification_status, verification_summary, and verification_refs. If anything is missing, explain what remains first.`,
 				ctx.isIdle() ? undefined : { deliverAs: "followUp" },
 			);
+		},
+	});
+
+	pi.registerCommand("platy-doctor", {
+		description: "Run Platypus diagnostics and show recovery guidance",
+		handler: async (_args, ctx) => {
+			const result = await runPlatypusTool(pi, ctx, "doctor_snapshot", {});
+			const lines = renderToolResultLines(result, { expanded: true });
+			if (ctx.hasUI) ctx.ui.notify(lines.join("\n"), result.isError ? "error" : "info");
 		},
 	});
 
@@ -901,10 +944,10 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
 			const item = latestSnapshot?.readyItems[0];
 			if (!item) {
-				if (ctx.hasUI) ctx.ui.notify("No ready Platypus item to start.", "warning");
+				if (ctx.hasUI) ctx.ui.notify("No ready Platypus item to start. Use /platy-plan to create work or /platy-doctor to inspect recovery guidance.", "warning");
 				return;
 			}
-			pi.sendUserMessage(`Work on Platypus backlog item ${item.id}: ${item.title}.`, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+			pi.sendUserMessage(`Work on Platypus backlog item ${item.id}: ${item.title}. Complete it with platypus_complete_backlog_item after verification.`, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
 

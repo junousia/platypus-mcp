@@ -246,6 +246,15 @@ uses dedicated typed tools for startup and execution, including
 `platypus_call_tool` remains available only as a generic escape hatch for tools
 that do not yet have a dedicated Pi wrapper.
 
+The Pi happy path is intentionally short:
+
+1. `/platy-refresh` or `/platy-ready` shows current queue state.
+2. `/platy-plan` asks the agent to create concrete backlog items when the queue
+   is empty.
+3. `/platy-start` asks the agent to work the next ready item and complete it
+   with `platypus_complete_backlog_item`.
+4. `/platy-doctor` shows setup or recovery guidance when work is blocked.
+
 Add `--init-project` for fresh repositories so `AGENTS.md`, `CLAUDE.md`,
 `WORKFLOW.md`, `platy.yaml`, and `backlog/` are created alongside host MCP
 configuration or Pi package settings.

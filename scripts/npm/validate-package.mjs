@@ -47,6 +47,20 @@ const requiredCoreTypedTools = [
   "inspect_workflow_config",
 ];
 
+const requiredPiCommands = [
+  "platy",
+  "platypus-status",
+  "platy-refresh",
+  "platy-ready",
+  "platy-next",
+  "platy-plan",
+  "platy-start",
+  "platy-complete",
+  "platy-doctor",
+  "platy-hide",
+  "platy-show",
+];
+
 const forbiddenPrefixes = [
   "target/",
   ".platy/",
@@ -150,6 +164,11 @@ for (const toolName of requiredCoreTypedTools) {
 }
 if (!extensionSource.includes("platypus_call_tool")) {
   metadataErrors.push("Pi extension must keep platypus_call_tool as the generic escape hatch");
+}
+for (const commandName of requiredPiCommands) {
+  if (!extensionSource.includes(`registerCommand("${commandName}"`)) {
+    metadataErrors.push(`Pi extension must register /${commandName}`);
+  }
 }
 
 const packedFiles = Array.isArray(pack?.files) ? pack.files : [];

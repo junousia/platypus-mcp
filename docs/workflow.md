@@ -298,6 +298,29 @@ when verification fields are present, verification evidence. Explicit
 `record_auto_evidence=false` only when explicit evidence records already cover
 the closure.
 
+### Pi Happy Path
+
+Pi keeps the common Platypus workflow behind a small command set so users do not
+need to memorize the underlying MCP tool surface:
+
+1. Run `/platy-refresh` or `/platy-ready` to inspect current queue state.
+2. If the queue is empty, run `/platy-plan`. The agent should inspect the
+   session, ask for missing product direction, and then call
+   `platypus_create_backlog_items` with concrete titles, goals, acceptance
+   criteria, owned surfaces, execution paths, and planning gates.
+3. Run `/platy-start` to ask the agent to work on the next ready item. The
+   prompt names the target item and tells the agent to finish with
+   `platypus_complete_backlog_item`.
+4. Run `/platy-complete` when implementation is done but the agent has not yet
+   closed the item. The required fields are `item_id`, `summary`,
+   `changed_files`, `verification_status`, `verification_summary`, and
+   `verification_refs`.
+5. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
+
+These commands surface current state and exact tools, but they do not choose a
+product direction for the user. The agent remains responsible for judgement and
+for asking clarifying questions when the goal is underspecified.
+
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime
 status, task attempts, PR metadata, or closure state.
