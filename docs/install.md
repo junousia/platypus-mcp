@@ -88,12 +88,15 @@ platypus-mcp bootstrap pi
 For a fresh project, initialize the repository guidance at the same time:
 
 ```bash
-platypus-mcp bootstrap codex --root /path/to/project --init-project
+platypus-mcp bootstrap pi --root /path/to/project --init-project
 ```
 
-That writes host MCP configuration and creates project-local guidance such as
+That writes host configuration and creates project-local guidance such as
 `AGENTS.md`, `CLAUDE.md`, `WORKFLOW.md`, `platy.yaml`, and `backlog/` in the
-target root. Existing files are preserved by default.
+target root. Existing files are preserved by default. For Pi specifically,
+bootstrap writes `.pi/settings.json` with the `npm:platypus-pi` package entry
+instead of writing a generic `.mcp.json` file; the Pi package supplies the
+`platypus_*` tools and forwards them to the Rust MCP tool CLI.
 
 Useful bootstrap options:
 
@@ -104,6 +107,7 @@ platypus-mcp bootstrap codex --global
 platypus-mcp bootstrap codex --root /path/to/project
 platypus-mcp bootstrap codex --root /path/to/project --init-project
 platypus-mcp bootstrap codex --root /path/to/project --init-project --project-name "My App"
+platypus-mcp bootstrap pi --root /path/to/project --check --init-project
 ```
 
 By default `bootstrap <host>` only wires the MCP server into the selected host.
@@ -224,6 +228,27 @@ For a fresh project:
 ```bash
 platypus-mcp bootstrap opencode --root /path/to/project --init-project
 ```
+
+## Pi
+
+Pi loads packages from project settings, so Platypus uses `.pi/settings.json`
+rather than a shared MCP config file:
+
+```bash
+platypus-mcp bootstrap pi --root /path/to/project --init-project
+```
+
+The generated settings add `npm:platypus-pi` to the `packages` array while
+preserving existing Pi settings. Use `--check --init-project` to verify that the
+project has Pi settings and Platypus guidance files:
+
+```bash
+platypus-mcp bootstrap pi --root /path/to/project --check --init-project
+```
+
+If the check reports that the binary cannot be resolved, install the server with
+`cargo install platypus-mcp`, install a Pi npm package that contains a bundled
+platform binary, or set `PLATYPUS_MCP_BIN` to a working `platypus-mcp` path.
 
 ## First Project Smoke Flow
 

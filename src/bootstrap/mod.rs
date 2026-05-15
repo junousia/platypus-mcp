@@ -1,6 +1,7 @@
 mod codex;
 mod json_hosts;
 mod paths;
+mod pi;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -10,7 +11,10 @@ use anyhow::{Context, Result};
 use std::{env, fs, path::PathBuf};
 
 pub use types::BootstrapCommand;
-use types::{BootstrapInvocation, BootstrapMode, Host, ServerConfig, SERVER_LAUNCHER, SERVER_NAME};
+use types::{
+    BootstrapInvocation, BootstrapMode, Host, ServerConfig, PI_PACKAGE_SOURCE, SERVER_LAUNCHER,
+    SERVER_NAME,
+};
 
 pub fn run_cli(args: &[String]) -> Result<i32> {
     let invocation = BootstrapInvocation::parse(args)?;
@@ -83,15 +87,15 @@ impl BootstrapPlan {
         let server = ServerConfig::new(invocation.root.as_deref());
         let rendered = match host {
             Host::Codex => codex::render(&existing, &server, invocation.force)?,
-            Host::Claude | Host::Pi => {
-                json_hosts::shared_mcp_config(&existing, &server, invocation.force)?
-            }
+            Host::Claude => json_hosts::shared_mcp_config(&existing, &server, invocation.force)?,
+            Host::Pi => pi::settings_config(&existing, PI_PACKAGE_SOURCE, &path, invocation.force)?,
             Host::Opencode => json_hosts::opencode_config(&existing, &server, invocation.force)?,
         };
         let already_configured = existed
             && match host {
                 Host::Codex => codex::is_configured(&existing, &server),
-                Host::Claude | Host::Pi => json_hosts::shared_mcp_is_configured(&existing, &server),
+                Host::Claude => json_hosts::shared_mcp_is_configured(&existing, &server),
+                Host::Pi => pi::settings_is_configured(&existing, PI_PACKAGE_SOURCE, &path),
                 Host::Opencode => json_hosts::opencode_is_configured(&existing, &server),
             };
 
@@ -110,7 +114,7 @@ impl BootstrapPlan {
     }
 
     fn apply(&self) -> Result<()> {
-        if !self.already_configured {
+        if self.force || !self.already_configured {
             if let Some(parent) = self.path.parent() {
                 fs::create_dir_all(parent)
                     .with_context(|| format!("create {}", parent.display()))?;
@@ -149,7 +153,7 @@ fn print_hosts() {
     println!("  codex      Codex CLI TOML config");
     println!("  claude     Claude Code project .mcp.json config");
     println!("  opencode   OpenCode JSON config");
-    println!("  pi         Pi MCP adapter shared .mcp.json config");
+    println!("  pi         Pi project package settings");
 }
 
 fn print_plan(status: &str, plan: &BootstrapPlan) {
@@ -168,8 +172,23 @@ fn print_plan(status: &str, plan: &BootstrapPlan) {
     if plan.force {
         println!("force: true");
     }
-    println!("server: {SERVER_NAME}");
-    println!("command: sh -lc '{}'", SERVER_LAUNCHER);
+    if plan.host == Host::Pi {
+        let binary = pi::binary_status();
+        println!("package: {PI_PACKAGE_SOURCE}");
+        println!("settings key: packages");
+        println!("mcp server: provided by the Pi extension package");
+        println!(
+            "binary: {}",
+            if binary.ready {
+                binary.detail
+            } else {
+                format!("{}; {}", binary.detail, binary.next_action)
+            }
+        );
+    } else {
+        println!("server: {SERVER_NAME}");
+        println!("command: sh -lc '{}'", SERVER_LAUNCHER);
+    }
     if plan.init_project {
         println!("project init: requested");
         println!("project root: {}", plan.project_root.display());

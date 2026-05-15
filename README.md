@@ -167,7 +167,7 @@ For a fresh project, configure the host and initialize repo-local guidance in
 one step:
 
 ```bash
-platypus-mcp bootstrap codex --root /path/to/project --init-project
+platypus-mcp bootstrap pi --root /path/to/project --init-project
 ```
 
 Inspect before writing or check an existing setup:
@@ -175,6 +175,7 @@ Inspect before writing or check an existing setup:
 ```bash
 platypus-mcp bootstrap codex --dry-run
 platypus-mcp bootstrap codex --check
+platypus-mcp bootstrap pi --root /path/to/project --check --init-project
 ```
 
 During local development:
@@ -219,11 +220,14 @@ platypus-mcp bootstrap opencode
 platypus-mcp bootstrap pi
 ```
 
-This repository also contains a Pi package manifest and extension. During local
-checkout development, `.pi/settings.json` loads the package from `..`, so Pi
-starts with `platypus_*` tools available in this repository. To try the same
-extension from another project before publishing, install this checkout or a Git
-URL as a Pi package:
+This repository also contains a Pi package manifest and extension. `bootstrap
+pi` writes Pi's native project settings file (`.pi/settings.json`) with
+`npm:platypus-pi` in `packages`, and `--init-project` creates the Platypus
+project guidance in the same pass. During local checkout development,
+`.pi/settings.json` can load the package from `..`, so Pi starts with
+`platypus_*` tools available in this repository. To try the same extension from
+another project before publishing, install this checkout or a Git URL as a Pi
+package:
 
 ```bash
 cd /path/to/other-project
@@ -236,7 +240,7 @@ Platypus root fixed to Pi's current working directory.
 
 Add `--init-project` for fresh repositories so `AGENTS.md`, `CLAUDE.md`,
 `WORKFLOW.md`, `platy.yaml`, and `backlog/` are created alongside host MCP
-configuration.
+configuration or Pi package settings.
 
 If your host defers tool schemas, read resource
 `platypus://guidance/tool-preload` or prompt `platypus-tool-preload` at session

@@ -21,8 +21,8 @@ pub(super) fn default_config_path(host: Host, scope: Scope, root: &Path) -> Resu
         }
         (Host::Opencode, Scope::Project) => Ok(root.join("opencode.json")),
         (Host::Opencode, Scope::Global) => Ok(home_dir()?.join(".config/opencode/opencode.json")),
-        (Host::Pi, Scope::Project) => Ok(root.join(".mcp.json")),
-        (Host::Pi, Scope::Global) => Ok(home_dir()?.join(".config/mcp/mcp.json")),
+        (Host::Pi, Scope::Project) => Ok(root.join(".pi/settings.json")),
+        (Host::Pi, Scope::Global) => Ok(home_dir()?.join(".pi/agent/settings.json")),
     }
 }
 

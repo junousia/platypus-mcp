@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 pub(super) const SERVER_NAME: &str = "platypus";
 pub(super) const SERVER_LAUNCHER: &str = "exec \"$HOME/.cargo/bin/platypus-mcp\"";
+pub(super) const PI_PACKAGE_SOURCE: &str = "npm:platypus-pi";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BootstrapMode {
@@ -82,7 +83,7 @@ pub enum BootstrapCommand {
     Claude(HostOptions),
     /// Configure OpenCode JSON MCP config.
     Opencode(HostOptions),
-    /// Configure Pi shared MCP config.
+    /// Configure Pi project package settings.
     Pi(HostOptions),
 }
 
