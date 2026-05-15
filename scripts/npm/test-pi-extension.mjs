@@ -24,6 +24,11 @@ import {
 	parseTimeout,
 	runPlatypusTool,
 } from "../../extensions/platypus/runtime.mjs";
+import {
+	buildStoryReviewPrompt,
+	formatStoryReview,
+	reviewStoryDraft,
+} from "../../extensions/platypus/review.mjs";
 
 const packageRoot = process.cwd();
 const projectRoot = "/tmp/pi-project";
@@ -141,6 +146,46 @@ assert.match(buildDirectionPrompt({ revision: true }), /Review and revise/);
 assert.match(buildEngineeringStandardsPrompt(), /module boundaries/);
 assert.match(buildEngineeringStandardsPrompt(), /docs\/engineering\.md/);
 assert.match(buildEngineeringStandardsPrompt({ revision: true }), /Review and revise/);
+assert.match(buildStoryReviewPrompt("MCP-132"), /platypus_get_backlog_item/);
+assert.match(buildStoryReviewPrompt("draft a better auth story"), /Blocking issues/);
+assert.match(buildStoryReviewPrompt(), /Ask the user/);
+
+const vagueReview = reviewStoryDraft({ title: "Auth", goal: "Do auth" });
+assert.equal(vagueReview.status, "blocked");
+assert.match(formatStoryReview(vagueReview), /Add testable acceptance criteria/);
+const acceptableReview = reviewStoryDraft({
+	title: "Add login form",
+	goal: "Allow registered users to sign in with email and password.",
+	acceptance: ["Successful login reaches the dashboard."],
+	owned_surfaces: ["src/auth"],
+	depends_on: [],
+	execution_path: "direct_edit",
+	planning_gate: "none",
+	expected_evidence: ["make check"],
+});
+assert.equal(acceptableReview.status, "reviewable");
+assert.deepEqual(acceptableReview.blocking, []);
+const dependencyBlockedReview = reviewStoryDraft({
+	title: "Add user settings",
+	goal: "Let signed-in users edit notification preferences.",
+	acceptance: ["Settings persist after reload."],
+	owned_surfaces: ["src/settings"],
+	depends_on: ["MCP-001"],
+	open_dependencies: ["MCP-001"],
+	expected_evidence: ["make check"],
+});
+assert.equal(dependencyBlockedReview.status, "blocked");
+assert.match(formatStoryReview(dependencyBlockedReview), /MCP-001/);
+const broadReview = reviewStoryDraft({
+	title: "Build complete platform",
+	goal: "Implement the entire customer portal and all admin workflows.",
+	acceptance: ["Portal and admin flows work."],
+	owned_surfaces: ["frontend", "backend", "infra", "auth", "billing", "admin"],
+	depends_on: [],
+	expected_evidence: ["make check"],
+});
+assert.equal(broadReview.status, "reviewable");
+assert.match(formatStoryReview(broadReview), /Consider splitting/);
 
 const directionRoot = mkdtempSync(join(tmpdir(), "platypus-pi-direction-"));
 try {
@@ -174,6 +219,7 @@ for (const toolName of [
 	"inspect_status",
 	"inspect_work_queue",
 	"create_backlog_items",
+	"update_backlog_item",
 	"prepare_work",
 	"complete_backlog_item",
 	"doctor_snapshot",

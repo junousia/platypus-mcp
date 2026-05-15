@@ -269,6 +269,9 @@ agent to capture product, architecture, and testing direction in
 `docs/product.md`, `docs/architecture.md`, and `docs/testing.md`.
 Run `/platy-standards` to capture implementation structure, verification,
 review, evidence, and definition-of-done expectations in `docs/engineering.md`.
+Run `/platy-story-review <draft-or-item-id>` before execution when a story or
+manager proposal needs visible clarification; approved revisions can then be
+written through typed backlog create or update tools.
 Use `/platy-direction-revise` or `/platy-standards-revise` to update those
 files later without rerunning the whole setup flow.
 

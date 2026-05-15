@@ -9,6 +9,7 @@ const requiredFiles = new Set([
   "extensions/platypus/commands.mjs",
   "extensions/platypus/direction.mjs",
   "extensions/platypus/renderers.mjs",
+  "extensions/platypus/review.mjs",
   "extensions/platypus/runtime.mjs",
 ]);
 
@@ -38,6 +39,7 @@ const requiredCoreTypedTools = [
   "get_backlog_item",
   "create_backlog_item",
   "create_backlog_items",
+  "update_backlog_item",
   "prepare_work",
   "complete_backlog_item",
   "finish_work",
@@ -61,6 +63,7 @@ const requiredPiCommands = [
   "platy-direction-revise",
   "platy-standards",
   "platy-standards-revise",
+  "platy-story-review",
   "platy-start",
   "platy-complete",
   "platy-doctor",

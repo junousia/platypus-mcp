@@ -312,20 +312,25 @@ need to memorize the underlying MCP tool surface:
    strategy, required verification commands, UI design language, commit/PR
    expectations, evidence expectations, and definition of done in
    `docs/engineering.md`.
-4. If the queue is empty, run `/platy-plan`. The agent should inspect the
+4. Run `/platy-story-review <draft-or-item-id>` before executing vague or
+   manager-proposed work. The agent should separate blocking issues from
+   improvement suggestions, and use `platypus_create_backlog_items` with
+   `preview=true` or `platypus_update_backlog_item` only after the revision is
+   approved.
+5. If the queue is empty, run `/platy-plan`. The agent should inspect the
    session, ask for missing product direction, and then call
    `platypus_create_backlog_items` with concrete titles, goals, acceptance
    criteria, owned surfaces, execution paths, and planning gates.
-5. Run `/platy-start` to ask the agent to work on the next ready item. The
+6. Run `/platy-start` to ask the agent to work on the next ready item. The
    prompt names the target item and tells the agent to finish with
    `platypus_complete_backlog_item`.
-6. Run `/platy-complete` when implementation is done but the agent has not yet
+7. Run `/platy-complete` when implementation is done but the agent has not yet
    closed the item. The required fields are `item_id`, `summary`,
    `changed_files`, `verification_status`, `verification_summary`, and
    `verification_refs`.
-7. Run `/platy-direction-revise` or `/platy-standards-revise` to revise
+8. Run `/platy-direction-revise` or `/platy-standards-revise` to revise
    captured guidance without rerunning the whole setup flow.
-8. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
+9. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
 
 These commands surface current state and exact tools, but they do not choose a
 product direction for the user. The agent remains responsible for judgement and

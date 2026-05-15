@@ -21,6 +21,7 @@ import {
 	shouldShowGuidance,
 	snapshotFromDetails,
 } from "./renderers.mjs";
+import { buildStoryReviewPrompt } from "./review.mjs";
 import { runPlatypusTool as runPlatypusToolRuntime } from "./runtime.mjs";
 
 type JsonObject = Record<string, unknown>;
@@ -216,6 +217,26 @@ const backlogItemShape = {
 	notes: Type.Optional(Type.String({ description: "Optional notes." })),
 };
 
+const backlogUpdateShape = {
+	item_id: itemId("Existing backlog item id to update."),
+	title: Type.Optional(Type.String({ description: "Updated human-readable title." })),
+	priority: Type.Optional(priority),
+	type: Type.Optional(itemType),
+	area: Type.Optional(Type.String({ description: "Updated primary area or product surface." })),
+	epic: Type.Optional(Type.String({ description: "Existing epic id. Create the epic before updating when needed." })),
+	depends_on: Type.Optional(Type.Array(itemId(), { description: "Replacement dependency list. Use an empty list when there are no dependencies." })),
+	owned_surfaces: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "Replacement owned surfaces list." })),
+	external_refs: Type.Optional(Type.Array(externalRef, { description: "Replacement external references." })),
+	execution_path: Type.Optional(executionPath),
+	planning_gate: Type.Optional(planningGate),
+	goal: Type.Optional(Type.String({ description: "Updated goal text." })),
+	implementation_contract: Type.Optional(Type.String({ description: "Updated implementation contract." })),
+	contract: Type.Optional(Type.String({ description: "Alias for implementation_contract. Provide only one of these fields." })),
+	acceptance: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "Replacement acceptance criteria." })),
+	notes: Type.Optional(Type.String({ description: "Updated notes. Empty string removes notes." })),
+	force_closed: Type.Optional(Type.Boolean({ description: "Allow updating an item already closed by Git trailer or direct completion." })),
+};
+
 const CORE_TYPED_TOOL_NAMES = new Set<string>([
 	"inspect_session",
 	"inspect_status",
@@ -227,6 +248,7 @@ const CORE_TYPED_TOOL_NAMES = new Set<string>([
 	"get_backlog_item",
 	"create_backlog_item",
 	"create_backlog_items",
+	"update_backlog_item",
 	"prepare_work",
 	"complete_backlog_item",
 	"finish_work",
@@ -301,6 +323,10 @@ const coreToolParameters: Record<string, unknown> = {
 		},
 		{ additionalProperties: false, description: "Create multiple backlog items atomically." },
 	),
+	update_backlog_item: Type.Object(backlogUpdateShape, {
+		additionalProperties: false,
+		description: "Update one existing backlog item after review. The project root is fixed by Pi and must not be supplied.",
+	}),
 	prepare_work: Type.Object(
 		{
 			item_id: Type.Optional(itemId()),
@@ -457,6 +483,10 @@ const platypusTools: PlatypusTool[] = [
 	{
 		name: "create_backlog_items",
 		description: "Create multiple Platypus backlog items from typed arguments.",
+	},
+	{
+		name: "update_backlog_item",
+		description: "Update one reviewed Platypus backlog item from typed arguments.",
 	},
 	{
 		name: "prepare_work",
@@ -737,6 +767,15 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		description: "Revise durable project engineering standards",
 		handler: async (_args, ctx) => {
 			pi.sendUserMessage(buildEngineeringStandardsPrompt({ revision: true }), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+		},
+	});
+
+	pi.registerCommand("platy-story-review", {
+		description: "Review a story draft or backlog item before execution",
+		handler: async (args, ctx) => {
+			if (!latestSnapshot) await refreshSnapshot(ctx);
+			const input = Array.isArray(args) ? args.join(" ") : String(args ?? "");
+			pi.sendUserMessage(buildStoryReviewPrompt(input), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
 

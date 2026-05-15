@@ -79,6 +79,12 @@ for `direct_ready`, edit the manager workspace, then call
 `complete_backlog_item`. Call `prepare_work` first only when response-local
 guidance is useful.
 
+Pi also includes `/platy-story-review` for story-quality review before
+execution. The review prompt asks the agent to use durable direction and
+engineering standards, separate blocking issues from improvement suggestions,
+and turn approved revisions into typed `platypus_create_backlog_items`
+previews or `platypus_update_backlog_item` calls.
+
 A concrete minimal direct-work example is documented in
 [docs/workflow.md](workflow.md#minimal-direct-work-example). Use it for
 sustained tracked work that is small enough for direct manager-workspace edits;
