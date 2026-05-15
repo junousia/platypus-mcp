@@ -355,6 +355,11 @@ generation, fake Platypus tool execution, binary-resolution recovery guidance,
 project-root forwarding, and renderer snapshots for queue, creation,
 completion, doctor, and empty states. Run `make pi-extension-test` while
 iterating on Pi UI or command behavior; it is included in `make check`.
+Run `make pi-feedback` to create a temporary Pi project, bootstrap the local
+package and Platypus scaffold, validate core tools, and write a dry-run
+`FEEDBACK.md`. Use `PI_DRY_RUN=0 make pi-feedback` for a live Pi/model exercise
+that asks for structured feedback on setup, UI, workflow, schemas, result
+review, and closure behavior.
 
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime

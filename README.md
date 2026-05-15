@@ -250,6 +250,9 @@ that do not yet have a dedicated Pi wrapper.
 The Pi extension has deterministic local harness tests for command prompt
 generation, tool execution wrappers, binary resolution guidance, and renderer
 fixtures. Run them with `make pi-extension-test`; `make check` includes them.
+Run `make pi-feedback` to create an isolated temporary Pi project, bootstrap the
+local package, validate core Platypus tools, and write a dry-run `FEEDBACK.md`.
+Use `PI_DRY_RUN=0 make pi-feedback` for a live Pi/model exercise.
 
 The Pi happy path is intentionally short:
 
