@@ -377,8 +377,10 @@ pub struct DispatchReadyWorkParams {
     /// lifecycle state machine. This does not launch an external worker process.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub auto_start: Option<bool>,
-    /// Whether dispatch should auto-commit tracked planning artifacts when local
-    /// dirt is limited to `backlog/items/*.md` and `backlog/plans/*.yaml`.
+    /// Whether dispatch should auto-commit tracked Platypus planning artifacts
+    /// when local dirt is limited to backlog items, plans, epics, templates, or
+    /// other Platypus-owned dispatch scaffolding. It still refuses mixed source
+    /// edits so worker handoff cannot accidentally commit implementation work.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub auto_commit_artifacts: Option<bool>,
     /// Deprecated compatibility hint. Durable planning approval policy now
@@ -425,8 +427,10 @@ pub struct PrepareWorkParams {
     /// `workflow.execution` or backlog item `planning_gate`.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub require_planning_approval: Option<bool>,
-    /// Whether preparation should auto-commit tracked backlog and task-plan
-    /// artifacts when those are the only manager workspace changes.
+    /// Whether preparation should auto-commit tracked Platypus planning
+    /// artifacts when those are the only manager workspace changes. This covers
+    /// backlog items, plans, epics, templates, and other dispatch scaffolding;
+    /// it does not commit source edits.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub auto_commit_artifacts: Option<bool>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
@@ -1569,6 +1573,9 @@ pub struct CompleteBacklogItemParams {
     pub summary: String,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Files changed by the direct host work, relative to the manager workspace.
+    /// This can be empty for verified non-file, exploratory, review-only, or
+    /// already-committed work when verification or evidence fields explain the
+    /// completion.
     pub changed_files: Vec<String>,
     /// Verification status for this direct work.
     #[schemars(with = "Option<VerificationStatusSchema>")]

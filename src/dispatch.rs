@@ -881,6 +881,7 @@ fn auto_commit_dispatch_artifacts(
 fn auto_commit_entry_allowed(entry: &DirtyEntry, selected_item_ids: &BTreeSet<String>) -> bool {
     fixed_dispatch_artifact_entry(entry)
         || bootstrap_backlog_artifact_entry(entry)
+        || backlog_dispatch_artifact_entry(entry)
         || selected_backlog_artifact_entry(entry, selected_item_ids)
 }
 
@@ -930,6 +931,15 @@ fn bootstrap_backlog_artifact_entry(entry: &DirtyEntry) -> bool {
             | "backlog/templates/plan.yaml"
             | "backlog/templates/epic.md"
     )
+}
+
+fn backlog_dispatch_artifact_entry(entry: &DirtyEntry) -> bool {
+    entry.path == "backlog/README.md"
+        || (entry.path.starts_with("backlog/items/") && entry.path.ends_with(".md"))
+        || (entry.path.starts_with("backlog/plans/") && entry.path.ends_with(".yaml"))
+        || (entry.path.starts_with("backlog/epics/") && entry.path.ends_with(".md"))
+        || (entry.path.starts_with("backlog/templates/")
+            && (entry.path.ends_with(".md") || entry.path.ends_with(".yaml")))
 }
 
 fn selected_backlog_artifact_entry(
@@ -1763,7 +1773,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_commit_dispatch_artifacts_rejects_unselected_backlog_paths() {
+    fn auto_commit_dispatch_artifacts_commits_sibling_backlog_paths() {
         let project = backlog_project(true);
         fs::write(
             project.path().join("backlog/items/PROJ-001.md"),
@@ -1777,19 +1787,19 @@ mod tests {
         .expect("unrelated edit");
         let selected = BTreeSet::from(["PROJ-001".to_string()]);
 
-        let error = auto_commit_dispatch_artifacts(project.path(), &selected)
-            .expect_err("unselected backlog dirt should fail closed");
+        let committed =
+            auto_commit_dispatch_artifacts(project.path(), &selected).expect("auto commit");
 
-        assert!(error.contains("PROJ-002.md"));
-        let staged = Command::new("git")
-            .args(["diff", "--cached", "--name-only"])
+        assert!(committed);
+        let status = Command::new("git")
+            .args(["status", "--porcelain=v1", "--untracked-files=all"])
             .current_dir(project.path())
             .output()
-            .expect("git diff");
-        assert!(staged.status.success());
+            .expect("git status");
+        assert!(status.status.success());
         assert!(
-            String::from_utf8_lossy(&staged.stdout).trim().is_empty(),
-            "auto-commit should not stage a partial backlog set"
+            String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+            "auto-commit should commit all pending backlog artifacts"
         );
     }
 
