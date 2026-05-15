@@ -77,7 +77,7 @@ pub(super) fn validation_next_action(
     };
     if context.runnable_direct > 0 && context.runnable_worker > 0 {
         return format!(
-            "{artifact} validates. Direct-ready items can use prepare_work, edit the manager workspace, then complete_backlog_item. Worker-handoff items should have committed planning artifacts, or use commit_planning_artifacts, before prepare_work or dispatch_ready_work creates worktrees.{}",
+            "{artifact} validates. Direct-ready items should edit the manager workspace, verify, then complete_backlog_item; prepare_work is optional guidance only. Worker-handoff items should have committed planning artifacts, or use commit_planning_artifacts, before prepare_work or dispatch_ready_work creates worktrees.{}",
             gated_suffix(&context)
         );
     }
@@ -89,7 +89,7 @@ pub(super) fn validation_next_action(
     }
     if context.runnable_direct > 0 {
         return format!(
-            "{artifact} validates. Direct-ready work can proceed with prepare_work, manager-workspace edits, and complete_backlog_item; committing first is optional unless your workflow requires a checkpoint.{}",
+            "{artifact} validates. Direct-ready work can proceed with manager-workspace edits, verification, and complete_backlog_item; prepare_work is optional guidance only and committing first is optional unless your workflow requires a checkpoint.{}",
             gated_suffix(&context)
         );
     }

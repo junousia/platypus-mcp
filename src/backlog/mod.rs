@@ -686,7 +686,9 @@ mod tests {
         let goal_text =
             fs::read_to_string(temp.path().join("backlog/items/PROJ-001.md")).expect("goal item");
         assert!(goal_text.contains("title: Scaffold frontend"));
-        assert!(goal_text.contains("## Implementation Contract\n\n\n\n## Acceptance"));
+        assert!(goal_text.contains(
+            "## Implementation Contract\n\n_Not specified. Add a real implementation contract"
+        ));
         assert!(!goal_text.contains("No implementation contract was provided"));
         assert!(!goal_text.contains("Implement the requested change: Scaffold frontend."));
         assert!(goal_text
@@ -719,7 +721,9 @@ mod tests {
         let title_text =
             fs::read_to_string(temp.path().join("backlog/items/PROJ-002.md")).expect("title item");
         assert!(title_text.contains("## Goal\n\nDocument recovery flow."));
-        assert!(title_text.contains("## Implementation Contract\n\n\n\n## Acceptance"));
+        assert!(title_text.contains(
+            "## Implementation Contract\n\n_Not specified. Add a real implementation contract"
+        ));
         assert!(!title_text.contains("No implementation contract was provided"));
         assert!(!title_text.contains("Implement the requested change: Document recovery flow."));
 
@@ -1247,10 +1251,9 @@ mod tests {
         let data = result.data.expect("preview data");
         assert_eq!(data.items[0].preview.title, "Scaffold frontend");
         assert_eq!(data.items[0].preview.implementation_contract, "");
-        assert!(data.items[0]
-            .preview
-            .markdown
-            .contains("## Implementation Contract\n\n\n\n## Acceptance"));
+        assert!(data.items[0].preview.markdown.contains(
+            "## Implementation Contract\n\n_Not specified. Add a real implementation contract"
+        ));
         assert!(!data.items[0]
             .preview
             .markdown

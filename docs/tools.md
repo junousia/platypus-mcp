@@ -11,10 +11,14 @@ Platypus tools return typed JSON with a shared envelope:
 - `error`: optional failure detail
 
 Hosts should prefer `inspect_session` at startup and after stale chat context.
-If `inspect_session` is unavailable or too broad for the current client, fall
-back deterministically to `doctor_snapshot`, `inspect_status`,
-`inspect_workflow_config`, `inspect_queue_status`, then `inspect_work_queue` as
-needed. Use `inspect_queue_status` for compact dashboards and chat summaries.
+Its default `detail=compact` response returns the queue headline, recommended
+tool, direct-work loop, and schema hints without embedding full doctor/status/
+workflow/queue payloads. Use `detail=verbose` only when the host needs all
+startup payloads in one response. If `inspect_session` is unavailable or too
+broad for the current client, fall back deterministically to `doctor_snapshot`,
+`inspect_status`, `inspect_workflow_config`, `inspect_queue_status`, then
+`inspect_work_queue` as needed. Use `inspect_queue_status` for compact
+dashboards and chat summaries.
 Use `inspect_work_queue` when inspecting runnable backlog work, task-plan
 state, active lifecycle state, setup blockers, and the recommended next
 lifecycle command. The lower-level tools remain available for precise control
@@ -32,6 +36,7 @@ guidance is:
   `platypus-project-status`
 - Resource `platypus://guidance/tool-preload` / prompt
   `platypus-tool-preload`
+- Resource `platypus://tools/core-schemas` for startup schema preload hints
 
 Additional phase guidance:
 
@@ -45,13 +50,13 @@ Additional phase guidance:
   `platypus-integration-review`
 - Resource `platypus://guidance/recovery` / prompt `platypus-recovery`
 
-`platypus://guidance/tool-preload` names small optional groups for clients with
-deferred tool schemas: Startup Inspection, Backlog Planning, Direct Execution,
-Worker Handoff, Evidence And Findings, and Recovery. Tool schemas are exposed
-by the MCP client and may be loaded lazily; Platypus does not require a hidden
-preload mechanism. If schema preloading is awkward in Codex, Claude, opencode,
-or another host, call the same tools normally when the workflow reaches that
-phase.
+`platypus://tools/core-schemas`, `platypus://guidance/tool-preload`, and
+`inspect_toolsets` expose optional discovery metadata for clients with deferred
+tool schemas. The core-schemas resource names the common startup tools and
+points hosts back to the live MCP tool list as the schema source of truth.
+Toolsets are metadata, not required workflow steps and not separate MCP
+servers. If schema preloading is awkward in Codex, Claude, opencode, or another
+host, call the same tools normally when the workflow reaches that phase.
 
 For Claude Code, deferred schemas are loaded with ToolSearch selectors such as
 `select:mcp__platypus__inspect_session` or
@@ -60,10 +65,10 @@ the configured MCP server name plus tool separator; use unprefixed names in
 Platypus docs and tool arguments. Codex and opencode expose the same tool
 schemas through their own MCP discovery UI.
 
-Direct quick path: read the startup guidance, call `inspect_session`, load the
-Direct Execution group, inspect for `direct_ready`, edit the manager
-workspace, then call `complete_backlog_item`. Call `prepare_work` first only
-when response-local guidance is useful.
+Direct quick path: read the startup guidance, call `inspect_session`, inspect
+for `direct_ready`, edit the manager workspace, then call
+`complete_backlog_item`. Call `prepare_work` first only when response-local
+guidance is useful.
 
 Alias and deprecation expectations: `contract` is only an alias for
 `implementation_contract`, `quick_create_backlog_item` is shorthand for simple
@@ -93,16 +98,19 @@ alias.
    `inspect_session`.
 2. Shape backlog: the host model decides concrete item boundaries, then calls
    `create_backlog_item`, `create_backlog_items`, `update_backlog_item`,
-   `validate_backlog`, `list_backlog`, `draft_external_backlog_items`, and
-   `import_github_issues`.
+   `validate_backlog`, `list_backlog`, `get_backlog_item`,
+   `draft_external_backlog_items`, and `import_github_issues`.
 3. Plan non-trivial work: `write_task_plan`,
    `validate_task_plan`, `inspect_task_plan`, `list_task_plans`.
 4. Inspect the executable queue: `inspect_queue_status` for compact triage,
    then `inspect_work_queue` when the host needs full item state and next-tool
    parameters. `inspect_session` and `inspect_work_queue` include
    `schemas_likely_needed_next` with 1-4 likely next tool schemas. Claude hints
-   include literal ToolSearch selectors; Codex and opencode callers should use
-   the plain `tool_name` values with their own discovery UI.
+   include literal ToolSearch selectors and a response-level batch selector.
+   Codex and other text-search hosts should use `codex_tool_search_query` or
+   response-level `host_neutral_tool_search_query`; opencode and other callers
+   can use `tool_name` or `host_neutral_query` values with their own discovery
+   UI.
 5. Prepare work: prefer `prepare_work`. It follows durable execution policy
    from `workflow.execution` and backlog item `execution_path`/`planning_gate`.
    It returns `direct_edit` guidance for manager-workspace work, or a
@@ -136,6 +144,10 @@ flowchart LR
 ### Project And Configuration
 
 - `ping`: health check.
+- `inspect_toolsets`: return optional discovery metadata for Startup, Backlog
+  Planning, Direct Execution, Worker Handoff, Evidence And Findings, and
+  Recovery without splitting the MCP server or creating required workflow
+  steps.
 - `init_project`: create missing project scaffold files. Fresh CLI bootstrap
   can also run this through `bootstrap <host> --init-project`.
 - `doctor_snapshot`: read-only setup recovery preflight. It checks scaffold
@@ -199,6 +211,9 @@ make smoke-storage
   `prepare_work` and `complete_backlog_item`; worker-handoff queues keep the
   `commit_planning_artifacts` guidance needed before worktree dispatch.
 - `list_backlog`: list runnable backlog candidates.
+- `get_backlog_item`: read one backlog item markdown by id with bounded output.
+  Use this when the host only needs the item text, not queue, finding,
+  evidence, or task-plan state.
 - `inspect_queue_status`: compact queue summary for dashboards and chat
   replies. It returns counts, top ready items, top blocked items, active tasks,
   state descriptions, closed evidence counts, and the recommended next tool
@@ -220,13 +235,13 @@ make smoke-storage
 Backlog schema quick reference:
 
 - Minimal `create_backlog_item` input: a meaningful `goal` or `title`.
-  Platypus derives conservative title and goal, keeps the required
-  Implementation Contract section empty, and writes first acceptance text when
-  those fields are omitted. Add a real contract before delegation or complex
-  work.
+  Platypus derives conservative title and goal, writes a visible "not
+  specified" contract placeholder, and writes one neutral tracking criterion
+  when those fields are omitted. Add a real contract before delegation or
+  complex work.
 - Rich `create_backlog_item` input: provide explicit `title`, `goal`,
   `implementation_contract` or `contract`, and `acceptance` when the work is
-  complex or the generated defaults would be too broad.
+  complex or the conservative defaults would be too broad.
 - Compact `quick_create_backlog_item` input: provide the common fields
   `title`, `goal`, `priority`, `type`, `area`, `owned_surfaces`, and
   `acceptance`. The tool omits advanced fields such as external refs, notes,
@@ -354,14 +369,33 @@ trailers.
 - `complete_backlog_item`: complete a direct host-work item without a worker
   task. It records direct completion evidence, a replayable backlog event, and
   can optionally create a closure commit for explicit `changed_files` with
-  `commit=true`. The response includes `generated_evidence` IDs and summaries
-  for records created by the completion call. Leave `record_auto_evidence`
-  omitted to preserve default traceability, or set `record_auto_evidence=false`
-  only when `evidence_refs` already point to explicit evidence records managed
-  by the host. Use this for `prepare_work` host actions of kind `direct_edit`.
+  `commit=true`. The default response uses `detail=compact`: it includes
+  closure, commit, generated evidence, and next-tool summaries but omits the
+  full queue snapshot. Use `detail=verbose` only when debugging queue state
+  after completion. The response includes `generated_evidence` IDs and
+  summaries for records created by the completion call. Leave
+  `record_auto_evidence` omitted to preserve default traceability; then pass
+  `verification_status`, `verification_summary`, and `verification_refs` in the
+  same `complete_backlog_item` call instead of separately calling
+  `record_verification_evidence`. Set `record_auto_evidence=false` only when
+  `evidence_refs` already point to explicit evidence records managed by the
+  host. Use this for `prepare_work` host actions of kind `direct_edit`.
+  The tool returns warning-only `warnings` when `changed_files` is empty, points
+  at missing paths, or names paths that Git does not currently report as
+  changed; these warnings do not block valid non-file or already-committed
+  direct work. Untracked paths are detected through Git status, and unchanged
+  Platypus-owned files such as backlog metadata are not reported as noisy
+  changed-file warnings.
   After successful direct completion, inspect the queue for the normal next
   item; run `reconcile_project` only for audit, unclear state, failed tools, or
   suspected evidence/finding gaps.
+- `acquire_lease` / `renew_lease` / `release_lease`: optional collision control
+  for direct work. To claim a direct backlog item without creating a worker
+  task, acquire a task-scope lease with `scope=task`, `target_id=<item id>`,
+  and a short `ttl_seconds`. `inspect_work_queue` and `inspect_queue_status`
+  surface active item leases as active work so another session does not pick up
+  the same direct item. Release the lease after `complete_backlog_item`, or
+  let it expire if the session is abandoned.
 - `dispatch_ready_work`: lower-level batch dispatch for executable backlog
   work. It only accepts durable `worker_handoff` items whose planning gates are
   satisfied. It checks Git readiness, dispatches up to `max_tasks` runnable
@@ -410,11 +444,6 @@ trailers.
 - `start_worker_execution` / `start_worker_task`: mark a prepared assignment as
   running.
 - `record_worker_event` / `record_worker_progress`: persist worker progress.
-- `complete_worker_execution` / `complete_worker_task`: finish a worker task
-  with result, changed files, and verification status. For same-session host
-  flows, completion can auto-start a prepared assignment by default. Set
-  `auto_start_if_prepared=false` only when strict running-only completion is
-  required.
 - `finish_work`: preferred high-level completion flow for worker assignments.
   It can infer changed files from the worktree diff, record verification
   evidence, record findings, optionally integrate when gates are satisfied, and
@@ -423,6 +452,10 @@ trailers.
   `complete_backlog_item`.
   `host_action.kind` is one of `verify_or_record_risk`, `resolve_findings`,
   `integrate_result`, `inspect_or_recover`, or `done`.
+- `complete_worker_execution` / `complete_worker_task`: low-level assignment
+  lifecycle tools. Use them only when a host intentionally manages
+  verification, findings, and integration separately; normal worker handoffs
+  should finish with `finish_work`.
 - `run_task_verification`: execute the assignment verification command in the
   task worktree and persist a verification run event/evidence record.
 - `send_worker_guidance`: persist steering messages for active tasks.
@@ -436,6 +469,9 @@ trailers.
   against an isolated in-memory backend.
 - `inspect_task_events`: replay task-scoped events.
 - `record_evidence` / `record_verification_evidence`: persist audit evidence.
+  For direct work, prefer the automatic evidence fields on
+  `complete_backlog_item`; use these tools for extra independent evidence,
+  worker-handoff verification, or recovery after a failed completion attempt.
   Use `note` for generic rationale, `file_summary` for changed-file review,
   `verification` for command/manual check results, `commit` for Git closure or
   verification trailers, `worker_finding` for worker-reported risks,
@@ -465,10 +501,11 @@ trailers.
 }
 ```
 
-When a backlog item is runnable, the result recommends `prepare_work`.
-For direct items it returns manager-workspace edit guidance. For worker-handoff
-items it may return task ids, assignment ids, worktree paths, and per-item
-skipped or failed reasons in one response. After worker handoff, use
+When a backlog item is runnable, direct-ready results recommend
+`complete_backlog_item` and include `minimal_direct_loop`. Call `prepare_work`
+only when optional response-local guidance is useful. Worker-handoff items use
+`prepare_work` or `dispatch_ready_work` to return task ids, assignment ids,
+worktree paths, and per-item skipped or failed reasons. After worker handoff, use
 `start_worker_task` when you need an explicit running transition, then
 `record_worker_progress` while
 the assignment is running. Same-session host flows can complete a prepared

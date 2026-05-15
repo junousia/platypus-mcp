@@ -1,3 +1,4 @@
+use crate::toolsets;
 use rmcp::model::{AnnotateAble, Prompt, PromptMessage, PromptMessageRole, RawResource, Resource};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -13,6 +14,7 @@ pub const WORKFLOW_URI: &str = "platypus://guidance/workflow";
 pub const SPEC_DRIVEN_URI: &str = "platypus://guidance/spec-driven-development";
 pub const PROJECT_STATUS_URI: &str = "platypus://guidance/project-status";
 pub const TOOL_PRELOAD_URI: &str = "platypus://guidance/tool-preload";
+pub const CORE_SCHEMAS_URI: &str = "platypus://tools/core-schemas";
 pub const BACKLOG_AUTHORING_URI: &str = "platypus://guidance/backlog-authoring";
 pub const WORKER_HANDOFF_URI: &str = "platypus://guidance/worker-handoff";
 pub const INTEGRATION_REVIEW_URI: &str = "platypus://guidance/integration-review";
@@ -24,8 +26,9 @@ Use Platypus MCP tools for deterministic project state. The MCP host owns chat,
 model turns, and external worker execution.
 
 If the host supports deferred schema preloading, first read
-`platypus://guidance/tool-preload` or the `platypus-tool-preload` prompt and
-load the planning startup group.
+`platypus://guidance/tool-preload` and `platypus://tools/core-schemas`, or the
+`platypus-tool-preload` prompt. Call `inspect_toolsets` when compact discovery
+metadata would help.
 
 ## Exact Decision Table
 
@@ -36,13 +39,13 @@ detecting tool and do not infer hidden state from chat history.
 | --- | --- | --- | --- | --- |
 | `unknown` | session start | state was not freshly inspected | call `inspect_session` | setup, project status, workflow config, and queue facts are known |
 | `needs_scaffold` | `doctor_snapshot` | scaffold files are missing | call `init_project`, then `doctor_snapshot` | scaffold blockers are gone |
-| `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `validate_backlog` | backlog validates and queue is inspected again |
+| `empty_backlog` | `inspect_work_queue` | no backlog items exist | host model chooses concrete items; call `create_backlog_items`, then `inspect_work_queue`; `validate_backlog` is optional after successful typed creation | backlog validates inline and queue is inspected again |
 | `dependency_blocked` | `inspect_work_queue` | `inventory.dependency_blocked_count > 0` and no runnable item is selected | call `inspect_item` on the first blocked item; close or create required dependencies | blocked dependencies are resolved |
 | `plan_missing` | `inspect_work_queue` | an item recommends `write_task_plan` | host model writes an explicit plan with `write_task_plan`, then calls `validate_task_plan` | task plan validates cleanly |
 | `approval_blocked` | `inspect_work_queue` | `queue_state == "approval_blocked"` | call `request_planning_approval`, then `approval_respond` | planning approval is recorded |
 | `config_blocked` | `inspect_work_queue` | `queue_state == "config_blocked"` | call `doctor_snapshot` and follow the reported recovery action | setup blocker is resolved |
 | `workspace_blocked` | `inspect_work_queue` | `queue_state == "workspace_blocked"` | commit, stash, or finish current manager-workspace changes | worker dispatch can safely create a worktree |
-| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | optionally call `prepare_work` for guidance, or edit the manager workspace directly, then call `complete_backlog_item` | direct completion evidence or closure commit exists |
+| `direct_ready` | `inspect_work_queue` | `queue_state == "direct_ready"` | edit the manager workspace, verify, then call `complete_backlog_item`; call `prepare_work` only for optional guidance | direct completion evidence or closure commit exists |
 | `worker_ready` | `inspect_work_queue` | `queue_state == "ready"` | call `prepare_work` for one item or `dispatch_ready_work` for a batch | `run_in_worktree` handoff exists |
 | `worker_active` | `inspect_task` or `inspect_work_queue` | task is active or prepared | run the external worker in the assigned worktree; call `finish_work` | `finish_work.host_action` is returned |
 | `pending_integration` | `inspect_work_queue` or `inspect_integration_gates` | `queue_state == "completed_pending_integration"` or gates are ready | call `inspect_integration_gates`, then `integrate_worker_result`, then `reconcile_project` | work is integrated or a specific blocker is reported |
@@ -55,7 +58,8 @@ state name and follow the paired tool instead of inventing a hidden lifecycle.
 
 | Output | Emitted by | Meaning | Follow-up |
 | --- | --- | --- | --- |
-| `direct_ready` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | direct manager-workspace work is executable | optional `prepare_work`, edit, `complete_backlog_item` |
+| `direct_ready` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | direct manager-workspace work is executable | edit, verify, `complete_backlog_item`; optional `prepare_work` only for guidance |
+| `active` with `active_lease_id` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | direct manager-workspace work is already claimed by a task-scope lease | continue, renew, or release the lease before starting duplicate direct work |
 | `ready` | `inspect_work_queue`, `inspect_queue_status`, `inspect_item` | worker handoff can be prepared | `prepare_work` or `dispatch_ready_work` |
 | `planning_blocked` | queue tools | a required task plan is missing or invalid | `write_task_plan`, then `validate_task_plan` |
 | `approval_blocked` | queue tools | planning approval is required before execution | `request_planning_approval`, then `approval_respond` |
@@ -84,9 +88,11 @@ inspection.
 
 `inspect_session` may replace separate startup calls to `doctor_snapshot`,
 `inspect_status`, `inspect_workflow_config`, `inspect_queue_status`, and
-`inspect_work_queue` when it succeeds in a fresh session. Call the narrower
-tools after mutations, when a detailed payload is needed, or when the session
-snapshot is stale.
+`inspect_work_queue` when it succeeds in a fresh session. Its default compact
+detail returns headline facts and schema hints; pass `detail=verbose` only when
+the host needs the full embedded payloads. Call the narrower tools after
+mutations, when a detailed payload is needed, or when the session snapshot is
+stale.
 
 For `prepare_work`, prefer structured routing fields over prose:
 `state_persisted=false` plus `durable_next_tool=complete_backlog_item` means
@@ -117,10 +123,9 @@ straight to broad edits. Convert the goal into a controlled loop:
 4. For tracked control, create a small concrete backlog set with
    `create_backlog_item` or `create_backlog_items`. Keep items independently
    reviewable and executable.
-5. Run `validate_backlog` after backlog writes. Its next action follows
-   explicit execution policy: direct work continues through `prepare_work` and
-   `complete_backlog_item`; worker handoff keeps planning-commit guidance when
-   needed for worktree dispatch.
+5. After successful `create_backlog_item(s)`, inline validation has already
+   passed. Call `inspect_work_queue` to continue. Run `validate_backlog` only
+   after manual markdown edits or when an explicit audit result is useful.
 6. Use `inspect_queue_status` for compact queue counts and top ready/blocked
    work. Use `inspect_work_queue` when full readiness, task-plan state, active
    work, setup blockers, and next-tool parameters are needed.
@@ -168,6 +173,8 @@ Use status tools before making assumptions about the repository or task queue.
 
 - `inspect_session` is the preferred startup tool. It combines setup checks,
   project status, workflow config, and queue state in one read-only snapshot.
+  Its default compact response returns headline facts; pass `detail=verbose`
+  when the host needs the full embedded payloads.
   When it succeeds at session start, it replaces separate startup detector
   calls to `doctor_snapshot`, `inspect_status`, `inspect_workflow_config`,
   `inspect_queue_status`, and `inspect_work_queue` unless a detailed payload
@@ -190,162 +197,8 @@ missing state from chat context.
 
 const TOOL_PRELOAD_TEXT: &str = r#"# Tool Preload Guidance
 
-Some MCP hosts defer tool schemas until a tool is discovered, searched, or
-selected. Platypus does not require any specific preload mechanism, but hosts
-that support one should load the common groups below to reduce planning and
-execution round trips.
-
-Preloading is optional and host-specific. If the host cannot preload schemas,
-continue normally and call the tools as needed. Do not depend on hidden client
-context for core state transitions.
-
-`inspect_session` and `inspect_work_queue` return
-`schemas_likely_needed_next` with 1-4 likely next tool schemas. Use those hints
-when the host supports deferred schema loading. Claude entries include literal
-ToolSearch selectors such as `select:mcp__platypus__complete_backlog_item`.
-
-Claude Code uses deferred schema discovery through ToolSearch. When using
-Claude, select tools with `select:mcp__platypus__<tool>`, for example
-`select:mcp__platypus__inspect_session` or
-`select:mcp__platypus__complete_backlog_item`. The `mcp__platypus__` prefix
-comes from the MCP server name and is not part of the Platypus tool name.
-
-The direct-work quick path is: load Startup Inspection, call
-`inspect_session`, load Direct Execution, inspect for `direct_ready`, edit the
-manager workspace, then call `complete_backlog_item`. Call `prepare_work`
-first only when response-local guidance is useful.
-
-Alias and deprecation expectations: use `create_backlog_items` for atomic
-batches, `quick_create_backlog_item` only for simple single-item shorthand,
-`contract` only as an alias for `implementation_contract`, and
-`prepare_work` for optional direct guidance or worker handoff preparation. Do
-not include worker-profile fields in backlog items.
-
-## Tool Naming Map
-
-Prefer these host-facing tool names. Compatibility aliases remain callable, but
-guidance should use the preferred name unless it is explicitly documenting an
-alias.
-
-- `inspect_status`; alias `project_status`.
-- `inspect_worktree_changes`; low-level alias `worktree_diff`.
-- `prepare_work`; low-level handoff tools `prepare_worker_handoff` and
-  `prepare_worker_assignment`.
-- `start_worker_task`; alias `start_worker_execution`.
-- `record_worker_progress`; alias `record_worker_event`.
-- `finish_work`; low-level `complete_worker_task` and alias
-  `complete_worker_execution`.
-
-## Startup Inspection Group
-
-Load at session start or whenever chat context may be stale:
-
-- `doctor_snapshot`
-- `inspect_status`
-- `inspect_workflow_config`
-- `inspect_session`
-- `inspect_queue_status`
-
-## Backlog Planning Group
-
-Load before backlog shaping, item updates, task-plan work, or planning
-approvals:
-
-- `create_backlog_item`
-- `quick_create_backlog_item`
-- `create_backlog_items`
-- `create_epic`
-- `list_epics`
-- `validate_backlog`
-- `list_backlog`
-- `inspect_queue_status`
-- `inspect_work_queue`
-- `inspect_item`
-- `write_task_plan`
-- `validate_task_plan`
-- `inspect_task_plan`
-- `request_planning_approval`
-- `approval_respond`
-
-## Direct Execution Group
-
-Load before manager-workspace direct edits and direct completion:
-
-- `inspect_session`
-- `inspect_queue_status`
-- `inspect_work_queue`
-- `prepare_work`
-- `complete_backlog_item`
-- `record_verification_evidence`
-- `record_finding`
-- `validate_findings`
-- `reconcile_project`
-
-## Worker Handoff Group
-
-Load before worktree handoff, external-worker execution, verification, and
-integration:
-
-- `inspect_work_queue`
-- `inspect_session`
-- `prepare_work`
-- `dispatch_ready_work`
-- `commit_planning_artifacts`
-- `generate_task_bundle`
-- `inspect_task`
-- `inspect_task_events`
-- `events_replay`
-- `worktree_status`
-- `inspect_worktree_changes`
-- `send_worker_guidance`
-- `start_worker_task`
-- `record_worker_progress`
-- `complete_worker_task`
-- `finish_work`
-- `complete_backlog_item`
-- `run_task_verification`
-- `record_verification_evidence`
-- `record_finding`
-- `validate_findings`
-- `inspect_integration_gates`
-- `integrate_worker_result`
-- `worktree_cleanup`
-- `reconcile_project`
-
-## Evidence And Findings Group
-
-Load before recording or inspecting audit evidence and follow-up findings:
-
-- `record_evidence`
-- `record_verification_evidence`
-- `list_evidence`
-- `record_finding`
-- `list_findings`
-- `validate_findings`
-- `update_finding_disposition`
-
-## Recovery Group
-
-Load when a tool returns `failed`, `recovery_action`, or unclear lifecycle
-state:
-
-- `doctor_snapshot`
-- `inspect_session`
-- `inspect_work_queue`
-- `events_replay`
-- `inspect_task_events`
-- `approval_list`
-- `approval_respond`
-- `list_evidence`
-- `list_findings`
-- `validate_findings`
-- `update_finding_disposition`
-- `inspect_integration_gates`
-- `reconcile_project`
-
-Hosts may load additional tools when a user asks for lower-level control. These
-groups are advisory: if a host cannot preload schemas, call the same tools on
-demand when the workflow reaches that phase.
+This guidance is generated from the Platypus toolset registry at runtime.
+Use `entry_text` for canonical resource and prompt text.
 "#;
 
 const BACKLOG_AUTHORING_TEXT: &str = r#"# Backlog Authoring Guidance
@@ -370,8 +223,8 @@ completion events created by `complete_backlog_item`.
 Backlog schema quick reference:
 
 - Minimal create input: a meaningful `goal` or `title`. Platypus derives
-  conservative title and goal, keeps the required Implementation Contract
-  section empty, and writes first acceptance text when those fields are
+  conservative title and goal, writes a visible "not specified" contract
+  placeholder, and writes one neutral tracking criterion when those fields are
   omitted. Add a real implementation contract before delegated, complex, or
   long-lived work.
 - Rich create input: provide explicit `title`, `goal`,
@@ -440,6 +293,24 @@ assignment directly; it auto-starts prepared assignments by default. Set
 `auto_start_if_prepared=false` when strict running-only completion is required.
 For direct manager-workspace edits returned by `prepare_work`, do not call
 `finish_work`; call `complete_backlog_item`.
+
+For direct completion, leave `record_auto_evidence` omitted and pass
+`verification_status`, `verification_summary`, and `verification_refs` to
+`complete_backlog_item` unless you already have explicit `evidence_refs`.
+That single call records completion and verification evidence. Use
+`record_verification_evidence` for additional independent evidence,
+worker-handoff verification, or recovery after a failed completion call.
+
+When direct work may be edited by multiple sessions, use the existing lease
+tools as an optional claim: `acquire_lease(scope=task, target_id=<item id>)`
+before editing, `renew_lease` while working, and `release_lease` after
+`complete_backlog_item`. Queue tools surface these claims as active work through
+`active_lease_id` and compact `active_leases`. A claim is not a completion
+record and should not replace `complete_backlog_item`.
+
+Review `complete_backlog_item.warnings`. Missing, empty, or unchanged
+`changed_files` are warning-only because non-file and already-committed work can
+be valid; explain them through evidence or completion summary when relevant.
 
 Do not run worker edits in the manager workspace. Use `send_worker_guidance`
 for steering active work.
@@ -548,6 +419,13 @@ pub const GUIDANCE: &[GuidanceEntry] = &[
         text: TOOL_PRELOAD_TEXT,
     },
     GuidanceEntry {
+        name: "platypus-core-schemas",
+        uri: CORE_SCHEMAS_URI,
+        title: "Core Schema Preload",
+        description: "Compact startup schema preload hints for common Platypus tools.",
+        text: "",
+    },
+    GuidanceEntry {
         name: "platypus-backlog-authoring",
         uri: BACKLOG_AUTHORING_URI,
         title: "Backlog Authoring",
@@ -585,7 +463,7 @@ pub fn resource_list() -> Vec<Resource> {
             raw.title = Some(entry.title.to_string());
             raw.description = Some(entry.description.to_string());
             raw.mime_type = Some("text/markdown".to_string());
-            raw.size = Some(entry.text.len() as u32);
+            raw.size = Some(entry_text(entry).len() as u32);
             raw.no_annotation()
         })
         .collect()
@@ -610,6 +488,19 @@ pub fn by_prompt_name(name: &str) -> Option<&'static GuidanceEntry> {
     GUIDANCE.iter().find(|entry| entry.name == name)
 }
 
+pub fn entry_text(entry: &GuidanceEntry) -> String {
+    if entry.uri == TOOL_PRELOAD_URI {
+        toolsets::tool_preload_markdown()
+    } else if entry.uri == CORE_SCHEMAS_URI {
+        toolsets::core_schemas_markdown()
+    } else {
+        entry.text.to_string()
+    }
+}
+
 pub fn prompt_messages(entry: &GuidanceEntry) -> Vec<PromptMessage> {
-    vec![PromptMessage::new_text(PromptMessageRole::User, entry.text)]
+    vec![PromptMessage::new_text(
+        PromptMessageRole::User,
+        entry_text(entry),
+    )]
 }

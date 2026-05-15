@@ -49,6 +49,7 @@ struct PlannedBacklogWrite {
 }
 
 const EMPTY_CONTRACT: &str = "";
+const CONTRACT_NOT_SPECIFIED: &str = "_Not specified. Add a real implementation contract before delegated, complex, or long-lived work._";
 
 pub fn create_backlog_item(
     default_root: &Path,
@@ -201,7 +202,7 @@ pub fn create_backlog_item(
                 action,
                 "Could not create backlog item.",
                 format!(
-                    "missing required field(s): {}. Provide at least title or goal. implementation_contract/contract and acceptance can be supplied explicitly; when omitted, Platypus keeps the Implementation Contract section empty and writes a first acceptance criterion.",
+                    "missing required field(s): {}. Provide at least title or goal. implementation_contract/contract and acceptance can be supplied explicitly; when omitted, Platypus writes a clear not-specified contract placeholder and one neutral tracking criterion.",
                     missing_fields.join(", ")
                 ),
                 "Provide title or goal. Add implementation_contract/contract and acceptance when the work needs a real execution contract.",
@@ -235,16 +236,23 @@ pub fn create_backlog_item(
         );
     }
     let validation = backlog_validation_data(&root, &validation, true);
-    ActionResult::completed(
-        action,
-        format!("Created backlog item {}.", item_id),
-        CreatedBacklogItemData {
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Completed,
+        summary: format!("Created backlog item {}.", item_id),
+        next_action: Some(
+            "Inline validation passed. Call inspect_work_queue to continue; run validate_backlog only after manual edits or when an explicit audit record is needed."
+                .to_string(),
+        ),
+        recovery_action: None,
+        data: Some(CreatedBacklogItemData {
             item_id,
             path: item_path.display().to_string(),
             created: true,
             validation,
-        },
-    )
+        }),
+        error: None,
+    }
 }
 
 pub fn quick_create_backlog_item(
@@ -253,6 +261,12 @@ pub fn quick_create_backlog_item(
 ) -> ActionResult<CreatedBacklogItemData> {
     let mut result = create_backlog_item(default_root, quick_create_params(params));
     result.action = "quick_create_backlog_item".to_string();
+    if matches!(result.status, ActionStatus::Completed) {
+        result.next_action = Some(
+            "Quick item created with minimal tracking fields. Add a real implementation_contract or richer acceptance later if the work becomes delegated, complex, or long-lived; otherwise inspect_work_queue and continue."
+                .to_string(),
+        );
+    }
     result
 }
 
@@ -473,7 +487,7 @@ pub fn create_backlog_items(
                     planned_item.index,
                     planned_item.client_key.as_deref(),
                     format!(
-                        "missing required field(s): {}. Provide at least title or goal. implementation_contract/contract and acceptance can be supplied explicitly; when omitted, Platypus keeps the Implementation Contract section empty and writes a first acceptance criterion.",
+                        "missing required field(s): {}. Provide at least title or goal. implementation_contract/contract and acceptance can be supplied explicitly; when omitted, Platypus writes a clear not-specified contract placeholder and one neutral tracking criterion.",
                         missing_fields.join(", ")
                     ),
                     "Provide title or goal. Add implementation_contract/contract and acceptance when the work needs a real execution contract.",
@@ -536,17 +550,24 @@ pub fn create_backlog_items(
                 preview: write.preview,
             })
             .collect::<Vec<_>>();
-        return ActionResult::completed(
-            action,
-            format!("Previewed {} backlog item(s).", items.len()),
-            CreatedBacklogItemsData {
+        return ActionResult {
+            action: action.to_string(),
+            status: ActionStatus::Completed,
+            summary: format!("Previewed {} backlog item(s).", items.len()),
+            next_action: Some(
+                "Review the preview, then call create_backlog_items with preview=false to write the batch."
+                    .to_string(),
+            ),
+            recovery_action: None,
+            data: Some(CreatedBacklogItemsData {
                 root: root.display().to_string(),
                 created: 0,
                 preview: true,
                 items,
                 validation,
-            },
-        );
+            }),
+            error: None,
+        };
     }
 
     let mut written_paths = Vec::new();
@@ -590,17 +611,24 @@ pub fn create_backlog_items(
             preview: write.preview,
         })
         .collect::<Vec<_>>();
-    ActionResult::completed(
-        action,
-        format!("Created {} backlog item(s).", items.len()),
-        CreatedBacklogItemsData {
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Completed,
+        summary: format!("Created {} backlog item(s).", items.len()),
+        next_action: Some(
+            "Inline validation passed. Call inspect_work_queue to continue; run validate_backlog only after manual edits or when an explicit audit record is needed."
+                .to_string(),
+        ),
+        recovery_action: None,
+        data: Some(CreatedBacklogItemsData {
             root: root.display().to_string(),
             created: items.len(),
             preview: false,
             items,
             validation,
-        },
-    )
+        }),
+        error: None,
+    }
 }
 
 fn failed_with_next<T: serde::Serialize + schemars::JsonSchema>(
@@ -1100,7 +1128,7 @@ fn backlog_item_text(
         item_id,
         normalized.title,
         normalized.goal,
-        normalized.contract,
+        rendered_contract(&normalized.contract),
         normalized
             .acceptance
             .iter()
@@ -1117,6 +1145,14 @@ fn backlog_item_text(
         body.push_str(&format!("\n## Notes\n\n{}\n", notes));
     }
     Ok(body)
+}
+
+fn rendered_contract(contract: &str) -> &str {
+    if contract.trim().is_empty() {
+        CONTRACT_NOT_SPECIFIED
+    } else {
+        contract
+    }
 }
 
 fn created_item_preview(

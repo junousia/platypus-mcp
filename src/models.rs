@@ -75,6 +75,47 @@ pub struct RootParams {
     pub root: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InspectToolsetsParams {
+    /// Optional toolset name to return. Use startup, backlog_planning,
+    /// direct_execution, worker_handoff, evidence_findings, or recovery.
+    pub toolset: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ToolsetData {
+    /// Total number of available Platypus toolsets.
+    pub total: usize,
+    /// Number of toolsets returned by this response.
+    pub returned: usize,
+    /// Toolset discovery records returned by this response.
+    pub toolsets: Vec<ToolsetInfo>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ToolsetInfo {
+    /// Stable toolset identifier.
+    pub name: String,
+    /// Human-readable display title for this toolset.
+    pub title: String,
+    /// Human-readable purpose for this toolset.
+    pub purpose: String,
+    /// Workflow phase or state where this toolset is useful.
+    pub when_to_use: String,
+    /// Recommended first Platypus MCP tool to call when entering this toolset.
+    pub recommended_first_tool: String,
+    /// Platypus MCP tool names included in this toolset.
+    pub tools: Vec<String>,
+    /// Claude ToolSearch selector that can load this toolset when the MCP
+    /// server is configured as `platypus`.
+    pub claude_selector: String,
+    /// Codex-oriented text query for tool_search or similar text-based tool
+    /// discovery.
+    pub codex_query: String,
+    /// Host-neutral search phrase for clients with their own discovery UI.
+    pub host_neutral_query: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum BacklogPrioritySchema {
@@ -227,6 +268,30 @@ pub enum WorkExecutionPathSchema {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum DirectWorkLoopPhaseSchema {
+    Inspect,
+    Edit,
+    Verify,
+    Complete,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InspectSessionDetailSchema {
+    Compact,
+    Verbose,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaHintUsageSchema {
+    Required,
+    Optional,
+    Recovery,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum PreparedStateSchema {
     NotPrepared,
     DirectGuidance,
@@ -258,6 +323,13 @@ pub enum CompletionClosureSourceSchema {
     GitTrailer,
     RuntimeEventAndGitTrailer,
     AlreadyClosed,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionDetailSchema {
+    Compact,
+    Verbose,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -320,8 +392,10 @@ pub struct DispatchReadyWorkParams {
     /// lifecycle state machine. This does not launch an external worker process.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub auto_start: Option<bool>,
-    /// Whether dispatch should auto-commit tracked planning artifacts when local
-    /// dirt is limited to `backlog/items/*.md` and `backlog/plans/*.yaml`.
+    /// Whether dispatch should auto-commit tracked Platypus planning artifacts
+    /// when local dirt is limited to backlog items, plans, epics, templates, or
+    /// other Platypus-owned dispatch scaffolding. It still refuses mixed source
+    /// edits so worker handoff cannot accidentally commit implementation work.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub auto_commit_artifacts: Option<bool>,
     /// Deprecated compatibility hint. Durable planning approval policy now
@@ -368,8 +442,10 @@ pub struct PrepareWorkParams {
     /// `workflow.execution` or backlog item `planning_gate`.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub require_planning_approval: Option<bool>,
-    /// Whether preparation should auto-commit tracked backlog and task-plan
-    /// artifacts when those are the only manager workspace changes.
+    /// Whether preparation should auto-commit tracked Platypus planning
+    /// artifacts when those are the only manager workspace changes. This covers
+    /// backlog items, plans, epics, templates, and other dispatch scaffolding;
+    /// it does not commit source edits.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub auto_commit_artifacts: Option<bool>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
@@ -418,6 +494,12 @@ pub struct InspectSessionParams {
     #[schemars(range(min = 1, max = 200))]
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
     pub limit: Option<usize>,
+    /// Response detail level. Defaults to compact so a session-start call
+    /// returns the next action, queue headline, and schema hints without
+    /// embedding full doctor/status/workflow/queue payloads. Use verbose when a
+    /// host needs all startup payloads in one response.
+    #[schemars(with = "Option<InspectSessionDetailSchema>")]
+    pub detail: Option<String>,
     /// Deprecated compatibility hint. Durable task-plan policy now comes from
     /// `workflow.execution` or backlog item `planning_gate`.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
@@ -443,6 +525,24 @@ pub struct InspectItemParams {
     /// `workflow.execution` or backlog item `planning_gate`.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub require_planning_approval: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetBacklogItemParams {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: Option<String>,
+    /// Backlog item identifier to read.
+    #[schemars(example = example_item_id(), pattern(r"^[A-Z]+-[0-9]{3}$"))]
+    pub item_id: String,
+    /// Include bounded markdown content in the response. Defaults to true so
+    /// hosts can inspect one item without loading the heavier queue view.
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
+    pub include_markdown: Option<bool>,
+    /// Maximum markdown bytes returned when include_markdown is true. Defaults
+    /// to 20000 and is capped at 100000 to keep MCP output bounded.
+    #[schemars(range(min = 1, max = 100000))]
+    #[serde(default, deserialize_with = "crate::compat::deserialize_option_usize")]
+    pub max_markdown_bytes: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -811,15 +911,15 @@ pub struct CreateBacklogItemParams {
     #[schemars(example = example_goal())]
     pub goal: String,
     /// Implementation contract text for this backlog item. Provide this for
-    /// real execution guidance; when omitted, creation tools keep the required
-    /// Implementation Contract section empty.
+    /// real execution guidance; when omitted, creation tools write a clear
+    /// "not specified" placeholder instead of inventing execution details.
     pub implementation_contract: Option<String>,
     /// Optional alias for implementation_contract. Provide only one of
     /// implementation_contract or contract.
     pub contract: Option<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Acceptance criteria for this item. When omitted, creation tools write
-    /// one generated acceptance criterion so the backlog item remains valid.
+    /// one neutral tracking criterion so the backlog item remains valid.
     pub acceptance: Vec<String>,
     /// Optional notes for this item.
     pub notes: Option<String>,
@@ -963,15 +1063,15 @@ pub struct CreateBacklogItemsEntry {
     #[schemars(example = example_goal())]
     pub goal: String,
     /// Implementation contract text for this backlog item. Provide this for
-    /// real execution guidance; when omitted, creation tools keep the required
-    /// Implementation Contract section empty.
+    /// real execution guidance; when omitted, creation tools write a clear
+    /// "not specified" placeholder instead of inventing execution details.
     pub implementation_contract: Option<String>,
     /// Optional alias for implementation_contract. Provide only one of
     /// implementation_contract or contract.
     pub contract: Option<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Acceptance criteria for this item. When omitted, creation tools write
-    /// one generated acceptance criterion so the backlog item remains valid.
+    /// one neutral tracking criterion so the backlog item remains valid.
     pub acceptance: Vec<String>,
     /// Optional notes for this item.
     pub notes: Option<String>,
@@ -1494,14 +1594,20 @@ pub struct CompleteBacklogItemParams {
     pub summary: String,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Files changed by the direct host work, relative to the manager workspace.
+    /// This can be empty for verified non-file, exploratory, review-only, or
+    /// already-committed work when verification or evidence fields explain the
+    /// completion.
     pub changed_files: Vec<String>,
     /// Verification status for this direct work.
     #[schemars(with = "Option<VerificationStatusSchema>")]
     pub verification_status: Option<String>,
-    /// Summary of verification that should be recorded as evidence.
+    /// Summary of verification that complete_backlog_item should record as
+    /// automatic verification evidence when record_auto_evidence is true.
     pub verification_summary: Option<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
-    /// References such as commands, files, commits, URLs, or evidence IDs.
+    /// References such as commands, files, commits, URLs, or evidence IDs that
+    /// support verification_summary. These are stored on the automatic
+    /// verification evidence record when record_auto_evidence is true.
     pub verification_refs: Vec<String>,
     #[serde(default, deserialize_with = "crate::compat::deserialize_vec_string")]
     /// Existing evidence identifiers or references that support this completion.
@@ -1510,8 +1616,12 @@ pub struct CompleteBacklogItemParams {
     /// Existing finding identifiers or references reviewed for this completion.
     pub finding_refs: Vec<String>,
     /// Whether complete_backlog_item should automatically record completion,
-    /// verification, and commit evidence. Defaults to true. Set false only when
-    /// explicit evidence_refs already cover the completion.
+    /// verification, and commit evidence. Defaults to true. When true,
+    /// verification_status, verification_summary, and verification_refs create
+    /// verification evidence in this same call; do not call
+    /// record_verification_evidence separately unless you need an additional
+    /// independent evidence record. Set false only when evidence_refs already
+    /// point to explicit evidence records managed by the host.
     #[serde(default, deserialize_with = "crate::compat::deserialize_option_bool")]
     pub record_auto_evidence: Option<bool>,
     /// Whether Platypus should create a Git commit for the supplied changed_files
@@ -1520,6 +1630,11 @@ pub struct CompleteBacklogItemParams {
     pub commit: Option<bool>,
     /// Optional subject for the closure commit when commit=true.
     pub commit_message: Option<String>,
+    /// Response detail level. compact is the default and omits the full queue
+    /// snapshot while preserving closure, evidence, commit, and next-action
+    /// data. Use verbose when debugging queue state after completion.
+    #[schemars(with = "Option<CompletionDetailSchema>")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2018,6 +2133,13 @@ pub struct CompleteBacklogItemData {
     pub item_id: String,
     /// Human-readable summary of the record or result.
     pub summary: String,
+    /// Response detail level used for this result.
+    #[schemars(with = "CompletionDetailSchema")]
+    pub detail: String,
+    /// Compact completion summary intended for normal direct-work handoffs.
+    pub compact: CompleteBacklogItemCompact,
+    /// Non-fatal warnings produced while completing direct work.
+    pub warnings: Vec<String>,
     /// Files changed by the direct host work, relative to the manager workspace.
     pub changed_files: Vec<String>,
     /// Evidence records returned or created by this operation.
@@ -2046,6 +2168,40 @@ pub struct CompleteBacklogItemData {
     pub queue_status_error: Option<String>,
     /// High-level action for the MCP host or human operator.
     pub host_action: HostAction,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CompleteBacklogItemCompact {
+    /// Backlog item identifier.
+    pub item_id: String,
+    /// One-line direct completion status for normal chat output.
+    pub status_line: String,
+    /// Whether the backlog item is considered closed after this operation.
+    pub closed: bool,
+    /// Source that made the item closed.
+    #[schemars(with = "CompletionClosureSourceSchema")]
+    pub closure_source: String,
+    /// Commit outcome for this completion.
+    #[schemars(with = "CompletionCommitStatusSchema")]
+    pub commit_status: String,
+    /// Git commit hash created by this operation.
+    pub commit: Option<String>,
+    /// Whether automatic completion, verification, and commit evidence
+    /// recording was enabled for this completion.
+    pub auto_evidence_enabled: bool,
+    /// Generated evidence IDs and summaries created by this completion call.
+    pub generated_evidence: Vec<GeneratedEvidenceSummary>,
+    /// Non-fatal warnings produced while completing direct work.
+    pub warnings: Vec<String>,
+    /// Queue state after completion, when available.
+    #[schemars(with = "Option<WorkQueueStateSchema>")]
+    pub queue_state: Option<String>,
+    /// Next runnable item after completion, when available.
+    pub next_ready_item_id: Option<String>,
+    /// Recommended Platypus MCP tool to call next.
+    pub recommended_tool: Option<String>,
+    /// Human-readable explanation of the compact state.
+    pub summary: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2080,7 +2236,7 @@ pub struct CompletionCommitOutcome {
     pub reason: String,
 }
 
-#[derive(Debug, Serialize, JsonSchema)]
+#[derive(Debug, Serialize, Clone, JsonSchema)]
 pub struct GeneratedEvidenceSummary {
     /// Stable local evidence identifier.
     pub id: String,
@@ -2127,7 +2283,9 @@ pub struct WorkQueueData {
     pub require_task_plan: bool,
     /// Number of queue items ready to dispatch.
     pub ready_count: usize,
-    /// Number of queue items blocked before dispatch.
+    /// Number of returned queue candidates blocked by planning, setup, active
+    /// lifecycle, or leases. This is not the whole-backlog dependency blocked
+    /// inventory; use inventory.dependency_blocked_count for that.
     pub blocked_count: usize,
     /// Number of returned backlog items that already have active task lifecycle
     /// state or completed task results awaiting integration.
@@ -2138,6 +2296,9 @@ pub struct WorkQueueData {
     /// Active or pending task identifiers that block dispatch for returned
     /// backlog items.
     pub active_task_ids: Vec<String>,
+    /// Active task-scope lease identifiers that claim returned direct-edit
+    /// backlog items without creating worker tasks.
+    pub active_lease_ids: Vec<String>,
     /// Whole-backlog inventory summary for queue context, including items that
     /// are not returned as runnable queue candidates.
     pub inventory: WorkQueueInventorySummary,
@@ -2153,6 +2314,18 @@ pub struct WorkQueueData {
     pub reason: String,
     /// Suggested parameters for the recommended tool call.
     pub params: BTreeMap<String, Value>,
+    /// Minimal deterministic loop for direct manager-workspace work. Present
+    /// when direct-ready items can be edited and closed without a worker
+    /// handoff.
+    pub minimal_direct_loop: Option<DirectWorkLoop>,
+    /// Claude ToolSearch selector that loads all schemas listed in
+    /// schemas_likely_needed_next in one call, when the Claude host supports
+    /// comma-separated selectors. Other hosts should ignore this field.
+    pub claude_toolsearch_batch_selector: Option<String>,
+    /// Host-neutral search query that loads the likely next schemas as a batch
+    /// on MCP clients with text-based tool discovery, including Codex
+    /// `tool_search`.
+    pub host_neutral_tool_search_query: Option<String>,
     /// Bounded hints for MCP tool schemas likely needed in the next workflow
     /// phase. Hosts may ignore this when their schema discovery is automatic.
     pub schemas_likely_needed_next: Vec<SchemaDiscoveryHint>,
@@ -2161,15 +2334,59 @@ pub struct WorkQueueData {
 }
 
 #[derive(Debug, Serialize, Clone, JsonSchema)]
+pub struct DirectWorkLoop {
+    /// Backlog item this loop is scoped to, when the response selected one
+    /// concrete item.
+    #[schemars(regex(pattern = "^[A-Z][A-Z0-9]+-[0-9]+$"), example = example_item_id())]
+    pub item_id: Option<String>,
+    /// Short summary of the direct-edit path.
+    pub summary: String,
+    /// Durable tool that should close the direct work after editing and
+    /// verification.
+    pub primary_next_tool: String,
+    /// Optional guidance-only tool. For direct work this does not persist a
+    /// prepared marker.
+    pub optional_guidance_tool: Option<String>,
+    /// Ordered direct work steps for hosts that need a compact executable
+    /// checklist.
+    pub steps: Vec<DirectWorkStep>,
+}
+
+#[derive(Debug, Serialize, Clone, JsonSchema)]
+pub struct DirectWorkStep {
+    /// One-based step order.
+    #[schemars(range(min = 1, max = 10))]
+    pub order: usize,
+    /// Machine-readable direct loop phase.
+    #[schemars(with = "DirectWorkLoopPhaseSchema")]
+    pub phase: String,
+    /// Platypus MCP tool for this step, when the step is a tool call.
+    pub tool: Option<String>,
+    /// Human-readable step summary.
+    pub summary: String,
+}
+
+#[derive(Debug, Serialize, Clone, JsonSchema)]
 pub struct SchemaDiscoveryHint {
     /// Platypus MCP tool whose schema is likely useful next.
     pub tool_name: String,
     /// Workflow phase or queue condition that makes this schema relevant.
     pub phase: String,
+    /// Whether this schema is required for the next transition, optional
+    /// supporting context, or recovery-only guidance.
+    #[schemars(with = "SchemaHintUsageSchema")]
+    pub usage: String,
     /// Human-readable reason this tool schema is likely useful next.
     pub reason: String,
+    /// Host-neutral search phrase for MCP clients that do not support Claude
+    /// ToolSearch selectors. Use this with the host's normal tool discovery UI.
+    pub host_neutral_query: String,
+    /// Codex-oriented text search query for the tool_search tool. This includes
+    /// the MCP-expanded tool name and a plain Platypus phrase.
+    pub codex_tool_search_query: String,
     /// Claude ToolSearch selector for this tool when the server is configured
-    /// as `platypus`. Other hosts should use tool_name and their own discovery UI.
+    /// as `platypus`. This is Claude-specific; other hosts should use tool_name
+    /// or host_neutral_query and their own discovery UI.
     pub claude_toolsearch_selector: Option<String>,
 }
 
@@ -2208,11 +2425,19 @@ pub struct WorkQueueItem {
     pub prepare_work_optional: bool,
     /// Human-readable explanation of why direct or planned work applies.
     pub execution_guidance: String,
+    /// Minimal deterministic loop for this direct manager-workspace item.
+    pub minimal_direct_loop: Option<DirectWorkLoop>,
     /// Active or pending lifecycle task id for this backlog item, when one
     /// currently blocks new dispatch.
     pub task_id: Option<String>,
     /// Active worker assignment id for this backlog item, when one exists.
     pub assignment_id: Option<String>,
+    /// Active task-scope lease id that claims this direct-edit backlog item,
+    /// when one exists.
+    pub active_lease_id: Option<String>,
+    /// Owner of the active task-scope lease that claims this direct-edit
+    /// backlog item, when one exists.
+    pub active_lease_owner: Option<String>,
     /// Whether this item can be dispatched now.
     pub ready_to_dispatch: bool,
     /// Recommended Platypus MCP tool to call next.
@@ -2285,7 +2510,9 @@ pub struct WorkQueueInventorySummary {
     pub total_count: usize,
     /// Backlog items that are open and have all dependencies closed.
     pub runnable_count: usize,
-    /// Backlog items blocked by open dependencies.
+    /// Whole-backlog count of open items blocked by open dependencies. This is
+    /// separate from WorkQueueData.blocked_count, which only counts returned
+    /// queue candidates blocked by planning, setup, lifecycle, or leases.
     pub dependency_blocked_count: usize,
     /// Backlog items closed by Git trailers or recorded direct completion.
     pub closed_count: usize,
@@ -2324,6 +2551,8 @@ pub struct QueueStatusData {
     pub top_blocked_items: Vec<QueueStatusItem>,
     /// Active or pending lifecycle tasks that need attention.
     pub active_tasks: Vec<QueueTaskSummary>,
+    /// Active task-scope leases that claim direct-edit backlog items.
+    pub active_leases: Vec<QueueLeaseSummary>,
     /// Human-readable descriptions for known queue states.
     pub state_descriptions: Vec<QueueStateDescription>,
     /// Warnings that should be resolved before dispatching work.
@@ -2332,6 +2561,18 @@ pub struct QueueStatusData {
     pub recommended_tool: String,
     /// Human-readable reason for the decision or result.
     pub reason: String,
+    /// Minimal deterministic loop for direct manager-workspace work. Present
+    /// when direct-ready items can be edited and closed without a worker
+    /// handoff.
+    pub minimal_direct_loop: Option<DirectWorkLoop>,
+    /// Claude ToolSearch selector that loads all next likely schemas in one
+    /// call, when the Claude host supports comma-separated selectors. Other
+    /// hosts should ignore this field.
+    pub claude_toolsearch_batch_selector: Option<String>,
+    /// Host-neutral search query that loads the likely next schemas as a batch
+    /// on MCP clients with text-based tool discovery, including Codex
+    /// `tool_search`.
+    pub host_neutral_tool_search_query: Option<String>,
     /// Whether compact lists were truncated by the request limit.
     pub truncated: bool,
 }
@@ -2344,9 +2585,12 @@ pub struct QueueStatusCounts {
     pub runnable_count: usize,
     /// Queue items currently ready for direct work or worker handoff.
     pub ready_count: usize,
-    /// Queue items currently blocked by planning, setup, lifecycle, or dependencies.
+    /// Compact attention count across returned blocked queue items, dependency
+    /// blocked inventory items, active lifecycle items, and pending integration
+    /// items visible in this status response. Use dependency_blocked_count for
+    /// the whole-backlog dependency-only count.
     pub blocked_count: usize,
-    /// Backlog items blocked by open dependencies.
+    /// Whole-backlog count of open items blocked by open dependencies.
     pub dependency_blocked_count: usize,
     /// Backlog items with active task lifecycle state.
     pub active_count: usize,
@@ -2400,6 +2644,22 @@ pub struct QueueTaskSummary {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
+pub struct QueueLeaseSummary {
+    /// Backlog item identifier associated with this direct-work lease.
+    #[schemars(regex(pattern = "^[A-Z][A-Z0-9]+-[0-9]+$"), example = example_item_id())]
+    pub item_id: String,
+    /// Lease identifier.
+    pub lease_id: String,
+    /// Owner name or repository owner, depending on context.
+    pub owner: String,
+    /// Queue state for this claimed item.
+    #[schemars(with = "WorkQueueStateSchema")]
+    pub queue_state: String,
+    /// Recommended Platypus MCP tool to call next for this lease.
+    pub recommended_tool: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct QueueStateDescription {
     /// Queue state value.
     #[schemars(with = "WorkQueueStateSchema")]
@@ -2416,6 +2676,33 @@ pub struct BacklogItemMarkdownState {
     pub sections: Vec<String>,
     /// External references tied to this record.
     pub external_refs: Vec<ExternalRef>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GetBacklogItemData {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Backlog item identifier.
+    #[schemars(regex(pattern = "^[A-Z][A-Z0-9]+-[0-9]+$"), example = example_item_id())]
+    pub item_id: String,
+    /// Human-readable backlog item title.
+    #[schemars(example = example_title())]
+    pub title: String,
+    /// Filesystem path for the backlog item markdown file.
+    pub path: String,
+    /// Markdown section headings discovered in the backlog item body.
+    pub sections: Vec<String>,
+    /// External references tied to this record.
+    pub external_refs: Vec<ExternalRef>,
+    /// Bounded markdown content for the backlog item. Null when
+    /// include_markdown=false.
+    pub markdown: Option<String>,
+    /// Whether markdown was truncated to max_markdown_bytes.
+    pub markdown_truncated: bool,
+    /// Full markdown byte length before truncation.
+    pub markdown_bytes: usize,
+    /// Maximum markdown bytes requested for this response.
+    pub max_markdown_bytes: usize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2442,6 +2729,12 @@ pub struct InspectItemData {
     pub task_id: Option<String>,
     /// Active worker assignment id for this backlog item, when one exists.
     pub assignment_id: Option<String>,
+    /// Active task-scope lease id that claims this direct-edit backlog item,
+    /// when one exists.
+    pub active_lease_id: Option<String>,
+    /// Owner of the active task-scope lease that claims this direct-edit
+    /// backlog item, when one exists.
+    pub active_lease_owner: Option<String>,
     /// Whether this item can be dispatched or prepared now.
     pub ready_to_dispatch: bool,
     /// Recommended Platypus MCP tool to call next for this item.
@@ -2477,6 +2770,11 @@ pub struct InspectSessionData {
     /// Whether inspected setup and queue state are ready for normal workflow
     /// continuation.
     pub ok: bool,
+    /// Response detail level used for this result.
+    #[schemars(with = "InspectSessionDetailSchema")]
+    pub detail: String,
+    /// Compact session facts intended for startup chat context.
+    pub compact: InspectSessionCompact,
     /// Project setup diagnostics, when inspection could collect them.
     pub doctor: Option<DoctorSnapshotData>,
     /// Project and backlog status, when inspection could collect it.
@@ -2495,9 +2793,47 @@ pub struct InspectSessionData {
     pub reason: String,
     /// Suggested parameters for the recommended tool call.
     pub params: BTreeMap<String, Value>,
+    /// Minimal deterministic loop for direct manager-workspace work. Present
+    /// when direct-ready items can be edited and closed without a worker
+    /// handoff.
+    pub minimal_direct_loop: Option<DirectWorkLoop>,
+    /// Claude ToolSearch selector that loads all schemas listed in
+    /// schemas_likely_needed_next in one call, when the Claude host supports
+    /// comma-separated selectors. Other hosts should ignore this field.
+    pub claude_toolsearch_batch_selector: Option<String>,
+    /// Host-neutral search query that loads the likely next schemas as a batch
+    /// on MCP clients with text-based tool discovery, including Codex
+    /// `tool_search`.
+    pub host_neutral_tool_search_query: Option<String>,
     /// Bounded hints for MCP tool schemas likely needed in the next workflow
     /// phase. Hosts may ignore this when their schema discovery is automatic.
     pub schemas_likely_needed_next: Vec<SchemaDiscoveryHint>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct InspectSessionCompact {
+    /// Project root that bounds all file, Git, and state operations.
+    pub root: String,
+    /// Whether inspected setup and queue state are ready for normal workflow
+    /// continuation.
+    pub ok: bool,
+    /// Current queue state when queue inspection succeeded.
+    #[schemars(with = "Option<WorkQueueStateSchema>")]
+    pub queue_state: Option<String>,
+    /// Count of all known backlog items when queue inspection succeeded.
+    pub total_items: Option<usize>,
+    /// Count of runnable or ready items when queue inspection succeeded.
+    pub runnable_items: Option<usize>,
+    /// Recommended Platypus MCP tool to call next.
+    pub recommended_tool: String,
+    /// Human-readable reason for the recommendation.
+    pub reason: String,
+    /// Minimal deterministic loop for direct manager-workspace work. Present
+    /// when direct-ready items can be edited and closed without a worker
+    /// handoff.
+    pub minimal_direct_loop: Option<DirectWorkLoop>,
+    /// Non-fatal errors encountered while collecting the session snapshot.
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

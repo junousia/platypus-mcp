@@ -1,14 +1,14 @@
 use crate::{
     assignments, backlog, dispatch, events, evidence, execution_mode, findings, guidance,
     models::{
-        ActionResult, ActionStatus, CompleteBacklogItemData, CompleteBacklogItemParams,
-        CompleteWorkerExecutionParams, CompletionClosureState, CompletionCommitOutcome,
-        DispatchReadyWorkData, DispatchReadyWorkItem, DispatchReadyWorkParams, EvidenceRecord,
-        FinishWorkData, FinishWorkFindingInput, FinishWorkParams, GeneratedEvidenceSummary,
-        HostAction, IntegrateWorkerResultParams, PrepareWorkData, PrepareWorkParams,
-        QueueStatusData, ReconcileParams, RecordEvidenceParams, RecordFindingParams,
-        RecordVerificationEvidenceParams, WorkQueueData, WorkQueueItem, WorkerAssignment,
-        WorktreeDiffData, WorktreeDiffParams,
+        ActionResult, ActionStatus, CompleteBacklogItemCompact, CompleteBacklogItemData,
+        CompleteBacklogItemParams, CompleteWorkerExecutionParams, CompletionClosureState,
+        CompletionCommitOutcome, DispatchReadyWorkData, DispatchReadyWorkItem,
+        DispatchReadyWorkParams, EvidenceRecord, FinishWorkData, FinishWorkFindingInput,
+        FinishWorkParams, GeneratedEvidenceSummary, HostAction, IntegrateWorkerResultParams,
+        PrepareWorkData, PrepareWorkParams, QueueStatusData, ReconcileParams, RecordEvidenceParams,
+        RecordFindingParams, RecordVerificationEvidenceParams, WorkQueueData, WorkQueueItem,
+        WorkerAssignment, WorktreeDiffData, WorktreeDiffParams,
     },
     reconcile, workspace,
 };
@@ -71,39 +71,29 @@ pub fn prepare_work(
     let selected =
         selected_prepare_items(&queue, params.item_id.as_deref(), max_tasks, manual_handoff);
     if selected.is_empty() {
+        let blocked_action =
+            blocked_prepare_action(&queue, params.item_id.as_deref(), params.worker.clone());
+        let selected_item_ids = blocked_action
+            .item_id
+            .as_ref()
+            .map(|item_id| vec![item_id.clone()])
+            .unwrap_or_default();
+        let next_action = blocked_action.next_action.clone();
         let data = prepare_queue_only_data(
             queue,
-            vec![HostAction {
-                kind: "inspect_or_recover".to_string(),
-                summary: "No work is ready to prepare.".to_string(),
-                instructions: vec![
-                    "Inspect the queue item reasons and resolve planning, approval, Git, or backlog blockers.".to_string(),
-                    "Call inspect_work_queue after resolving the blocker.".to_string(),
-                ],
-                task_id: None,
-                assignment_id: None,
-                worker: params.worker,
-                worktree_path: None,
-                bundle: None,
-                next_tools: vec![
-                    "inspect_work_queue".to_string(),
-                    "doctor_snapshot".to_string(),
-                ],
-            }],
+            vec![blocked_action.host_action],
             include_queue_snapshot,
             "not_prepared",
             false,
             "none",
             "No preparation state was persisted because no ready backlog item could be selected.",
-            Vec::new(),
+            selected_item_ids,
         );
         return ActionResult {
             action: action.to_string(),
             status: ActionStatus::Skipped,
             summary: "No ready backlog item could be prepared.".to_string(),
-            next_action: Some(
-                "Resolve the reported queue blockers, then retry prepare_work.".to_string(),
-            ),
+            next_action: Some(next_action),
             recovery_action: None,
             data: Some(data),
             error: None,
@@ -281,6 +271,106 @@ fn ready_for_prepare_work(item: &WorkQueueItem, manual_handoff: bool) -> bool {
             .is_none_or(|approval| !approval.required || approval.approved)
 }
 
+struct BlockedPrepareAction {
+    item_id: Option<String>,
+    next_action: String,
+    host_action: HostAction,
+}
+
+fn blocked_prepare_action(
+    queue: &WorkQueueData,
+    requested_item_id: Option<&str>,
+    worker: Option<String>,
+) -> BlockedPrepareAction {
+    let requested = requested_item_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let item = requested.and_then(|item_id| {
+        queue
+            .items
+            .iter()
+            .find(|item| item.candidate.item_id == item_id)
+    });
+    if let Some(item) = item {
+        let mut next_tools = vec![item.recommended_tool.clone(), "inspect_item".to_string()];
+        if item.queue_state == "planning_blocked" {
+            next_tools.push("write_task_plan".to_string());
+            next_tools.push("validate_task_plan".to_string());
+        }
+        if item.queue_state == "approval_blocked" {
+            next_tools.push("request_planning_approval".to_string());
+            next_tools.push("approval_respond".to_string());
+        }
+        if matches!(
+            item.queue_state.as_str(),
+            "config_blocked" | "workspace_blocked"
+        ) {
+            next_tools.push("doctor_snapshot".to_string());
+        }
+        next_tools.push("inspect_work_queue".to_string());
+        next_tools.sort();
+        next_tools.dedup();
+        let reason = format!(
+            "`{}` is `{}` and cannot be prepared yet: {}",
+            item.candidate.item_id, item.queue_state, item.reason
+        );
+        return BlockedPrepareAction {
+            item_id: Some(item.candidate.item_id.clone()),
+            next_action: reason.clone(),
+            host_action: HostAction {
+                kind: "inspect_or_recover".to_string(),
+                summary: format!(
+                    "Requested item `{}` is blocked: {}.",
+                    item.candidate.item_id, item.queue_state
+                ),
+                instructions: vec![
+                    reason,
+                    format!(
+                        "Recommended next tool for this item is `{}`.",
+                        item.recommended_tool
+                    ),
+                    "Retry prepare_work after the item reaches direct_ready or ready.".to_string(),
+                ],
+                task_id: item.task_id.clone(),
+                assignment_id: item.assignment_id.clone(),
+                worker,
+                worktree_path: None,
+                bundle: None,
+                next_tools,
+            },
+        };
+    }
+
+    let next_action = if let Some(item_id) = requested {
+        format!(
+            "`{item_id}` was not returned by inspect_work_queue; call inspect_item or inspect_work_queue to inspect whether it is closed, dependency-blocked, filtered, or missing."
+        )
+    } else {
+        "Inspect the queue item reasons and resolve planning, approval, Git, or backlog blockers before retrying prepare_work.".to_string()
+    };
+    BlockedPrepareAction {
+        item_id: None,
+        next_action: next_action.clone(),
+        host_action: HostAction {
+            kind: "inspect_or_recover".to_string(),
+            summary: "No work is ready to prepare.".to_string(),
+            instructions: vec![
+                next_action,
+                "Call inspect_work_queue after resolving the blocker.".to_string(),
+            ],
+            task_id: None,
+            assignment_id: None,
+            worker,
+            worktree_path: None,
+            bundle: None,
+            next_tools: vec![
+                "inspect_work_queue".to_string(),
+                "doctor_snapshot".to_string(),
+            ],
+        },
+    }
+}
+
 pub fn complete_backlog_item(
     default_root: &Path,
     params: CompleteBacklogItemParams,
@@ -300,6 +390,12 @@ pub fn complete_backlog_item(
             "summary is required",
         );
     }
+    let detail = match completion_detail(params.detail.as_deref()) {
+        Ok(detail) => detail,
+        Err(error) => {
+            return ActionResult::failed(action, "Could not complete backlog item.", error)
+        }
+    };
     let inventory = backlog::inspect_backlog_inventory(default_root, params.root.as_deref(), None);
     let (root, already_closed) = match inventory {
         ActionResult {
@@ -337,23 +433,39 @@ pub fn complete_backlog_item(
                 let (queue_status, queue_status_error) =
                     completion_queue_status(default_root, &root);
                 let closure = already_closed_closure(Path::new(&root), &item_id);
+                let commit_outcome =
+                    completion_commit_outcome(params.commit.unwrap_or(false), None, true);
+                let generated_evidence = Vec::new();
+                let compact = completion_compact(
+                    &item_id,
+                    true,
+                    &closure,
+                    &commit_outcome,
+                    None,
+                    params.record_auto_evidence.unwrap_or(true),
+                    &generated_evidence,
+                    &[],
+                    queue_status.as_ref(),
+                    "Backlog item was already closed.",
+                );
+                let (queue_status, queue_status_error) =
+                    verbose_queue_status(detail, queue_status, queue_status_error);
                 Some(CompleteBacklogItemData {
                     root,
                     item_id,
                     summary: summary.to_string(),
+                    detail: detail.to_string(),
+                    compact,
+                    warnings: Vec::new(),
                     changed_files: params.changed_files,
                     evidence: Vec::new(),
                     auto_evidence_enabled: params.record_auto_evidence.unwrap_or(true),
-                    generated_evidence: Vec::new(),
+                    generated_evidence,
                     event: None,
                     commit: None,
                     closed: true,
                     closure,
-                    commit_outcome: completion_commit_outcome(
-                        params.commit.unwrap_or(false),
-                        None,
-                        true,
-                    ),
+                    commit_outcome,
                     queue_status,
                     queue_status_error,
                     host_action: HostAction {
@@ -393,6 +505,11 @@ pub fn complete_backlog_item(
             return ActionResult::failed(action, "Could not complete backlog item.", error);
         }
     }
+    let warnings = changed_file_warnings(
+        root_path,
+        &changed_files,
+        empty_changed_files_explained(&params),
+    );
     let mut evidence_records = Vec::new();
     if record_auto_evidence {
         let completion_evidence = evidence::record_evidence(
@@ -605,10 +722,33 @@ pub fn complete_backlog_item(
         ],
     };
     let (queue_status, queue_status_error) = completion_queue_status(default_root, &root);
+    let closure = completion_closure(
+        true,
+        true,
+        commit_outcome.commit.clone(),
+        completion_evidence_refs,
+    );
+    let compact = completion_compact(
+        &item_id,
+        true,
+        &closure,
+        &commit_outcome,
+        commit.clone(),
+        record_auto_evidence,
+        &generated_evidence,
+        &warnings,
+        queue_status.as_ref(),
+        &format!("Completed direct backlog item `{item_id}`."),
+    );
+    let (queue_status, queue_status_error) =
+        verbose_queue_status(detail, queue_status, queue_status_error);
     let data = CompleteBacklogItemData {
         root,
         item_id: item_id.clone(),
         summary: summary.to_string(),
+        detail: detail.to_string(),
+        compact,
+        warnings,
         changed_files,
         evidence: evidence_records,
         auto_evidence_enabled: record_auto_evidence,
@@ -616,12 +756,7 @@ pub fn complete_backlog_item(
         event,
         commit,
         closed: true,
-        closure: completion_closure(
-            true,
-            true,
-            commit_outcome.commit.clone(),
-            completion_evidence_refs,
-        ),
+        closure,
         commit_outcome,
         queue_status,
         queue_status_error,
@@ -651,6 +786,69 @@ fn completion_queue_status(
             data: Some(data), ..
         } => (Some(data), None),
         ActionResult { summary, error, .. } => (None, Some(error.unwrap_or(summary))),
+    }
+}
+
+fn completion_detail(detail: Option<&str>) -> Result<&'static str, String> {
+    match detail.unwrap_or("compact").trim() {
+        "" | "compact" => Ok("compact"),
+        "verbose" => Ok("verbose"),
+        value => Err(format!(
+            "unsupported detail `{value}`; use compact or verbose"
+        )),
+    }
+}
+
+fn verbose_queue_status(
+    detail: &str,
+    queue_status: Option<QueueStatusData>,
+    queue_status_error: Option<String>,
+) -> (Option<QueueStatusData>, Option<String>) {
+    if detail == "verbose" {
+        (queue_status, queue_status_error)
+    } else {
+        (None, None)
+    }
+}
+
+fn completion_compact(
+    item_id: &str,
+    closed: bool,
+    closure: &CompletionClosureState,
+    commit_outcome: &CompletionCommitOutcome,
+    commit: Option<String>,
+    auto_evidence_enabled: bool,
+    generated_evidence: &[GeneratedEvidenceSummary],
+    warnings: &[String],
+    queue_status: Option<&QueueStatusData>,
+    summary: &str,
+) -> CompleteBacklogItemCompact {
+    let next_ready = queue_status.and_then(|queue| queue.top_ready_items.first());
+    let next = next_ready
+        .map(|item| item.item_id.as_str())
+        .unwrap_or("inspect_work_queue");
+    let status_line = format!(
+        "{} {} closed; closure={}; commit={}; next={}",
+        if closed { "done" } else { "pending" },
+        item_id,
+        closure.source,
+        commit_outcome.status,
+        next
+    );
+    CompleteBacklogItemCompact {
+        item_id: item_id.to_string(),
+        status_line,
+        closed,
+        closure_source: closure.source.clone(),
+        commit_status: commit_outcome.status.clone(),
+        commit,
+        auto_evidence_enabled,
+        generated_evidence: generated_evidence.to_vec(),
+        warnings: warnings.to_vec(),
+        queue_state: queue_status.map(|queue| queue.queue_state.clone()),
+        next_ready_item_id: next_ready.map(|item| item.item_id.clone()),
+        recommended_tool: queue_status.map(|queue| queue.recommended_tool.clone()),
+        summary: summary.to_string(),
     }
 }
 
@@ -957,6 +1155,9 @@ pub fn finish_work(default_root: &Path, params: FinishWorkParams) -> ActionResul
 
     let mut integration = None;
     let mut reconciliation = None;
+    let meaningful_changes = worktree_changes
+        .as_ref()
+        .is_some_and(|changes| changes.meaningful_changes);
     if params.integrate_if_ready.unwrap_or(false)
         && status == "completed"
         && verification_ready(
@@ -965,6 +1166,7 @@ pub fn finish_work(default_root: &Path, params: FinishWorkParams) -> ActionResul
         )
         && unresolved_required == 0
         && findings_reviewed
+        && meaningful_changes
     {
         let integrated = workspace::integrate_worker_result(
             default_root,
@@ -1003,6 +1205,7 @@ pub fn finish_work(default_root: &Path, params: FinishWorkParams) -> ActionResul
         findings_reviewed,
         unresolved_required,
         integration.is_some(),
+        meaningful_changes,
     );
     let root = assignment_root(&root, &assignment);
     let mut result = ActionResult::completed(
@@ -1291,6 +1494,7 @@ fn finish_host_action(
     findings_reviewed: bool,
     unresolved_required: usize,
     integrated: bool,
+    meaningful_changes: bool,
 ) -> HostAction {
     if status != "completed" {
         return HostAction {
@@ -1371,6 +1575,32 @@ fn finish_host_action(
             worktree_path: Some(assignment.worktree_path.clone()),
             bundle: Some(assignment.bundle.clone()),
             next_tools: vec!["reconcile_project".to_string(), "prepare_work".to_string()],
+        };
+    }
+    if !meaningful_changes {
+        return HostAction {
+            kind: "done".to_string(),
+            summary: format!(
+                "Assignment `{}` is complete and has no meaningful worktree changes to integrate.",
+                assignment.id
+            ),
+            instructions: vec![
+                "No integration merge is required because the worker produced no file changes."
+                    .to_string(),
+                "Use worktree_cleanup when the clean task worktree is no longer needed."
+                    .to_string(),
+                "Inspect the queue or run reconcile_project if you need an audit pass.".to_string(),
+            ],
+            task_id: Some(assignment.task_id.clone()),
+            assignment_id: Some(assignment.id.clone()),
+            worker: assignment.worker.clone(),
+            worktree_path: Some(assignment.worktree_path.clone()),
+            bundle: Some(assignment.bundle.clone()),
+            next_tools: vec![
+                "worktree_cleanup".to_string(),
+                "inspect_work_queue".to_string(),
+                "reconcile_project".to_string(),
+            ],
         };
     }
     HostAction {
@@ -1643,6 +1873,70 @@ fn validate_explicit_completion_evidence(
     Ok(())
 }
 
+fn changed_file_warnings(
+    root: &Path,
+    paths: &[String],
+    empty_files_explained: bool,
+) -> Vec<String> {
+    if paths.is_empty() {
+        if empty_files_explained {
+            return Vec::new();
+        }
+        return vec![
+            "changed_files is empty; include touched paths when files changed or provide evidence_refs for non-file work."
+                .to_string(),
+        ];
+    }
+    let mut warnings = Vec::new();
+    for path in paths {
+        if !root.join(path).exists() {
+            warnings.push(format!(
+                "changed_files includes `{path}`, but that path does not exist in the manager workspace."
+            ));
+            continue;
+        }
+        let output = Command::new("git")
+            .args([
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--",
+                path,
+            ])
+            .current_dir(root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+        if let Ok(output) = output {
+            if output.status.success() && String::from_utf8_lossy(&output.stdout).trim().is_empty()
+            {
+                if is_platypus_owned_changed_file(path) {
+                    continue;
+                }
+                warnings.push(format!(
+                    "changed_files includes `{path}`, but Git does not report local changes for it."
+                ));
+            }
+        }
+    }
+    warnings
+}
+
+fn empty_changed_files_explained(params: &CompleteBacklogItemParams) -> bool {
+    params.verification_status.is_some()
+        || params.verification_summary.is_some()
+        || !params.verification_refs.is_empty()
+        || !params.evidence_refs.is_empty()
+}
+
+fn is_platypus_owned_changed_file(path: &str) -> bool {
+    path == "platy.yaml"
+        || path == "WORKFLOW.md"
+        || path == "AGENTS.md"
+        || path == "CLAUDE.md"
+        || path.starts_with("backlog/")
+}
+
 fn completion_refs(
     changed_files: &[String],
     evidence_refs: &[String],
@@ -1890,6 +2184,53 @@ mod tests {
     }
 
     #[test]
+    fn prepare_work_reports_requested_item_blocker() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Feature workflow",
+            "feature",
+            "general",
+            &["src/lib.rs"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add blocked backlog"]);
+
+        let result = prepare_work(
+            project.path(),
+            PrepareWorkParams {
+                root: None,
+                item_id: Some("PROJ-001".to_string()),
+                max_tasks: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("host".to_string()),
+                execution_mode: None,
+                require_task_plan: Some(true),
+                require_planning_approval: None,
+                auto_commit_artifacts: None,
+                verification_command: Vec::new(),
+                include_queue_snapshot: None,
+            },
+        );
+        let data = result.data.expect("prepare data");
+        let action = data.host_actions.first().expect("host action");
+
+        assert_eq!(result.status, ActionStatus::Skipped);
+        assert_eq!(data.prepared_state, "not_prepared");
+        assert_eq!(data.selected_item_ids, vec!["PROJ-001".to_string()]);
+        assert!(result
+            .next_action
+            .as_deref()
+            .expect("next action")
+            .contains("planning_blocked"));
+        assert!(action.summary.contains("PROJ-001"));
+        assert!(action.summary.contains("planning_blocked"));
+        assert!(action.next_tools.contains(&"write_task_plan".to_string()));
+    }
+
+    #[test]
     fn complete_backlog_item_closes_direct_item_without_worker_task() {
         let project = backlog_project(false);
         init_git(project.path());
@@ -1920,6 +2261,7 @@ mod tests {
                 record_auto_evidence: None,
                 commit: Some(false),
                 commit_message: None,
+                detail: Some("verbose".to_string()),
             },
         );
         let data = completed.data.expect("complete data");
@@ -1996,6 +2338,7 @@ mod tests {
                 record_auto_evidence: None,
                 commit: Some(true),
                 commit_message: Some("Finish readme direct work".to_string()),
+                detail: None,
             },
         );
         let data = completed.data.expect("complete data");
@@ -2057,6 +2400,7 @@ mod tests {
                 record_auto_evidence: None,
                 commit: Some(false),
                 commit_message: None,
+                detail: None,
             },
         );
         assert_eq!(first.status, ActionStatus::Completed);
@@ -2076,6 +2420,7 @@ mod tests {
                 record_auto_evidence: None,
                 commit: Some(true),
                 commit_message: None,
+                detail: Some("verbose".to_string()),
             },
         );
         let data = skipped.data.expect("skip data");
@@ -2130,6 +2475,7 @@ mod tests {
                 record_auto_evidence: None,
                 commit: Some(false),
                 commit_message: None,
+                detail: None,
             },
         );
         let data = skipped.data.expect("skip data");
@@ -2195,6 +2541,7 @@ mod tests {
                 record_auto_evidence: Some(false),
                 commit: Some(false),
                 commit_message: None,
+                detail: None,
             },
         );
         let data = completed.data.expect("complete data");
@@ -2248,6 +2595,7 @@ mod tests {
                 record_auto_evidence: Some(false),
                 commit: Some(false),
                 commit_message: None,
+                detail: None,
             },
         );
 
@@ -2257,6 +2605,186 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .contains("unknown: EVD-999"));
+    }
+
+    #[test]
+    fn complete_backlog_item_warns_about_missing_or_unchanged_files() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Readme docs",
+            "docs",
+            "docs",
+            &["README.md"],
+        );
+        fs::write(project.path().join("README.md"), "# Existing\n").expect("readme");
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+
+        let completed = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Reviewed the readme.".to_string(),
+                changed_files: vec!["README.md".to_string(), "MISSING.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: Some("Manual review only.".to_string()),
+                verification_refs: vec!["manual:review".to_string()],
+                evidence_refs: Vec::new(),
+                finding_refs: Vec::new(),
+                record_auto_evidence: None,
+                commit: Some(false),
+                commit_message: None,
+                detail: None,
+            },
+        );
+        let data = completed.data.expect("complete data");
+
+        assert_eq!(completed.status, ActionStatus::Completed);
+        assert!(data
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Git does not report local changes")));
+        assert!(data
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("does not exist")));
+        assert_eq!(data.compact.warnings, data.warnings);
+    }
+
+    #[test]
+    fn complete_backlog_item_allows_verified_non_file_work_without_empty_warning() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Review workflow",
+            "docs",
+            "docs",
+            &["README.md"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+
+        let completed = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Reviewed the workflow without file changes.".to_string(),
+                changed_files: Vec::new(),
+                verification_status: Some("passed".to_string()),
+                verification_summary: Some("Manual workflow review passed.".to_string()),
+                verification_refs: vec!["manual:review".to_string()],
+                evidence_refs: Vec::new(),
+                finding_refs: Vec::new(),
+                record_auto_evidence: None,
+                commit: Some(false),
+                commit_message: None,
+                detail: None,
+            },
+        );
+        let data = completed.data.expect("complete data");
+
+        assert_eq!(completed.status, ActionStatus::Completed);
+        assert!(!data
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("changed_files is empty")));
+        assert!(!data
+            .compact
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("changed_files is empty")));
+    }
+
+    #[test]
+    fn complete_backlog_item_recognizes_untracked_changed_files() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Feedback docs",
+            "docs",
+            "docs",
+            &["FEEDBACK.md"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+        fs::write(project.path().join("FEEDBACK.md"), "Useful feedback.\n").expect("feedback");
+
+        let completed = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Captured feedback.".to_string(),
+                changed_files: vec!["FEEDBACK.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: Some("Manual review only.".to_string()),
+                verification_refs: vec!["manual:review".to_string()],
+                evidence_refs: Vec::new(),
+                finding_refs: Vec::new(),
+                record_auto_evidence: None,
+                commit: Some(false),
+                commit_message: None,
+                detail: None,
+            },
+        );
+        let data = completed.data.expect("complete data");
+
+        assert_eq!(completed.status, ActionStatus::Completed);
+        assert!(!data
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Git does not report local changes")));
+    }
+
+    #[test]
+    fn complete_backlog_item_does_not_warn_for_unchanged_platypus_files() {
+        let project = backlog_project(false);
+        init_git(project.path());
+        write_item(
+            project.path(),
+            "PROJ-001",
+            "Backlog docs",
+            "docs",
+            "docs",
+            &["backlog/items/PROJ-001.md"],
+        );
+        git(project.path(), &["add", "--all"]);
+        git(project.path(), &["commit", "-m", "Add direct backlog"]);
+
+        let completed = complete_backlog_item(
+            project.path(),
+            CompleteBacklogItemParams {
+                root: None,
+                item_id: "PROJ-001".to_string(),
+                summary: "Reviewed backlog metadata.".to_string(),
+                changed_files: vec!["backlog/items/PROJ-001.md".to_string()],
+                verification_status: Some("skipped".to_string()),
+                verification_summary: Some("Manual review only.".to_string()),
+                verification_refs: vec!["manual:review".to_string()],
+                evidence_refs: Vec::new(),
+                finding_refs: Vec::new(),
+                record_auto_evidence: None,
+                commit: Some(false),
+                commit_message: None,
+                detail: None,
+            },
+        );
+        let data = completed.data.expect("complete data");
+
+        assert_eq!(completed.status, ActionStatus::Completed);
+        assert!(!data
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Git does not report local changes")));
     }
 
     #[test]
@@ -2578,6 +3106,77 @@ mod tests {
         assert_eq!(
             data.assignment.as_ref().expect("assignment").changed_files,
             vec!["src/lib.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn finish_work_does_not_route_zero_change_worker_result_to_integration() {
+        let project = prepared_assignment_project();
+        let prepared = prepare_work(
+            project.path(),
+            PrepareWorkParams {
+                root: None,
+                item_id: Some("PROJ-001".to_string()),
+                max_tasks: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("host".to_string()),
+                execution_mode: None,
+                require_task_plan: Some(true),
+                require_planning_approval: None,
+                auto_commit_artifacts: None,
+                verification_command: Vec::new(),
+                include_queue_snapshot: None,
+            },
+        );
+        let action = prepared
+            .data
+            .expect("prepare data")
+            .host_actions
+            .into_iter()
+            .next()
+            .expect("host action");
+
+        let result = finish_work(
+            project.path(),
+            FinishWorkParams {
+                root: None,
+                item_id: None,
+                assignment_id: action.assignment_id,
+                task_id: action.task_id,
+                status: None,
+                summary: "Completed a probe without file changes.".to_string(),
+                changed_files: Vec::new(),
+                verification_status: Some("passed".to_string()),
+                verification_summary: Some("Probe completed successfully.".to_string()),
+                verification_refs: vec!["manual:probe".to_string()],
+                findings: Vec::new(),
+                findings_reviewed: Some(true),
+                auto_start_if_prepared: None,
+                integrate_if_ready: Some(true),
+                allow_unverified: None,
+                integration_strategy: None,
+                cleanup_after: None,
+            },
+        );
+        let data = result.data.expect("finish data");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.host_action.kind, "done");
+        assert!(data
+            .host_action
+            .summary
+            .contains("no meaningful worktree changes"));
+        assert!(!data
+            .host_action
+            .next_tools
+            .contains(&"integrate_worker_result".to_string()));
+        assert!(data.integration.is_none());
+        assert!(
+            !data
+                .worktree_changes
+                .as_ref()
+                .expect("worktree changes")
+                .meaningful_changes
         );
     }
 

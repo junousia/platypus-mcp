@@ -636,7 +636,7 @@ pub fn integrate_worker_result(
         return ActionResult::skipped(
             action,
             format!("Task `{task_id}` branch has no changes to integrate."),
-            "Inspect the task worktree before integrating. Ensure edits were made in the task worktree branch, not in the manager workspace.",
+            "No merge is required when the worker intentionally produced no file changes. Inspect the task worktree when changes were expected; otherwise clean up the worktree or continue with the next queue item.",
         );
     }
 

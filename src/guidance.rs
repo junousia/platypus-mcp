@@ -3,19 +3,23 @@ use crate::{
     git_readiness::{inspect_git_readiness, GitReadinessStatus},
     models::{
         ActionResult, ActionStatus, BacklogCandidate, BacklogInventoryData, BacklogInventoryItem,
-        BacklogItemMarkdownState, BacklogListData, EffectiveExecutionPolicy, EvidenceRecord,
-        FindingRecord, InspectItemData, InspectItemParams, InspectQueueStatusParams,
-        InspectSessionData, InspectSessionParams, InspectWorkQueueParams, PlanningApprovalState,
-        PlanningClassification, QueueStateDescription, QueueStatusCounts, QueueStatusData,
-        QueueStatusItem, QueueTaskSummary, SchemaDiscoveryHint, TaskPlanQueryParams, WorkQueueData,
+        BacklogItemMarkdownState, BacklogListData, DirectWorkLoop, DirectWorkStep,
+        EffectiveExecutionPolicy, EvidenceRecord, FindingRecord, GetBacklogItemData,
+        GetBacklogItemParams, InspectItemData, InspectItemParams, InspectQueueStatusParams,
+        InspectSessionCompact, InspectSessionData, InspectSessionParams, InspectWorkQueueParams,
+        LeaseRecord, PlanningApprovalState, PlanningClassification, QueueLeaseSummary,
+        QueueStateDescription, QueueStatusCounts, QueueStatusData, QueueStatusItem,
+        QueueTaskSummary, SchemaDiscoveryHint, TaskPlanQueryParams, WorkQueueData,
         WorkQueueInventorySummary, WorkQueueItem, WorkQueuePlanState, WorkflowConfigParams,
         WorkflowExecutionConfig,
     },
     project,
+    storage::LeaseStore,
 };
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     path::Path,
     process::Command,
 };
@@ -26,6 +30,10 @@ pub fn inspect_session(
 ) -> ActionResult<InspectSessionData> {
     let action = "inspect_session";
     let root_arg = params.root.clone();
+    let detail = match normalize_session_detail(params.detail.as_deref()) {
+        Ok(detail) => detail,
+        Err(error) => return ActionResult::failed(action, "Could not inspect session.", error),
+    };
     let mut root = root_arg.clone().unwrap_or_else(|| {
         default_root
             .canonicalize()
@@ -153,6 +161,29 @@ pub fn inspect_session(
         .as_ref()
         .map(|queue| queue.schemas_likely_needed_next.clone())
         .unwrap_or_else(|| schema_hints_for_tools("session", [recommended_tool.as_str()]));
+    let claude_toolsearch_batch_selector =
+        claude_toolsearch_batch_selector(&schemas_likely_needed_next);
+    let host_neutral_tool_search_query =
+        host_neutral_tool_search_query(&schemas_likely_needed_next);
+    let minimal_direct_loop = queue
+        .as_ref()
+        .and_then(|queue| queue.minimal_direct_loop.clone());
+    let compact = InspectSessionCompact {
+        root: root.clone(),
+        ok,
+        queue_state: queue.as_ref().map(|queue| queue.queue_state.clone()),
+        total_items: queue.as_ref().map(|queue| queue.inventory.total_count),
+        runnable_items: queue.as_ref().map(|queue| queue.inventory.runnable_count),
+        recommended_tool: recommended_tool.clone(),
+        reason: reason.clone(),
+        minimal_direct_loop: minimal_direct_loop.clone(),
+        errors: errors.clone(),
+    };
+    let (doctor, status, workflow, queue) = if detail == "verbose" {
+        (doctor, status, workflow, queue)
+    } else {
+        (None, None, None, None)
+    };
     ActionResult {
         action: action.to_string(),
         status: ActionStatus::Completed,
@@ -162,6 +193,8 @@ pub fn inspect_session(
         data: Some(InspectSessionData {
             root,
             ok,
+            detail,
+            compact,
             doctor,
             status,
             workflow,
@@ -171,9 +204,27 @@ pub fn inspect_session(
             summary,
             reason,
             params: params_map,
+            minimal_direct_loop,
+            claude_toolsearch_batch_selector,
+            host_neutral_tool_search_query,
             schemas_likely_needed_next,
         }),
         error: None,
+    }
+}
+
+fn normalize_session_detail(value: Option<&str>) -> Result<String, String> {
+    match value
+        .unwrap_or("compact")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "" | "compact" => Ok("compact".to_string()),
+        "verbose" => Ok("verbose".to_string()),
+        value => Err(format!(
+            "unsupported detail `{value}`; use compact or verbose"
+        )),
     }
 }
 
@@ -208,10 +259,13 @@ pub fn inspect_work_queue(
         }
     };
     let dispatch_blockers = source_item_dispatch_blockers(Path::new(&root));
+    let direct_claims = active_direct_claims(default_root, &root);
     let inventory = queue_inventory(default_root, &root, requested_limit, &dispatch_blockers);
     let mut active_item_ids = Vec::new();
     let mut active_task_ids = Vec::new();
+    let mut active_lease_ids = Vec::new();
     let mut active_filtered = 0usize;
+    let mut active_lease_filtered = 0usize;
     let mut items: Vec<WorkQueueItem> = candidates
         .into_iter()
         .take(requested_limit)
@@ -224,6 +278,11 @@ pub fn inspect_work_queue(
                 active_item_ids.push(item.candidate.item_id.clone());
                 active_task_ids.push(blocker.task_id.clone());
                 apply_dispatch_blocker(&mut item, blocker);
+            } else if let Some(claim) = direct_claims.get(&item.candidate.item_id) {
+                active_lease_filtered += 1;
+                active_item_ids.push(item.candidate.item_id.clone());
+                active_lease_ids.push(claim.id.clone());
+                apply_direct_claim(&mut item, claim);
             }
             item
         })
@@ -295,6 +354,11 @@ pub fn inspect_work_queue(
             "{active_filtered} backlog item(s) already have active tasks or completed tasks awaiting integration."
         ));
     }
+    if active_lease_filtered > 0 {
+        preflight_warnings.push(format!(
+            "{active_lease_filtered} direct backlog item(s) already have active task-scope leases."
+        ));
+    }
     let (mut recommended_tool, mut reason, mut params) = recommended_queue_action(&root, &items);
     if let Some((blocked_tool, blocked_reason)) =
         dispatch_blocker.filter(|_| dispatch_blocker_applies)
@@ -317,7 +381,11 @@ pub fn inspect_work_queue(
         if !task_id.is_empty() {
             params.insert("task_id".to_string(), Value::String(task_id));
         }
-    } else if items.is_empty() && (active_filtered > 0 || inventory.active_lifecycle_count > 0) {
+    } else if items.is_empty()
+        && (active_filtered > 0
+            || active_lease_filtered > 0
+            || inventory.active_lifecycle_count > 0)
+    {
         recommended_tool = active_task_ids
             .first()
             .or_else(|| {
@@ -327,12 +395,24 @@ pub fn inspect_work_queue(
                     .map(|blocker| &blocker.task_id)
             })
             .map(|_| "inspect_task")
-            .unwrap_or("inspect_work_queue")
+            .unwrap_or_else(|| {
+                if active_lease_ids.is_empty() {
+                    "inspect_work_queue"
+                } else {
+                    "list_leases"
+                }
+            })
             .to_string();
-        reason = format!(
-            "{} backlog item(s) already have active tasks. Use inspect_task to continue active work instead of creating new backlog items.",
-            active_filtered.max(inventory.active_lifecycle_count)
-        );
+        reason = if active_lease_filtered > 0 && active_task_ids.is_empty() {
+            format!(
+                "{active_lease_filtered} direct backlog item(s) already have active leases. Use list_leases, renew_lease, or release_lease before starting duplicate direct work."
+            )
+        } else {
+            format!(
+                "{} backlog item(s) already have active tasks. Use inspect_task to continue active work instead of creating new backlog items.",
+                active_filtered.max(inventory.active_lifecycle_count)
+            )
+        };
         params = map_params([("root", root.as_str())]);
         if let Some(task_id) = active_task_ids.first().or_else(|| {
             dispatch_blockers
@@ -341,6 +421,10 @@ pub fn inspect_work_queue(
                 .map(|blocker| &blocker.task_id)
         }) {
             params.insert("task_id".to_string(), Value::String(task_id.clone()));
+        } else if let Some(lease_id) = active_lease_ids.first() {
+            params.insert("scope".to_string(), Value::String("task".to_string()));
+            params.insert("status".to_string(), Value::String("active".to_string()));
+            params.insert("lease_id".to_string(), Value::String(lease_id.clone()));
         }
     } else if items.is_empty() && inventory.dependency_blocked_count > 0 {
         recommended_tool = "inspect_item".to_string();
@@ -360,7 +444,7 @@ pub fn inspect_work_queue(
     } else if items.is_empty() && inventory.total_count > 0 && inventory.runnable_count == 0 {
         recommended_tool = "create_backlog_items".to_string();
         reason = format!(
-            "All {} backlog item(s) are closed. Use the host model to decide concrete follow-up work, then call create_backlog_items and validate_backlog.",
+            "All {} backlog item(s) are closed. Use the host model to decide concrete follow-up work, then call create_backlog_items and inspect_work_queue. validate_backlog is optional after successful typed creation.",
             inventory.total_count
         );
         params = map_params([("root", root.as_str())]);
@@ -417,9 +501,15 @@ pub fn inspect_work_queue(
     } else {
         ActionStatus::Completed
     };
-    let queue_state = overall_queue_state(&items, &inventory, active_filtered);
+    let active_count = active_filtered + active_lease_filtered;
+    let queue_state = overall_queue_state(&items, &inventory, active_count);
+    let minimal_direct_loop = minimal_direct_loop_for_queue(&queue_state, &items);
     let schemas_likely_needed_next =
         schema_hints_for_queue(&queue_state, &recommended_tool, &items, &inventory);
+    let claude_toolsearch_batch_selector =
+        claude_toolsearch_batch_selector(&schemas_likely_needed_next);
+    let host_neutral_tool_search_query =
+        host_neutral_tool_search_query(&schemas_likely_needed_next);
     ActionResult {
         action: action.to_string(),
         status,
@@ -432,9 +522,10 @@ pub fn inspect_work_queue(
             require_task_plan,
             ready_count,
             blocked_count,
-            active_count: active_filtered,
+            active_count,
             active_item_ids,
             active_task_ids,
+            active_lease_ids,
             inventory,
             preflight_warnings,
             policy_warnings: legacy_policy_warnings,
@@ -442,6 +533,9 @@ pub fn inspect_work_queue(
             summary,
             reason,
             params,
+            minimal_direct_loop,
+            claude_toolsearch_batch_selector,
+            host_neutral_tool_search_query,
             schemas_likely_needed_next,
             items,
         }),
@@ -526,7 +620,7 @@ fn compact_queue_status(
         ready_count: queue.ready_count,
         blocked_count: blocked_item_ids.len(),
         dependency_blocked_count: queue.inventory.dependency_blocked_count,
-        active_count: queue.inventory.active_lifecycle_count,
+        active_count: queue.active_count,
         pending_integration_count: queue.inventory.pending_integration_count,
         closed_count: queue.inventory.closed_count,
         closed_with_evidence_count: queue.inventory.closed_with_evidence_count,
@@ -561,11 +655,13 @@ fn compact_queue_status(
     }
 
     let active_tasks = compact_active_tasks(queue, dispatch_blockers, limit);
+    let active_leases = compact_active_leases(queue, limit);
     let truncated = queue.items.len() > limit
         || queue.inventory.truncated
         || queue.ready_count > top_ready_items.len()
         || counts.blocked_count > top_blocked_items.len()
         || queue.active_task_ids.len() > active_tasks.len()
+        || queue.active_lease_ids.len() > active_leases.len()
         || queue.inventory.pending_integration_task_ids.len()
             > active_tasks
                 .iter()
@@ -578,10 +674,14 @@ fn compact_queue_status(
         top_ready_items,
         top_blocked_items,
         active_tasks,
+        active_leases,
         state_descriptions: queue_state_descriptions(),
         preflight_warnings: queue.preflight_warnings.clone(),
         recommended_tool: queue.recommended_tool.clone(),
         reason: queue.reason.clone(),
+        minimal_direct_loop: queue.minimal_direct_loop.clone(),
+        claude_toolsearch_batch_selector: queue.claude_toolsearch_batch_selector.clone(),
+        host_neutral_tool_search_query: queue.host_neutral_tool_search_query.clone(),
         truncated,
     }
 }
@@ -611,7 +711,7 @@ fn schema_hints_for_queue(
 ) -> Vec<SchemaDiscoveryHint> {
     let phase = queue_state.to_string();
     let mut tools = match queue_state {
-        "empty_backlog" => vec!["create_backlog_items", "validate_backlog"],
+        "empty_backlog" => vec!["create_backlog_items", "inspect_work_queue"],
         "direct_ready" => vec![
             "complete_backlog_item",
             "record_verification_evidence",
@@ -634,7 +734,7 @@ fn schema_hints_for_queue(
             "reconcile_project",
         ],
         _ if inventory.total_count > 0 && items.is_empty() => {
-            vec!["inspect_item", "create_backlog_items", "validate_backlog"]
+            vec!["inspect_item", "get_backlog_item", "create_backlog_items"]
         }
         _ => vec![recommended_tool],
     };
@@ -661,10 +761,59 @@ fn schema_hints_for_tools<'a>(
         .map(|tool| SchemaDiscoveryHint {
             tool_name: tool.to_string(),
             phase: phase.clone(),
+            usage: schema_hint_usage(tool, &phase).to_string(),
             reason: schema_hint_reason(tool, &phase),
+            host_neutral_query: format!("platypus tool {tool}"),
+            codex_tool_search_query: format!("mcp__platypus__{tool} platypus {tool}"),
             claude_toolsearch_selector: Some(format!("select:mcp__platypus__{tool}")),
         })
         .collect()
+}
+
+fn schema_hint_usage(tool: &str, phase: &str) -> &'static str {
+    match (phase, tool) {
+        ("direct_ready", "complete_backlog_item") => "required",
+        ("direct_ready", "record_verification_evidence" | "prepare_work") => "optional",
+        ("empty_backlog", "create_backlog_items") => "required",
+        ("empty_backlog", "inspect_work_queue") => "optional",
+        ("planning_blocked", "write_task_plan" | "validate_task_plan") => "required",
+        ("planning_blocked", "inspect_item") => "optional",
+        ("approval_blocked", "request_planning_approval" | "approval_respond") => "required",
+        ("config_blocked" | "workspace_blocked", _) => "recovery",
+        ("completed_pending_integration", _) => "required",
+        (_, "doctor_snapshot" | "reconcile_project") => "recovery",
+        (_, "inspect_work_queue" | "inspect_item" | "inspect_task" | "inspect_task_events") => {
+            "optional"
+        }
+        _ => "required",
+    }
+}
+
+fn host_neutral_tool_search_query(hints: &[SchemaDiscoveryHint]) -> Option<String> {
+    let mut tools = hints
+        .iter()
+        .map(|hint| hint.tool_name.as_str())
+        .filter(|tool| !tool.trim().is_empty())
+        .collect::<Vec<_>>();
+    if tools.is_empty() {
+        return None;
+    }
+    tools.dedup();
+    Some(format!("platypus tools {}", tools.join(" ")))
+}
+
+fn claude_toolsearch_batch_selector(hints: &[SchemaDiscoveryHint]) -> Option<String> {
+    let mut selectors = hints
+        .iter()
+        .filter_map(|hint| hint.claude_toolsearch_selector.as_deref())
+        .map(|selector| selector.strip_prefix("select:").unwrap_or(selector))
+        .filter(|selector| !selector.trim().is_empty())
+        .collect::<Vec<_>>();
+    if selectors.is_empty() {
+        return None;
+    }
+    selectors.dedup();
+    Some(format!("select:{}", selectors.join(",")))
 }
 
 fn schema_hint_reason(tool: &str, phase: &str) -> String {
@@ -673,16 +822,19 @@ fn schema_hint_reason(tool: &str, phase: &str) -> String {
             "Create one or more concrete backlog items after the host model decides the work."
                 .to_string()
         }
-        "validate_backlog" => "Validate backlog markdown after item creation or edits.".to_string(),
+        "validate_backlog" => {
+            "Validate backlog markdown after manual edits or when an explicit audit result is needed."
+                .to_string()
+        }
         "complete_backlog_item" => {
             "Close direct manager-workspace work with summary, changed files, and verification evidence."
                 .to_string()
         }
         "record_verification_evidence" => {
-            "Record explicit verification details before or during direct completion.".to_string()
+            "Optional for direct completion: record reusable verification evidence separately when the evidence should outlive the completion summary.".to_string()
         }
         "prepare_work" => {
-            "Return response-local direct guidance or prepare a worker handoff when useful."
+            "Optional for direct_ready items; required only when preparing a worker handoff."
                 .to_string()
         }
         "write_task_plan" => {
@@ -706,6 +858,54 @@ fn schema_hint_reason(tool: &str, phase: &str) -> String {
         "integrate_worker_result" => "Integrate a completed worker result into the manager workspace.".to_string(),
         "reconcile_project" => "Audit project state after integration or unclear workflow state.".to_string(),
         other => format!("Likely next tool for queue phase `{phase}`: `{other}`."),
+    }
+}
+
+fn minimal_direct_loop_for_queue(
+    queue_state: &str,
+    items: &[WorkQueueItem],
+) -> Option<DirectWorkLoop> {
+    if queue_state != "direct_ready" {
+        return None;
+    }
+    items
+        .iter()
+        .find(|item| item.ready_to_dispatch && item.queue_state == "direct_ready")
+        .map(|item| direct_work_loop(Some(item.candidate.item_id.as_str())))
+}
+
+fn direct_work_loop(item_id: Option<&str>) -> DirectWorkLoop {
+    DirectWorkLoop {
+        item_id: item_id.map(str::to_string),
+        summary: "Direct work loop: inspect state, edit the manager workspace, verify, then close with complete_backlog_item.".to_string(),
+        primary_next_tool: "complete_backlog_item".to_string(),
+        optional_guidance_tool: Some("prepare_work".to_string()),
+        steps: vec![
+            DirectWorkStep {
+                order: 1,
+                phase: "inspect".to_string(),
+                tool: Some("inspect_work_queue".to_string()),
+                summary: "Confirm the item is direct_ready and note its acceptance criteria.".to_string(),
+            },
+            DirectWorkStep {
+                order: 2,
+                phase: "edit".to_string(),
+                tool: None,
+                summary: "Edit the manager workspace directly; no task, assignment, or worktree is required.".to_string(),
+            },
+            DirectWorkStep {
+                order: 3,
+                phase: "verify".to_string(),
+                tool: None,
+                summary: "Run the relevant checks. Put verification_status, verification_summary, and verification_refs into complete_backlog_item; call record_verification_evidence only when reusable standalone evidence is useful.".to_string(),
+            },
+            DirectWorkStep {
+                order: 4,
+                phase: "complete".to_string(),
+                tool: Some("complete_backlog_item".to_string()),
+                summary: "Close the backlog item with summary, changed_files, and verification_status.".to_string(),
+            },
+        ],
     }
 }
 
@@ -837,6 +1037,28 @@ fn compact_active_tasks(
     tasks
 }
 
+fn compact_active_leases(queue: &WorkQueueData, limit: usize) -> Vec<QueueLeaseSummary> {
+    queue
+        .items
+        .iter()
+        .filter_map(|item| {
+            item.active_lease_id
+                .as_ref()
+                .map(|lease_id| QueueLeaseSummary {
+                    item_id: item.candidate.item_id.clone(),
+                    lease_id: lease_id.clone(),
+                    owner: item
+                        .active_lease_owner
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    queue_state: item.queue_state.clone(),
+                    recommended_tool: item.recommended_tool.clone(),
+                })
+        })
+        .take(limit)
+        .collect()
+}
+
 fn task_summary_tool(blocker: &QueueDispatchBlocker) -> &'static str {
     match blocker.queue_state.as_str() {
         "completed_pending_integration" => "inspect_integration_gates",
@@ -892,6 +1114,114 @@ fn queue_state_description(queue_state: &str) -> &'static str {
         "closed" => "All known backlog items are closed.",
         _ => "Inspect the item before choosing the next execution step.",
     }
+}
+
+pub fn get_backlog_item(
+    default_root: &Path,
+    params: GetBacklogItemParams,
+) -> ActionResult<GetBacklogItemData> {
+    let action = "get_backlog_item";
+    let include_markdown = params.include_markdown.unwrap_or(true);
+    let max_markdown_bytes = params
+        .max_markdown_bytes
+        .unwrap_or(20_000)
+        .clamp(1, 100_000);
+    let (root_path, snapshot) =
+        match backlog::backlog_item_snapshot(default_root, params.root.as_deref(), &params.item_id)
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return ActionResult::failed(
+                    action,
+                    "Could not read backlog item.",
+                    format!("{error}. Use inspect_work_queue to list available item ids."),
+                )
+            }
+        };
+    let root_canonical = match root_path.canonicalize() {
+        Ok(root) => root,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not read backlog item.",
+                format!("could not resolve project root: {error}"),
+            )
+        }
+    };
+    let item_canonical = match snapshot.path.canonicalize() {
+        Ok(path) => path,
+        Err(error) => {
+            return ActionResult::failed(
+                action,
+                "Could not read backlog item.",
+                format!("could not resolve backlog item path: {error}"),
+            )
+        }
+    };
+    if !item_canonical.starts_with(&root_canonical) {
+        return ActionResult::failed(
+            action,
+            "Could not read backlog item.",
+            "backlog item path resolves outside the project root",
+        );
+    }
+
+    let markdown_text = if include_markdown {
+        match fs::read_to_string(&item_canonical) {
+            Ok(markdown) => Some(markdown),
+            Err(error) => {
+                return ActionResult::failed(
+                    action,
+                    "Could not read backlog item.",
+                    format!("could not read backlog item markdown: {error}"),
+                )
+            }
+        }
+    } else {
+        None
+    };
+    let markdown_bytes = markdown_text.as_ref().map_or(0, |text| text.len());
+    let (markdown, markdown_truncated) = markdown_text
+        .as_deref()
+        .map(|text| truncate_utf8_owned(text, max_markdown_bytes))
+        .unwrap_or((None, false));
+    let summary = format!("Read backlog item `{}`.", snapshot.id);
+    ActionResult {
+        action: action.to_string(),
+        status: ActionStatus::Completed,
+        summary: summary.clone(),
+        next_action: Some(
+            "Use inspect_item only when queue state, findings, evidence, or task-plan context is needed."
+                .to_string(),
+        ),
+        recovery_action: None,
+        data: Some(GetBacklogItemData {
+            root: root_path.display().to_string(),
+            item_id: snapshot.id,
+            title: snapshot.title,
+            path: snapshot.path.display().to_string(),
+            sections: snapshot.sections,
+            external_refs: snapshot.external_refs,
+            markdown,
+            markdown_truncated,
+            markdown_bytes,
+            max_markdown_bytes,
+        }),
+        error: None,
+    }
+}
+
+fn truncate_utf8_owned(text: &str, max_bytes: usize) -> (Option<String>, bool) {
+    if text.len() <= max_bytes {
+        return (Some(text.to_string()), false);
+    }
+    let end = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|index| *index <= max_bytes)
+        .last()
+        .unwrap_or(0);
+    (Some(text[..end].to_string()), true)
 }
 
 pub fn inspect_item(
@@ -1022,44 +1352,60 @@ pub fn inspect_item(
                     })
             })
         });
-    let (queue_state, task_id, assignment_id, ready_to_dispatch, recommended_tool, reason) =
-        if let Some(queue_item) = &queue {
-            (
-                queue_item.queue_state.clone(),
-                queue_item.task_id.clone(),
-                queue_item.assignment_id.clone(),
-                queue_item.ready_to_dispatch,
-                queue_item.recommended_tool.clone(),
-                queue_item.reason.clone(),
-            )
-        } else if item.closed {
-            (
-                "closed".to_string(),
-                None,
-                None,
-                false,
-                "inspect_work_queue".to_string(),
-                item.reason.clone(),
-            )
-        } else if !item.open_dependencies.is_empty() {
-            (
-                "dependency_blocked".to_string(),
-                None,
-                None,
-                false,
-                "inspect_item".to_string(),
-                item.reason.clone(),
-            )
-        } else {
-            (
-                "config_blocked".to_string(),
-                None,
-                None,
-                false,
-                "inspect_work_queue".to_string(),
-                item.reason.clone(),
-            )
-        };
+    let (
+        queue_state,
+        task_id,
+        assignment_id,
+        active_lease_id,
+        active_lease_owner,
+        ready_to_dispatch,
+        recommended_tool,
+        reason,
+    ) = if let Some(queue_item) = &queue {
+        (
+            queue_item.queue_state.clone(),
+            queue_item.task_id.clone(),
+            queue_item.assignment_id.clone(),
+            queue_item.active_lease_id.clone(),
+            queue_item.active_lease_owner.clone(),
+            queue_item.ready_to_dispatch,
+            queue_item.recommended_tool.clone(),
+            queue_item.reason.clone(),
+        )
+    } else if item.closed {
+        (
+            "closed".to_string(),
+            None,
+            None,
+            None,
+            None,
+            false,
+            "inspect_work_queue".to_string(),
+            item.reason.clone(),
+        )
+    } else if !item.open_dependencies.is_empty() {
+        (
+            "dependency_blocked".to_string(),
+            None,
+            None,
+            None,
+            None,
+            false,
+            "inspect_item".to_string(),
+            item.reason.clone(),
+        )
+    } else {
+        (
+            "config_blocked".to_string(),
+            None,
+            None,
+            None,
+            None,
+            false,
+            "inspect_work_queue".to_string(),
+            item.reason.clone(),
+        )
+    };
     let mut tool_params = map_params([("root", root.as_str()), ("item_id", item.item_id.as_str())]);
     if let Some(task_id) = &task_id {
         tool_params.insert("task_id".to_string(), Value::String(task_id.clone()));
@@ -1069,6 +1415,9 @@ pub fn inspect_item(
             "assignment_id".to_string(),
             Value::String(assignment_id.clone()),
         );
+    }
+    if let Some(lease_id) = &active_lease_id {
+        tool_params.insert("lease_id".to_string(), Value::String(lease_id.clone()));
     }
     let (findings, evidence) = item_artifacts(&root, &item.item_id, 50);
     let finding_count = findings.len();
@@ -1098,6 +1447,8 @@ pub fn inspect_item(
             queue_state,
             task_id,
             assignment_id,
+            active_lease_id,
+            active_lease_owner,
             ready_to_dispatch,
             recommended_tool,
             reason,
@@ -1147,6 +1498,37 @@ fn source_item_dispatch_blockers(root: &Path) -> BTreeMap<String, QueueDispatchB
             .collect(),
         Err(_) => BTreeMap::new(),
     }
+}
+
+fn active_direct_claims(_default_root: &Path, root: &str) -> BTreeMap<String, LeaseRecord> {
+    let storage = match crate::storage::connect_existing_read_only(Path::new(root), None) {
+        Ok(Some(storage)) => storage,
+        Ok(None) | Err(_) => return BTreeMap::new(),
+    };
+    match storage
+        .repository()
+        .leases()
+        .list(Some("task"), None, Some("active"), false, 200)
+    {
+        Ok(leases) => leases
+            .into_iter()
+            .filter(|lease| looks_like_backlog_item_id(&lease.target_id))
+            .map(|lease| (lease.target_id.clone(), lease))
+            .collect(),
+        Err(_) => BTreeMap::new(),
+    }
+}
+
+fn looks_like_backlog_item_id(value: &str) -> bool {
+    let Some((prefix, suffix)) = value.split_once('-') else {
+        return false;
+    };
+    !prefix.is_empty()
+        && prefix
+            .chars()
+            .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit())
+        && !suffix.is_empty()
+        && suffix.chars().all(|character| character.is_ascii_digit())
 }
 
 fn queue_inventory(
@@ -1253,6 +1635,21 @@ fn apply_dispatch_blocker(item: &mut WorkQueueItem, blocker: &QueueDispatchBlock
             );
         }
     }
+    apply_execution_metadata(item);
+}
+
+fn apply_direct_claim(item: &mut WorkQueueItem, claim: &LeaseRecord) {
+    item.queue_state = "active".to_string();
+    item.execution_path = "direct_edit".to_string();
+    item.completion_tool = Some("complete_backlog_item".to_string());
+    item.active_lease_id = Some(claim.id.clone());
+    item.active_lease_owner = Some(claim.owner.clone());
+    item.ready_to_dispatch = false;
+    item.recommended_tool = "list_leases".to_string();
+    item.reason = format!(
+        "Direct item `{}` is claimed by lease `{}` held by `{}` until {}. Continue that direct work, renew the lease, or release it before starting duplicate work.",
+        item.candidate.item_id, claim.id, claim.owner, claim.expires_at
+    );
     apply_execution_metadata(item);
 }
 
@@ -1402,8 +1799,8 @@ fn work_queue_item(
         && effective_policy.execution_path == execution_policy::DIRECT_EDIT
     {
         (
-            "prepare_work".to_string(),
-            "Direct host work is ready; prepare_work is optional when planning_gate=none. The host may edit the manager workspace, verify, and call complete_backlog_item directly, or call prepare_work first for response-local guidance.".to_string(),
+            "complete_backlog_item".to_string(),
+            "Direct work is ready: edit the manager workspace, verify, then call complete_backlog_item. Call prepare_work only when you need optional response-local guidance.".to_string(),
             "direct_ready".to_string(),
         )
     } else if ready_to_dispatch
@@ -1447,6 +1844,8 @@ fn work_queue_item(
     let prepare_work_optional = queue_state == "direct_ready"
         && effective_policy.execution_path == execution_policy::DIRECT_EDIT
         && effective_policy.planning_gate == execution_policy::GATE_NONE;
+    let minimal_direct_loop =
+        (queue_state == "direct_ready").then(|| direct_work_loop(Some(candidate.item_id.as_str())));
     WorkQueueItem {
         position,
         candidate,
@@ -1460,8 +1859,11 @@ fn work_queue_item(
         task_plan_required_for_worktree,
         prepare_work_optional,
         execution_guidance,
+        minimal_direct_loop,
         task_id: None,
         assignment_id: None,
+        active_lease_id: None,
+        active_lease_owner: None,
         ready_to_dispatch,
         recommended_tool,
         reason,
@@ -1478,7 +1880,7 @@ fn execution_metadata(
             "direct_edit".to_string(),
             Some("complete_backlog_item".to_string()),
             true,
-            "Direct edit is ready from durable execution policy. For direct_edit with planning_gate=none, prepare_work is optional: the host may edit the manager workspace, verify, and call complete_backlog_item directly. Calling prepare_work first returns response-local guidance with state_persisted=false and durable_next_tool=complete_backlog_item. inspect_work_queue stays direct_ready until completion records closure. To use a worktree handoff, set execution_path=worker_handoff on the backlog item or workflow.execution default.".to_string(),
+            "Direct edit is ready from durable execution policy. Edit the manager workspace, verify, then call complete_backlog_item; prepare_work is optional response-local guidance only. inspect_work_queue stays direct_ready until completion records closure. To use a worktree handoff, set execution_path=worker_handoff on the backlog item or workflow.execution default.".to_string(),
         ),
         "ready" => (
             "worker_handoff".to_string(),
@@ -1632,7 +2034,7 @@ fn recommended_queue_action(
     let Some(first) = items.first() else {
         return (
             "create_backlog_items".to_string(),
-            "No backlog item exists yet. Use the host model to decide concrete work, then call create_backlog_items and validate_backlog.".to_string(),
+            "No backlog item exists yet. Use the host model to decide concrete work, then call create_backlog_items and inspect_work_queue. validate_backlog is optional after successful typed creation.".to_string(),
             map_params([("root", root)]),
         );
     };
@@ -1652,6 +2054,9 @@ fn recommended_queue_action(
                 "max_tasks".to_string(),
                 Value::Number((ready_count.max(1).min(10) as u64).into()),
             );
+        }
+        "complete_backlog_item" => {
+            params.insert("item_id".to_string(), Value::String(item_id.to_string()));
         }
         "write_task_plan" | "validate_task_plan" => {
             params.insert("item_id".to_string(), Value::String(item_id.to_string()));
@@ -1714,6 +2119,8 @@ fn recommended_queue_action(
                 first.reason,
                 ready_count
             )
+        } else if first.recommended_tool == "complete_backlog_item" {
+            format!("{} {}", item_id, first.reason)
         } else {
             format!("{} {}", item_id, first.reason)
         },
@@ -1734,8 +2141,10 @@ mod tests {
     use super::*;
     use crate::approvals::{approval_respond, request_planning_approval};
     use crate::evidence::record_evidence;
+    use crate::leases::{acquire_lease, release_lease};
     use crate::models::{
-        ApprovalRespondParams, RecordEvidenceParams, RequestPlanningApprovalParams,
+        AcquireLeaseParams, ApprovalRespondParams, RecordEvidenceParams, ReleaseLeaseParams,
+        RequestPlanningApprovalParams,
     };
     use crate::tasks::{create_task_record, NewTask};
     use std::{collections::BTreeMap, fs, process::Command};
@@ -1783,10 +2192,21 @@ mod tests {
         assert_eq!(queue_data.queue_state, "empty_backlog");
         assert_eq!(queue_data.inventory.total_count, 0);
         assert_eq!(queue_data.recommended_tool, "create_backlog_items");
+        assert_eq!(
+            queue_data.claude_toolsearch_batch_selector.as_deref(),
+            Some("select:mcp__platypus__create_backlog_items,mcp__platypus__inspect_work_queue")
+        );
+        assert_eq!(
+            queue_data.host_neutral_tool_search_query.as_deref(),
+            Some("platypus tools create_backlog_items inspect_work_queue")
+        );
         assert!(queue_data
             .schemas_likely_needed_next
             .iter()
-            .any(|hint| hint.tool_name == "create_backlog_items"));
+            .any(|hint| hint.tool_name == "create_backlog_items"
+                && hint.host_neutral_query == "platypus tool create_backlog_items"
+                && hint.codex_tool_search_query
+                    == "mcp__platypus__create_backlog_items platypus create_backlog_items"));
 
         let status = inspect_queue_status(
             project.path(),
@@ -1799,6 +2219,14 @@ mod tests {
 
         assert_eq!(status.status, ActionStatus::Skipped);
         assert_eq!(status_data.queue_state, "empty_backlog");
+        assert_eq!(
+            status_data.claude_toolsearch_batch_selector.as_deref(),
+            Some("select:mcp__platypus__create_backlog_items,mcp__platypus__inspect_work_queue")
+        );
+        assert_eq!(
+            status_data.host_neutral_tool_search_query.as_deref(),
+            Some("platypus tools create_backlog_items inspect_work_queue")
+        );
         assert!(status_data
             .state_descriptions
             .iter()
@@ -1816,6 +2244,7 @@ mod tests {
             InspectSessionParams {
                 root: None,
                 limit: Some(10),
+                detail: Some("verbose".to_string()),
                 require_task_plan: None,
                 require_planning_approval: None,
             },
@@ -1824,19 +2253,151 @@ mod tests {
 
         assert_eq!(result.status, ActionStatus::Completed);
         assert!(data.ok);
-        assert_eq!(data.recommended_tool, "prepare_work");
+        assert_eq!(data.detail, "verbose");
+        assert_eq!(data.compact.recommended_tool, "complete_backlog_item");
+        assert_eq!(data.compact.queue_state.as_deref(), Some("direct_ready"));
+        assert_eq!(data.recommended_tool, "complete_backlog_item");
+        assert_eq!(
+            data.minimal_direct_loop
+                .as_ref()
+                .expect("direct loop")
+                .primary_next_tool,
+            "complete_backlog_item"
+        );
         assert!(data.doctor.as_ref().expect("doctor").ok);
         assert_eq!(data.status.as_ref().expect("status").backlog_items, 1);
         assert!(data.workflow.is_some());
         assert_eq!(data.queue.as_ref().expect("queue").items.len(), 1);
+        assert_eq!(
+            data.claude_toolsearch_batch_selector.as_deref(),
+            Some(
+                "select:mcp__platypus__complete_backlog_item,mcp__platypus__record_verification_evidence,mcp__platypus__prepare_work"
+            )
+        );
+        assert_eq!(
+            data.host_neutral_tool_search_query.as_deref(),
+            Some("platypus tools complete_backlog_item record_verification_evidence prepare_work")
+        );
         assert!(data
             .schemas_likely_needed_next
             .iter()
-            .any(|hint| hint.tool_name == "complete_backlog_item"));
+            .any(|hint| hint.tool_name == "complete_backlog_item"
+                && hint.usage == "required"
+                && hint.host_neutral_query == "platypus tool complete_backlog_item"
+                && hint.codex_tool_search_query
+                    == "mcp__platypus__complete_backlog_item platypus complete_backlog_item"));
+
+        let compact = inspect_session(
+            project.path(),
+            InspectSessionParams {
+                root: None,
+                limit: Some(10),
+                detail: None,
+                require_task_plan: None,
+                require_planning_approval: None,
+            },
+        )
+        .data
+        .expect("compact session");
+        assert_eq!(compact.detail, "compact");
+        assert!(compact.doctor.is_none());
+        assert!(compact.status.is_none());
+        assert!(compact.workflow.is_none());
+        assert!(compact.queue.is_none());
+        assert_eq!(compact.compact.recommended_tool, "complete_backlog_item");
         assert!(
             !project.path().join(".platy").exists(),
             "read-only session inspection must not create runtime state"
         );
+    }
+
+    #[test]
+    fn inspect_work_queue_surfaces_active_direct_claim_lease() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "Ready item");
+
+        let lease = acquire_lease(
+            project.path(),
+            AcquireLeaseParams {
+                root: None,
+                scope: "task".to_string(),
+                target_id: "PROJ-001".to_string(),
+                owner: "manager-a".to_string(),
+                ttl_seconds: Some(600),
+                metadata: BTreeMap::new(),
+            },
+        )
+        .data
+        .expect("lease")
+        .lease;
+
+        let result = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: None,
+                require_planning_approval: None,
+            },
+        );
+        let data = result.data.expect("queue");
+
+        assert_eq!(result.status, ActionStatus::Completed);
+        assert_eq!(data.queue_state, "active");
+        assert_eq!(data.active_count, 1);
+        assert_eq!(data.active_lease_ids, vec![lease.id.clone()]);
+        assert_eq!(data.items[0].queue_state, "active");
+        assert_eq!(
+            data.items[0].active_lease_id.as_deref(),
+            Some(lease.id.as_str())
+        );
+        assert_eq!(
+            data.items[0].active_lease_owner.as_deref(),
+            Some("manager-a")
+        );
+        assert_eq!(data.items[0].recommended_tool, "list_leases");
+        assert!(!data.items[0].ready_to_dispatch);
+
+        let status = inspect_queue_status(
+            project.path(),
+            InspectQueueStatusParams {
+                root: None,
+                limit: Some(5),
+            },
+        )
+        .data
+        .expect("status");
+        assert_eq!(status.queue_state, "active");
+        assert_eq!(status.counts.active_count, 1);
+        assert_eq!(status.active_leases[0].lease_id, lease.id);
+        assert_eq!(status.active_leases[0].owner, "manager-a");
+
+        release_lease(
+            project.path(),
+            ReleaseLeaseParams {
+                root: None,
+                lease_id: lease.id,
+                owner: "manager-a".to_string(),
+            },
+        )
+        .data
+        .expect("released lease");
+
+        let released_queue = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: None,
+                require_planning_approval: None,
+            },
+        )
+        .data
+        .expect("released queue");
+        assert_eq!(released_queue.queue_state, "direct_ready");
+        assert!(released_queue.active_lease_ids.is_empty());
+        assert!(released_queue.items[0].active_lease_id.is_none());
     }
 
     #[test]
@@ -1856,7 +2417,7 @@ mod tests {
         let data = result.data.expect("queue");
 
         assert_eq!(result.status, ActionStatus::Completed);
-        assert_eq!(data.recommended_tool, "prepare_work");
+        assert_eq!(data.recommended_tool, "complete_backlog_item");
         assert_eq!(data.queue_state, "direct_ready");
         assert!(data.items[0].ready_to_dispatch);
         assert_eq!(data.items[0].queue_state, "direct_ready");
@@ -1880,7 +2441,7 @@ mod tests {
         let data = result.data.expect("queue");
 
         assert_eq!(result.status, ActionStatus::Completed);
-        assert_eq!(data.recommended_tool, "prepare_work");
+        assert_eq!(data.recommended_tool, "complete_backlog_item");
         assert!(data.items[0].ready_to_dispatch);
         assert_eq!(data.items[0].queue_state, "direct_ready");
     }
@@ -2023,6 +2584,7 @@ tasks:
             .schemas_likely_needed_next
             .iter()
             .any(|hint| hint.tool_name == "write_task_plan"
+                && hint.host_neutral_query == "platypus tool write_task_plan"
                 && hint.claude_toolsearch_selector.as_deref()
                     == Some("select:mcp__platypus__write_task_plan")));
     }
@@ -2055,7 +2617,7 @@ tasks:
         );
         let data = result.data.expect("queue");
 
-        assert_eq!(data.recommended_tool, "prepare_work");
+        assert_eq!(data.recommended_tool, "complete_backlog_item");
         assert_eq!(data.items[0].planning.required_mode, "none");
         assert_eq!(data.items[0].queue_state, "direct_ready");
         assert_eq!(data.items[0].execution_path, "direct_edit");
@@ -2072,9 +2634,19 @@ tasks:
             .schemas_likely_needed_next
             .iter()
             .any(|hint| hint.tool_name == "complete_backlog_item"
+                && hint.host_neutral_query == "platypus tool complete_backlog_item"
                 && hint.claude_toolsearch_selector.as_deref()
                     == Some("select:mcp__platypus__complete_backlog_item")));
-        assert_eq!(data.items[0].recommended_tool, "prepare_work");
+        assert_eq!(data.items[0].recommended_tool, "complete_backlog_item");
+        assert_eq!(
+            data.items[0]
+                .minimal_direct_loop
+                .as_ref()
+                .expect("item direct loop")
+                .optional_guidance_tool
+                .as_deref(),
+            Some("prepare_work")
+        );
         assert_eq!(data.items[0].plan.status, "not_required");
         assert!(data.items[0].plan.errors.is_empty());
         assert!(data.items[0].ready_to_dispatch);
@@ -2107,10 +2679,10 @@ tasks:
         );
         let data = result.data.expect("queue");
 
-        assert_eq!(data.recommended_tool, "prepare_work");
+        assert_eq!(data.recommended_tool, "complete_backlog_item");
         assert_eq!(data.items[0].queue_state, "direct_ready");
         assert!(data.preflight_warnings.is_empty());
-        assert!(data.reason.contains("Direct host work is ready"));
+        assert!(data.reason.contains("Direct work is ready"));
     }
 
     #[test]
@@ -2142,11 +2714,11 @@ tasks:
         );
         let data = result.data.expect("queue");
 
-        assert_eq!(data.recommended_tool, "prepare_work");
+        assert_eq!(data.recommended_tool, "complete_backlog_item");
         assert!(data.preflight_warnings.is_empty());
         assert!(data.items[0].ready_to_dispatch);
         assert_eq!(data.items[0].queue_state, "direct_ready");
-        assert_eq!(data.items[0].recommended_tool, "prepare_work");
+        assert_eq!(data.items[0].recommended_tool, "complete_backlog_item");
     }
 
     #[test]
@@ -2178,7 +2750,7 @@ tasks:
         );
         let data = result.data.expect("queue");
 
-        assert_eq!(data.recommended_tool, "prepare_work");
+        assert_eq!(data.recommended_tool, "complete_backlog_item");
         assert!(data.preflight_warnings.is_empty());
         assert_eq!(data.items[0].queue_state, "direct_ready");
     }

@@ -26,6 +26,7 @@ pub mod server;
 pub mod state;
 pub mod storage;
 pub mod tasks;
+pub mod toolsets;
 pub mod workspace;
 
 mod git_trailers;

@@ -86,12 +86,14 @@ project session with the same deterministic opening sequence:
 1. List MCP resources and prompts.
 2. Read `platypus://guidance/workflow`,
    `platypus://guidance/project-status`, and
-   `platypus://guidance/tool-preload`, or the equivalent prompts
+   `platypus://guidance/tool-preload`, plus
+   `platypus://tools/core-schemas` when schema preloading is supported, or the equivalent prompts
    `platypus-workflow`, `platypus-project-status`, and
    `platypus-tool-preload`.
-3. If the client supports deferred schema preloading, load the Startup
-   Inspection group first. Load Backlog Planning, Direct Execution, Worker
-   Handoff, Evidence And Findings, and Recovery only when that phase starts.
+3. If the client supports deferred schema preloading, call `inspect_toolsets`
+   or read `platypus://tools/core-schemas` / `platypus-tool-preload` for
+   advisory discovery metadata. Toolsets are not required workflow steps or
+   separate MCP servers.
 4. Call `inspect_session`. If the client cannot use that broad snapshot, call
    `doctor_snapshot`, `inspect_status`, `inspect_workflow_config`,
    `inspect_queue_status`, then `inspect_work_queue` as needed.
@@ -101,15 +103,18 @@ is discovered or selected. Schema preloading is a client convenience, not a
 Platypus requirement; when it is awkward, call the same tools on demand.
 `inspect_session` and `inspect_work_queue` also return
 `schemas_likely_needed_next` with 1-4 likely next tool schemas. Claude entries
-include literal ToolSearch selectors; Codex and opencode callers can use the
-plain `tool_name` values with their own discovery UI.
+include literal ToolSearch selectors and a response-level batch selector.
+Codex-style text-search hosts should use `codex_tool_search_query` or
+response-level `host_neutral_tool_search_query`; opencode and other callers can
+use `tool_name` or `host_neutral_query` values with their own discovery UI.
 Claude Code can load deferred schemas with ToolSearch selectors such as
 `select:mcp__platypus__inspect_session`; the prefix comes from the configured
 MCP server name.
 
 The direct-work quick path is `inspect_session` -> queue inspection -> host
-file edits -> `complete_backlog_item`. When queue output says
-`prepare_work_optional=true`, `prepare_work` is optional and only returns
+file edits -> `complete_backlog_item`. Call `inspect_toolsets` only when the
+host needs compact discovery metadata for a workflow phase. When queue output
+says `prepare_work_optional=true`, `prepare_work` is optional and only returns
 response-local guidance. Use worker handoff only when the backlog item or
 workflow policy says `execution_path=worker_handoff`.
 
@@ -178,7 +183,9 @@ smoke check, ask the host to:
 1. Call `doctor_snapshot`.
 2. Call `inspect_status`.
 3. Call `storage_capability_probe`.
-4. Draft or import backlog work, then call `validate_backlog`.
+4. Draft or import backlog work. Successful typed creation validates inline;
+   call `inspect_work_queue` next, and reserve `validate_backlog` for manual
+   markdown edits or explicit audit checks.
 
 If you did not use `--init-project`, first ask the host to call
 `init_project`.

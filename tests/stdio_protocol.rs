@@ -23,6 +23,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     let tools = client.list_all_tools().await?;
     let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
 
+    assert!(tool_names.contains(&"inspect_toolsets"));
     assert!(tool_names.contains(&"inspect_status"));
     assert!(tool_names.contains(&"create_backlog_item"));
     assert!(tool_names.contains(&"quick_create_backlog_item"));
@@ -37,6 +38,7 @@ async fn stdio_server_lists_tools_after_initialize() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"inspect_work_queue"));
     assert!(tool_names.contains(&"inspect_queue_status"));
     assert!(tool_names.contains(&"inspect_item"));
+    assert!(tool_names.contains(&"get_backlog_item"));
     assert!(!tool_names.contains(&"classify_planning_needs"));
     assert!(!tool_names.contains(&"classify_workflow_fit"));
     assert!(!tool_names.contains(&"classify_goal_workflow"));
@@ -141,7 +143,7 @@ async fn stdio_server_inspects_session_snapshot() -> anyhow::Result<()> {
     let session = call_tool_json(
         &client,
         "inspect_session",
-        json!({ "limit": 5, "require_task_plan": false }),
+        json!({ "limit": 5, "detail": "verbose", "require_task_plan": false }),
     )
     .await?;
 
@@ -159,7 +161,19 @@ async fn stdio_server_inspects_session_snapshot() -> anyhow::Result<()> {
         .expect("session schema hints")
         .iter()
         .any(|hint| hint["tool_name"] == "write_task_plan"
+            && hint["usage"] == "required"
+            && hint["host_neutral_query"] == "platypus tool write_task_plan"
+            && hint["codex_tool_search_query"]
+                == "mcp__platypus__write_task_plan platypus write_task_plan"
             && hint["claude_toolsearch_selector"] == "select:mcp__platypus__write_task_plan"));
+    assert_eq!(
+        session["data"]["claude_toolsearch_batch_selector"],
+        "select:mcp__platypus__write_task_plan,mcp__platypus__validate_task_plan,mcp__platypus__inspect_item"
+    );
+    assert_eq!(
+        session["data"]["host_neutral_tool_search_query"],
+        "platypus tools write_task_plan validate_task_plan inspect_item"
+    );
     assert!(session["data"]["workflow"]["integration"]["merge_style"].is_string());
 
     client.cancel().await?;
@@ -400,6 +414,58 @@ async fn stdio_server_updates_backlog_item_with_validation() -> anyhow::Result<(
 }
 
 #[tokio::test]
+async fn stdio_server_inspects_toolsets() -> anyhow::Result<()> {
+    let client = start_client(None).await?;
+
+    let all = call_tool_json(&client, "inspect_toolsets", json!({})).await?;
+    assert_stage_status("inspect_toolsets all", &all, "completed");
+    assert_eq!(all["data"]["total"], 6);
+    assert_eq!(all["data"]["returned"], 6);
+    let toolsets = all["data"]["toolsets"].as_array().expect("toolsets");
+    assert!(toolsets.iter().any(|toolset| toolset["name"] == "startup"
+        && toolset["title"] == "Startup Inspection"
+        && toolset["recommended_first_tool"] == "inspect_session"
+        && toolset["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .any(|tool| tool == "inspect_toolsets")
+        && toolset["claude_selector"]
+            .as_str()
+            .unwrap_or("")
+            .contains("mcp__platypus__inspect_session")
+        && toolset["codex_query"]
+            .as_str()
+            .unwrap_or("")
+            .contains("inspect_session")));
+
+    let filtered = call_tool_json(
+        &client,
+        "inspect_toolsets",
+        json!({ "toolset": "direct-execution" }),
+    )
+    .await?;
+    assert_stage_status("inspect_toolsets filtered", &filtered, "completed");
+    assert_eq!(filtered["data"]["returned"], 1);
+    assert_eq!(filtered["data"]["toolsets"][0]["name"], "direct_execution");
+    assert_eq!(
+        filtered["data"]["toolsets"][0]["recommended_first_tool"],
+        "inspect_work_queue"
+    );
+
+    let unknown =
+        call_tool_json(&client, "inspect_toolsets", json!({ "toolset": "missing" })).await?;
+    assert_stage_status("inspect_toolsets unknown", &unknown, "failed");
+    assert!(unknown["next_action"]
+        .as_str()
+        .unwrap_or("")
+        .contains("startup"));
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stdio_server_calls_structured_ping_tool() -> anyhow::Result<()> {
     let client = start_client(None).await?;
 
@@ -613,6 +679,7 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(resource_uris.contains(&"platypus://guidance/spec-driven-development"));
     assert!(resource_uris.contains(&"platypus://guidance/project-status"));
     assert!(resource_uris.contains(&"platypus://guidance/tool-preload"));
+    assert!(resource_uris.contains(&"platypus://tools/core-schemas"));
     assert!(resource_uris.contains(&"platypus://guidance/backlog-authoring"));
     assert!(resource_uris.contains(&"platypus://guidance/worker-handoff"));
     assert!(resource_uris.contains(&"platypus://guidance/integration-review"));
@@ -703,6 +770,18 @@ async fn stdio_server_lists_and_reads_host_guidance_resources() -> anyhow::Resul
     assert!(text.contains("complete_backlog_item"));
     assert!(text.contains("update_finding_disposition"));
 
+    let core = client
+        .read_resource(ReadResourceRequestParams {
+            meta: None,
+            uri: "platypus://tools/core-schemas".to_string(),
+        })
+        .await?;
+    let text = resource_text(&core.contents[0]);
+    assert!(text.contains("Platypus Core Schema Preload"));
+    assert!(text.contains("mcp__platypus__inspect_session"));
+    assert!(text.contains("create_backlog_items"));
+    assert!(text.contains("schema source of truth"));
+
     client.cancel().await?;
     Ok(())
 }
@@ -718,6 +797,7 @@ async fn stdio_server_lists_and_returns_host_guidance_prompts() -> anyhow::Resul
     assert!(prompt_names.contains(&"platypus-spec-driven-development"));
     assert!(prompt_names.contains(&"platypus-project-status"));
     assert!(prompt_names.contains(&"platypus-tool-preload"));
+    assert!(prompt_names.contains(&"platypus-core-schemas"));
     assert!(prompt_names.contains(&"platypus-backlog-authoring"));
     assert!(prompt_names.contains(&"platypus-worker-handoff"));
     assert!(prompt_names.contains(&"platypus-integration-review"));
@@ -997,6 +1077,22 @@ area: general
     assert_eq!(item["data"]["queue_state"], "dependency_blocked");
     assert_eq!(item["data"]["item"]["open_dependencies"][0], "PROJ-002");
     assert_eq!(item["data"]["recommended_tool"], "inspect_item");
+
+    let compact = call_tool_json(
+        &client,
+        "get_backlog_item",
+        json!({ "item_id": "PROJ-003", "max_markdown_bytes": 80 }),
+    )
+    .await?;
+    assert_stage_status("get_backlog_item", &compact, "completed");
+    assert_eq!(compact["data"]["item_id"], "PROJ-003");
+    assert_eq!(compact["data"]["title"], "Third item");
+    assert!(compact["data"]["markdown"]
+        .as_str()
+        .unwrap_or("")
+        .contains("PROJ-003"));
+    assert!(compact["data"]["markdown_bytes"].as_u64().unwrap_or(0) >= 80);
+    assert_eq!(compact["data"]["markdown_truncated"], true);
 
     client.cancel().await?;
     Ok(())
@@ -2596,6 +2692,8 @@ async fn stdio_server_runs_full_lifecycle_smoke_with_fake_worker() -> anyhow::Re
             "area": "verification",
             "epic": "general",
             "owned_surfaces": ["README.md"],
+            "execution_path": "worker_handoff",
+            "planning_gate": "none",
             "goal": "Create a visible smoke-test output file.",
             "implementation_contract": "Only write README.md in the assigned worktree.",
             "acceptance": ["README.md exists with smoke-test content."]
@@ -2612,7 +2710,7 @@ async fn stdio_server_runs_full_lifecycle_smoke_with_fake_worker() -> anyhow::Re
 
     let initial = call_tool_json(&client, "inspect_work_queue", json!({})).await?;
     assert_eq!(
-        initial["data"]["recommended_tool"], "prepare_work",
+        initial["data"]["recommended_tool"], "dispatch_ready_work",
         "stage inspect_work_queue before dispatch: {initial:#}"
     );
 
@@ -2969,13 +3067,43 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
         direct_queue["data"]["items"][0]["prepare_work_optional"],
         true
     );
+    assert_eq!(
+        direct_queue["data"]["recommended_tool"],
+        "complete_backlog_item"
+    );
+    assert_eq!(
+        direct_queue["data"]["minimal_direct_loop"]["primary_next_tool"],
+        "complete_backlog_item"
+    );
+    assert_eq!(
+        direct_queue["data"]["minimal_direct_loop"]["optional_guidance_tool"],
+        "prepare_work"
+    );
     assert!(direct_queue["data"]["schemas_likely_needed_next"]
         .as_array()
         .expect("schema hints")
         .iter()
         .any(|hint| hint["tool_name"] == "complete_backlog_item"
+            && hint["usage"] == "required"
+            && hint["host_neutral_query"] == "platypus tool complete_backlog_item"
+            && hint["codex_tool_search_query"]
+                == "mcp__platypus__complete_backlog_item platypus complete_backlog_item"
             && hint["claude_toolsearch_selector"]
                 == "select:mcp__platypus__complete_backlog_item"));
+    assert!(direct_queue["data"]["schemas_likely_needed_next"]
+        .as_array()
+        .expect("schema hints")
+        .iter()
+        .any(|hint| hint["tool_name"] == "record_verification_evidence"
+            && hint["usage"] == "optional"));
+    assert_eq!(
+        direct_queue["data"]["claude_toolsearch_batch_selector"],
+        "select:mcp__platypus__complete_backlog_item,mcp__platypus__record_verification_evidence,mcp__platypus__prepare_work"
+    );
+    assert_eq!(
+        direct_queue["data"]["host_neutral_tool_search_query"],
+        "platypus tools complete_backlog_item record_verification_evidence prepare_work"
+    );
 
     let prepared = call_tool_json(
         &client,
@@ -3029,13 +3157,26 @@ async fn stdio_server_completes_direct_backlog_item() -> anyhow::Result<()> {
         "not_requested"
     );
     assert_eq!(completed["data"]["commit_outcome"]["requested"], false);
-    assert_eq!(
-        completed["data"]["queue_status"]["counts"]["closed_count"],
-        1
-    );
+    assert_eq!(completed["data"]["detail"], "compact");
+    assert_eq!(completed["data"]["queue_status"], serde_json::Value::Null);
     assert_eq!(
         completed["data"]["queue_status_error"],
         serde_json::Value::Null
+    );
+    assert_eq!(completed["data"]["compact"]["item_id"], "PROJ-001");
+    assert!(completed["data"]["compact"]["status_line"]
+        .as_str()
+        .expect("status line")
+        .contains("PROJ-001 closed"));
+    assert_eq!(completed["data"]["compact"]["closed"], true);
+    assert_eq!(
+        completed["data"]["compact"]["closure_source"],
+        "runtime_event"
+    );
+    assert_eq!(completed["data"]["compact"]["queue_state"], "closed");
+    assert_eq!(
+        completed["data"]["compact"]["recommended_tool"],
+        "create_backlog_items"
     );
     assert_eq!(completed["data"]["auto_evidence_enabled"], true);
     assert_eq!(
