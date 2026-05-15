@@ -1,10 +1,39 @@
 {
   "name": "platypus-pi",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "description": "Pi package for first-class Platypus MCP project-management integration",
   "keywords": ["pi-package", "platypus", "mcp", "project-management"],
   "license": "MIT",
+  "type": "module",
+  "files": [
+    "extensions/",
+    "scripts/npm/validate-package.mjs",
+    "README.md",
+    "LICENSE*",
+    "bin/",
+    "vendor/"
+  ],
+  "scripts": {
+    "package:dry-run": "npm pack --dry-run",
+    "package:validate": "node scripts/npm/validate-package.mjs"
+  },
+  "platypusMcp": {
+    "binaryName": "platypus-mcp",
+    "binaryFallbackOrder": [
+      "PLATYPUS_MCP_BIN",
+      "package-local bin/ or vendor/ platform binary",
+      "development Cargo.toml checkout",
+      "platypus-mcp on PATH"
+    ],
+    "platformBinaryPackages": {
+      "linux-x64": "@platypus/mcp-linux-x64",
+      "linux-arm64": "@platypus/mcp-linux-arm64",
+      "darwin-x64": "@platypus/mcp-darwin-x64",
+      "darwin-arm64": "@platypus/mcp-darwin-arm64",
+      "win32-x64": "@platypus/mcp-win32-x64"
+    }
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
