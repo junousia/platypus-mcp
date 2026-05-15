@@ -89,6 +89,10 @@ Pi command mapping:
 | `/platy-review-result` | `get_backlog_item`, `list_findings`, `validate_findings`, `record_finding`, `create_backlog_items`, `complete_backlog_item`, `finish_work` |
 | `/platy-doctor` | `doctor_snapshot` |
 
+These commands are UI shortcuts and prompt builders. The MCP server remains
+deterministic: durable changes happen through typed tools and repository files,
+not hidden Pi chat state.
+
 Direct quick path: read the startup guidance, call `inspect_session`, inspect
 for `direct_ready`, edit the manager workspace, then call
 `complete_backlog_item`. Call `prepare_work` first only when response-local

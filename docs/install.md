@@ -242,6 +242,26 @@ rather than a shared MCP config file:
 platypus-mcp bootstrap pi --root /path/to/project --init-project
 ```
 
+Then start Pi from that project and use the guided commands:
+
+```bash
+cd /path/to/project
+pi
+```
+
+```text
+/platy-ready
+/platy-direction
+/platy-standards
+/platy-plan
+/platy-start
+/platy-review-result
+```
+
+`/platy-direction` and `/platy-standards` write durable repository artifacts
+under `docs/`; they are not hidden chat state. Commit those docs with the code
+so future agents inherit the same project direction.
+
 The generated settings add `npm:platypus-pi` to the `packages` array while
 preserving existing Pi settings. Use `--check --init-project` to verify that the
 project has Pi settings and Platypus guidance files:

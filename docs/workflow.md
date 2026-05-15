@@ -400,6 +400,23 @@ status, verification references, and any finding references. If the work exposed
 risks or missing requirements, it records them with `platypus_record_finding` or
 creates approved follow-up items before closing.
 
+The same story as durable artifacts:
+
+| Phase | Pi command | Durable result |
+| --- | --- | --- |
+| First setup | `platypus-mcp bootstrap pi --init-project` | `.pi/settings.json`, `AGENTS.md`, `CLAUDE.md`, `WORKFLOW.md`, `platy.yaml`, `backlog/`, `docs/` templates |
+| Product direction | `/platy-direction` | `docs/product.md`, `docs/architecture.md`, `docs/testing.md` |
+| Engineering standards | `/platy-standards` | `docs/engineering.md` with module, testing, review, and definition-of-done rules |
+| Product steering | `/platy-steer` | approved guidance edits, backlog updates, findings, or follow-up items |
+| Story quality | `/platy-story-review` | reviewed backlog item updates or approved new item drafts |
+| Implementation planning | `/platy-plan-review` | response-local direct plan or strict `backlog/plans/*.yaml` when policy requires it |
+| Execution | `/platy-start` | code/doc changes plus `platypus_complete_backlog_item` or worker handoff state |
+| Result review | `/platy-review-result` | verification, findings, follow-up items, and closure evidence |
+
+The docs and backlog are the memory. Chat can help shape them, but a direction,
+standard, plan, finding, or completion is not considered durable until it has
+been written through repository files or Platypus tools.
+
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime
 status, task attempts, PR metadata, or closure state.

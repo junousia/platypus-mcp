@@ -61,7 +61,8 @@ Inside Pi, the short path is `/platy-ready`, `/platy-direction`,
 `/platy-standards`, `/platy-steer` when direction changes, `/platy-plan`, `/platy-start`, and
 `/platy-review-result`. The extension also exposes typed `platypus_*` tools so
 agents can create backlog items, inspect queue state, record findings, and close
-work without filling opaque JSON.
+work without filling opaque JSON. The full guided example is in
+[docs/workflow.md](docs/workflow.md#pi-end-to-end-example).
 
 The roadmap now tracks the landed MCP baseline and candidate next directions
 instead of a manual queue index. See [docs/roadmap.md](docs/roadmap.md) for the
