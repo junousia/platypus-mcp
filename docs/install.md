@@ -34,8 +34,10 @@ normal installed users without requiring Cargo during `npm install`. The Pi
 extension resolves the binary in this order:
 
 1. `PLATYPUS_MCP_BIN`, for local testing or custom installations.
-2. A package-local prebuilt binary under `bin/` or `vendor/` for the current
-   platform, or a matching optional platform binary package.
+2. A package-local prebuilt binary under `bin/platypus-mcp`,
+   `bin/<platform>/platypus-mcp`, or `vendor/<platform>/platypus-mcp`, or a
+   matching optional platform binary package. Apple silicon uses platform key
+   `darwin-arm64`.
 3. The repository `Cargo.toml` fallback when running from a development
    checkout.
 4. `platypus-mcp` on `PATH`, such as a `cargo install platypus-mcp` install.
@@ -57,6 +59,19 @@ local state, backlog files, and secrets.
 Release validation can set `PLATYPUS_NPM_REQUIRE_BINARY=1` after staging a
 platform binary under `bin/` or `vendor/`; the check then requires an
 executable package-local binary candidate.
+Set `NPM_REQUIRED_PLATFORMS=darwin-arm64` or
+`PLATYPUS_NPM_REQUIRED_PLATFORMS=darwin-arm64` to require a specific packaged
+platform binary. The publish workflow validates `linux-x64` on Linux and
+`darwin-arm64` on a macOS arm64 runner by staging:
+
+```text
+vendor/linux-x64/platypus-mcp
+vendor/darwin-arm64/platypus-mcp
+```
+
+The Apple silicon build uses Rust target `aarch64-apple-darwin`. The binary is
+not currently codesigned or notarized; add that as a separate release hardening
+step if macOS distribution warnings become a blocker.
 
 Configure an MCP host:
 

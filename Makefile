@@ -4,6 +4,7 @@ CARGO ?= cargo
 ROOT ?= $(CURDIR)
 MAX_TASKS ?= 1
 NPM_CACHE_DIR ?= $(CURDIR)/.platy/npm-cache
+NPM_REQUIRED_PLATFORMS ?=
 TEST ?=
 ARGS ?=
 
@@ -128,7 +129,7 @@ publish: ## Publish the crate to crates.io.
 	$(CARGO) publish
 
 npm-package: ## Validate npm package contents.
-	npm_config_cache=$(NPM_CACHE_DIR) npm run package:validate
+	PLATYPUS_NPM_REQUIRED_PLATFORMS="$${PLATYPUS_NPM_REQUIRED_PLATFORMS:-$(NPM_REQUIRED_PLATFORMS)}" npm_config_cache=$(NPM_CACHE_DIR) npm run package:validate
 
 npm-package-dry-run: ## Show npm package dry-run output.
 	npm_config_cache=$(NPM_CACHE_DIR) npm run package:dry-run

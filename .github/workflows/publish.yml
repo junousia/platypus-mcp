@@ -25,7 +25,19 @@ env:
 jobs:
   npm-package:
     name: Validate npm package
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs_on: ubuntu-latest
+            cargo_target: ""
+            binary_path: target/release/platypus-mcp
+          - platform: darwin-arm64
+            runs_on: macos-15
+            cargo_target: aarch64-apple-darwin
+            binary_path: target/aarch64-apple-darwin/release/platypus-mcp
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,16 +52,22 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Build Linux npm binary
+      - name: Build npm binary
         run: |
-          cargo build --release
-          mkdir -p vendor/linux-x64
-          cp target/release/platypus-mcp vendor/linux-x64/platypus-mcp
-          chmod 755 vendor/linux-x64/platypus-mcp
+          if [ -n "${{ matrix.cargo_target }}" ]; then
+            rustup target add "${{ matrix.cargo_target }}"
+            cargo build --release --target "${{ matrix.cargo_target }}"
+          else
+            cargo build --release
+          fi
+          mkdir -p "vendor/${{ matrix.platform }}"
+          cp "${{ matrix.binary_path }}" "vendor/${{ matrix.platform }}/platypus-mcp"
+          chmod 755 "vendor/${{ matrix.platform }}/platypus-mcp"
 
       - name: Validate npm package contents
         env:
           PLATYPUS_NPM_REQUIRE_BINARY: "1"
+          PLATYPUS_NPM_REQUIRED_PLATFORMS: ${{ matrix.platform }}
         run: make npm-package
 
   crates-io:
