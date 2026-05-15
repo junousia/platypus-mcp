@@ -6,6 +6,10 @@
   "keywords": ["pi-package", "platypus", "mcp", "project-management"],
   "license": "MIT",
   "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "files": [
     "extensions/",
     "scripts/npm/validate-package.mjs",
@@ -16,7 +20,9 @@
   ],
   "scripts": {
     "package:dry-run": "npm pack --dry-run",
-    "package:validate": "node scripts/npm/validate-package.mjs"
+    "package:validate": "node scripts/npm/validate-package.mjs",
+    "publish:dry-run": "npm publish --dry-run --access public",
+    "publish:release": "npm publish --access public"
   },
   "platypusMcp": {
     "binaryName": "platypus-mcp",

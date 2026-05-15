@@ -21,10 +21,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  NPM_RELEASE_PLATFORMS: linux-x64,darwin-arm64
 
 jobs:
   npm-package:
-    name: Validate npm package
+    name: Build and validate npm package binary
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
@@ -70,6 +71,14 @@ jobs:
           PLATYPUS_NPM_REQUIRED_PLATFORMS: ${{ matrix.platform }}
         run: make npm-package
 
+      - name: Upload npm binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: platypus-mcp-${{ matrix.platform }}
+          path: vendor/${{ matrix.platform }}/platypus-mcp
+          if-no-files-found: error
+          retention-days: 7
+
   crates-io:
     name: Publish crate
     runs-on: ubuntu-latest
@@ -101,3 +110,68 @@ jobs:
             exit 2
           fi
           make publish
+
+  npm-publish:
+    name: Publish npm package
+    runs-on: ubuntu-latest
+    needs:
+      - npm-package
+      - crates-io
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Node version
+        run: |
+          node --version
+          npm --version
+
+      - name: Configure npm registry
+        uses: actions/setup-node@v4
+        with:
+          registry-url: https://registry.npmjs.org
+
+      - name: Download npm binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: platypus-mcp-*
+          path: .platy/npm-artifacts
+
+      - name: Stage npm package binaries
+        run: |
+          for platform in $(echo "${NPM_RELEASE_PLATFORMS}" | tr ',' ' '); do
+            source=".platy/npm-artifacts/platypus-mcp-${platform}/platypus-mcp"
+            target="vendor/${platform}/platypus-mcp"
+            if [ ! -f "${source}" ]; then
+              echo "Missing npm binary artifact for ${platform}: ${source}" >&2
+              exit 2
+            fi
+            mkdir -p "vendor/${platform}"
+            cp "${source}" "${target}"
+            chmod 755 "${target}"
+          done
+
+      - name: Validate combined npm package
+        env:
+          PLATYPUS_NPM_REQUIRE_BINARY: "1"
+          PLATYPUS_NPM_REQUIRED_PLATFORMS: ${{ env.NPM_RELEASE_PLATFORMS }}
+        run: make npm-package
+
+      - name: Validate npm publish
+        env:
+          PLATYPUS_NPM_REQUIRE_BINARY: "1"
+          PLATYPUS_NPM_REQUIRED_PLATFORMS: ${{ env.NPM_RELEASE_PLATFORMS }}
+        run: make npm-publish-dry-run
+
+      - name: Publish to npm
+        if: github.event_name == 'release' || inputs.dry_run == false
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PLATYPUS_NPM_REQUIRE_BINARY: "1"
+          PLATYPUS_NPM_REQUIRED_PLATFORMS: ${{ env.NPM_RELEASE_PLATFORMS }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "NPM_TOKEN secret is required for npm publishing." >&2
+            exit 2
+          fi
+          make npm-publish

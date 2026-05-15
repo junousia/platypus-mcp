@@ -13,7 +13,7 @@ ARGS ?=
 .PHONY: \
 	help \
 	check ci lint fmt-check fmt format test test-lib test-stdio test-one \
-	build doc clean package publish-dry-run publish npm-package npm-package-dry-run release-check \
+	build doc clean package publish-dry-run publish npm-package npm-package-dry-run npm-publish-dry-run npm-publish release-check \
 	run run-root smoke smoke-queue smoke-storage \
 	feedback opencode-feedback claude-feedback codex-feedback \
 	metadata version
@@ -43,6 +43,8 @@ help: ## Show categorized developer commands.
 	@printf '  \033[36mpublish\033[0m     Publish the crate to crates.io\n'
 	@printf '  \033[36mnpm-package\033[0m Validate npm package contents\n'
 	@printf '  \033[36mnpm-package-dry-run\033[0m Show npm package dry-run output\n'
+	@printf '  \033[36mnpm-publish-dry-run\033[0m Validate npm publish without uploading\n'
+	@printf '  \033[36mnpm-publish\033[0m Publish the npm package\n'
 	@printf '  \033[36mrelease-check\033[0m Validate Rust and npm release packaging\n'
 	@printf '  \033[36mclean\033[0m       Remove Cargo build output\n\n'
 	@printf '\033[1mRun\033[0m\n'
@@ -62,6 +64,7 @@ help: ## Show categorized developer commands.
 	@printf '\033[1mVariables\033[0m\n'
 	@printf '  ROOT=%s\n' '$(ROOT)'
 	@printf '  MAX_TASKS=%s\n' '$(MAX_TASKS)'
+	@printf '  NPM_REQUIRED_PLATFORMS=linux-x64,darwin-arm64 for strict npm binary validation\n'
 	@printf '  TEST=%s\n' '$(TEST)'
 	@printf '  ARGS=%s\n' '$(ARGS)'
 	@printf '  PROJECT_ROOT=/path/to/new/temp/project for *-feedback\n'
@@ -134,7 +137,13 @@ npm-package: ## Validate npm package contents.
 npm-package-dry-run: ## Show npm package dry-run output.
 	npm_config_cache=$(NPM_CACHE_DIR) npm run package:dry-run
 
-release-check: publish-dry-run npm-package ## Validate Rust and npm release packaging.
+npm-publish-dry-run: npm-package ## Validate npm publish without uploading.
+	npm_config_cache=$(NPM_CACHE_DIR) npm run publish:dry-run
+
+npm-publish: npm-package ## Publish the npm package.
+	npm_config_cache=$(NPM_CACHE_DIR) npm run publish:release
+
+release-check: publish-dry-run npm-publish-dry-run ## Validate Rust and npm release packaging.
 
 clean: ## Remove Cargo build output.
 	$(CARGO) clean
