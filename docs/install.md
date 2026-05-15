@@ -274,3 +274,9 @@ Manual `workflow_dispatch` runs default to `dry_run=true`, which validates both
 release paths without uploading. Set `dry_run=false` only when both
 `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN` are configured and an actual publish is
 intended.
+
+Release uploads are idempotent by package version. If a release partially
+publishes, for example crates.io succeeds but npm fails because the token needs
+to be replaced, update the secret and rerun the workflow. The workflow validates
+the package again, skips already-published versions, and continues with the
+remaining upload.
