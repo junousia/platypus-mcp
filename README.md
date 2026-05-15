@@ -91,7 +91,7 @@ Closure is derived from reachable Git trailers:
 
 ```text
 Platypus-Closes: MCP-123
-Platypus-Verification: make check
+Platypus-Verification: bazel test //...
 ```
 
 Runtime state such as queued/running tasks, task events, findings, claims, and
@@ -115,13 +115,13 @@ through explicit approved tools and provider-neutral payloads.
 ## Verify
 
 ```bash
-make check
+bazel test //...
 ```
 
-List available developer workflows:
+Build all Bazel targets:
 
 ```bash
-make help
+bazel build //...
 ```
 
 ## Run
@@ -138,15 +138,18 @@ package-local or optional platform prebuilt binary, a development checkout
 not need to compile Rust during postinstall. Release validation currently
 stages and checks Linux x64, Linux arm64, macOS Intel (`darwin-x64`), and Apple
 silicon (`darwin-arm64`) package-local binaries under
-`vendor/<platform>/platypus-mcp`. Validate npm package contents with:
+`vendor/<platform>/platypus-mcp`. Validate release artifacts with:
 
 ```bash
-make npm-package
+bazel build --config=release //:platypus_mcp_binary_tar //:release_metadata_tar
 ```
 
-The GitHub `Publish` workflow publishes both the crates.io package and the
-`platypus-pi` npm package from releases. npm publishing requires repository
-secret `NPM_TOKEN`; manual workflow dispatch defaults to dry-run validation.
+The GitHub `Publish` workflow derives the package version from a pushed tag such
+as `v0.2.1`, stamps release manifests through Bazel, publishes both the
+crates.io package and the `platypus-pi` npm package, then creates the GitHub
+Release after package publishing succeeds. npm publishing requires repository
+secret `NPM_TOKEN`; crates.io publishing requires `CARGO_REGISTRY_TOKEN`;
+manual workflow dispatch defaults to dry-run validation.
 
 Run the installed stdio server:
 
@@ -180,21 +183,21 @@ platypus-mcp bootstrap codex --check
 During local development:
 
 ```bash
-make run
+bazel run //:platypus-mcp
 ```
 
 Invoke one MCP tool through the stdio contract for local smoke testing:
 
 ```bash
-make smoke
-make smoke-queue
-make smoke-storage
+bazel run //:platypus-mcp -- tool --root "$PWD" inspect_status '{"limit":5}'
+bazel run //:platypus-mcp -- tool --root "$PWD" inspect_work_queue '{"limit":5}'
+bazel run //:platypus-mcp -- tool --root "$PWD" storage_capability_probe '{}'
 ```
 
 Inspect the current workflow integration policy:
 
 ```bash
-PLATYPUS_MCP_ROOT=/path/to/project cargo run
+PLATYPUS_MCP_ROOT=/path/to/project bazel run //:platypus-mcp
 ```
 
 Then call the MCP tool `inspect_workflow_config` from the host.
@@ -203,7 +206,7 @@ By default the server uses the current directory as the Platypus project root.
 Set `PLATYPUS_MCP_ROOT` to bind tools to a specific project:
 
 ```bash
-PLATYPUS_MCP_ROOT=/path/to/project cargo run
+PLATYPUS_MCP_ROOT=/path/to/project bazel run //:platypus-mcp
 ```
 
 ## Client Configuration

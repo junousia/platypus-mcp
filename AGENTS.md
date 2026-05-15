@@ -4,27 +4,25 @@ This repository is the standalone Rust implementation of the Platypus MCP
 server. It is intentionally separate from the Python Platypus prototype so the
 MCP contract can become the stable product boundary.
 
-The server uses Rust, Tokio, RMCP, Serde, Schemars, and JSON-RPC over MCP
-transports. The first supported transport is stdio.
+The server uses Rust, Tokio, RMCP, Serde, Schemars, JSON-RPC over MCP
+transports, and Bazel as the primary build and release graph. The first
+supported transport is stdio.
 
 ## Project Commands
 
-- Full verification: `make check`
-- Format: `make format`
-- Lint/build-check: `make lint`
-- Test: `make test`
-- Run stdio server: `make run`
-- Build-check: `cargo check`
-- Test: `cargo test`
-- Format check: `cargo fmt --check`
-- Format: `cargo fmt`
-- Run stdio server: `cargo run`
+- Full verification: `bazel test //...`
+- Build all targets: `bazel build //...`
+- Release artifact validation: `bazel build --config=release //:platypus_mcp_binary_tar //:release_metadata_tar`
+- Format check: `bazel test //:rustfmt_test`
+- Format: `bazel run @rules_rust//:rustfmt`
+- Run stdio server: `bazel run //:platypus-mcp`
 
-Prefer Makefile targets for normal development and CI-style checks. Use direct
-Cargo commands when debugging a specific compiler or test issue.
+`make` remains a convenience wrapper around Bazel-oriented commands. Cargo and
+npm are registry boundary tools for crates.io/npm publishing and for debugging
+Rust-specific issues, not the normal CI front door.
 
-If `cargo fmt` is unavailable, report that `rustfmt` is missing and still run
-`cargo check` and `cargo test`.
+If Bazel is unavailable locally, report that Bazel/Bazelisk is missing and run
+the closest Cargo checks only as fallback evidence.
 
 ## Working Rules
 
@@ -35,7 +33,7 @@ If `cargo fmt` is unavailable, report that `rustfmt` is missing and still run
 - Keep changes small and scoped to the MCP server.
 - Preserve unrelated user changes.
 - Do not commit secrets, local caches, build output, or `.env` files.
-- Keep `target/` out of Git.
+- Keep `target/`, `bazel-*`, and local Bazel caches out of Git.
 - Prefer typed request/response structs with `serde` and `schemars::JsonSchema`
   for MCP tools.
 - Return structured errors from tools instead of panicking.
@@ -165,7 +163,7 @@ Near-term extensions:
 - Stage only files that belong to the current task.
 - Keep unrelated changes out of the commit.
 - Run verification before committing:
-  - `make check`
+  - `bazel test //...`
 - Use concise imperative commit messages, for example
   `Add backlog validation tool`.
 
@@ -192,8 +190,10 @@ Near-term extensions:
 
 Before saying work is complete:
 
-1. Run `cargo fmt --check` when available.
-2. Run `cargo check`.
-3. Run `cargo test`.
+1. Run `bazel test //...` when Bazel is available.
+2. Run `bazel build --config=release //:platypus_mcp_binary_tar //:release_metadata_tar`.
+3. If Bazel is unavailable locally, run `cargo fmt --check`, `cargo check`,
+   and `cargo test` as fallback evidence and state that Bazel verification was
+   deferred to CI.
 4. Summarize changed behavior and any remaining gaps.
 5. If verification cannot run, explain exactly why.

@@ -1,4 +1,7 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 const ALLOWED_SQL_PATHS: &[&str] = &[
     "src/state/sqlite/mod.rs",
@@ -16,10 +19,10 @@ const DISALLOWED_MARKERS: &[&str] = &["use rusqlite", "rusqlite::", ".prepare(",
 
 #[test]
 fn sql_and_rusqlite_usage_stays_in_approved_backend_modules() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = source_root();
     let mut violations = Vec::new();
 
-    visit_rs_files(root, &root.join("src"), &mut |relative, source| {
+    visit_rs_files(&root, &root.join("src"), &mut |relative, source| {
         if is_allowed_sql_path(relative) {
             return;
         }
@@ -39,6 +42,48 @@ fn sql_and_rusqlite_usage_stays_in_approved_backend_modules() {
         "SQL or rusqlite usage leaked outside approved backend modules:\n{}",
         violations.join("\n")
     );
+}
+
+fn source_root() -> PathBuf {
+    if let Ok(value) = std::env::var("PLATYPUS_MCP_SOURCE_ROOT") {
+        if let Some(root) = resolve_source_root(PathBuf::from(value)) {
+            return root;
+        }
+    }
+
+    for candidate in ["_main", "platypus_mcp", "."] {
+        if let Some(root) = resolve_source_root(PathBuf::from(candidate)) {
+            return root;
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn resolve_source_root(path: PathBuf) -> Option<PathBuf> {
+    for candidate in runfile_candidates(&path) {
+        if candidate.join("src").exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn runfile_candidates(path: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if path.is_absolute() || path.exists() {
+        candidates.push(path.to_path_buf());
+    }
+
+    for key in ["RUNFILES_DIR", "TEST_SRCDIR"] {
+        if let Ok(runfiles) = std::env::var(key) {
+            let root = PathBuf::from(runfiles);
+            candidates.push(root.join(path));
+            candidates.push(root.join("_main").join(path));
+            candidates.push(root.join("platypus_mcp").join(path));
+        }
+    }
+
+    candidates
 }
 
 #[test]

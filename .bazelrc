@@ -1,0 +1,13 @@
+common --enable_bzlmod
+common --announce_rc
+common --color=yes
+
+build --incompatible_strict_action_env
+build --show_timestamps
+
+test --test_output=errors
+test --test_env=RUST_BACKTRACE=1
+
+build:release --stamp
+build:release --compilation_mode=opt
+build:release --workspace_status_command=tools/bazel/workspace_status.sh

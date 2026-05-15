@@ -1,11 +1,15 @@
 name: Publish
 
 on:
-  release:
-    types:
-      - published
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
+      version:
+        description: Version to validate or publish. Defaults to package.json on dry runs.
+        required: false
+        type: string
       dry_run:
         description: Validate publishing without uploading.
         required: true
@@ -13,71 +17,98 @@ on:
         type: boolean
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: publish-crate
+  group: publish-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  CARGO_TERM_COLOR: always
   NPM_RELEASE_PLATFORMS: linux-x64,linux-arm64,darwin-x64,darwin-arm64
 
 jobs:
+  release-meta:
+    name: Resolve release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.meta.outputs.publish }}
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            raw="${GITHUB_REF_NAME}"
+            publish=true
+          else
+            raw="${{ inputs.version }}"
+            publish="${{ inputs.dry_run == false }}"
+          fi
+          if [ -z "${raw}" ]; then
+            raw="$(node -p "require('./package.json').version")"
+          fi
+          version="${raw#v}"
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: ${raw}" >&2
+            exit 2
+          fi
+          echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
+          echo "tag=v${version}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
   npm-package:
-    name: Build and validate npm package binary
+    name: Build npm binary (${{ matrix.platform }})
     runs-on: ${{ matrix.runs_on }}
+    needs: release-meta
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux-x64
             runs_on: ubuntu-latest
-            cargo_target: ""
-            binary_path: target/release/platypus-mcp
           - platform: linux-arm64
             runs_on: ubuntu-24.04-arm
-            cargo_target: ""
-            binary_path: target/release/platypus-mcp
           - platform: darwin-x64
             runs_on: macos-15-intel
-            cargo_target: ""
-            binary_path: target/release/platypus-mcp
           - platform: darwin-arm64
             runs_on: macos-15
-            cargo_target: aarch64-apple-darwin
-            binary_path: target/aarch64-apple-darwin/release/platypus-mcp
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show Node version
-        run: |
-          node --version
-          npm --version
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ matrix.platform }}
+          repository-cache: true
 
-      - name: Show Rust version
-        run: |
-          rustc --version
-          cargo --version
+      - name: Build release binary
+        env:
+          RELEASE_VERSION: ${{ needs.release-meta.outputs.version }}
+        run: bazel build --config=release //:platypus-mcp
 
-      - name: Build npm binary
+      - name: Stage package-local binary
         run: |
-          if [ -n "${{ matrix.cargo_target }}" ]; then
-            rustup target add "${{ matrix.cargo_target }}"
-            cargo build --release --target "${{ matrix.cargo_target }}"
-          else
-            cargo build --release
-          fi
           mkdir -p "vendor/${{ matrix.platform }}"
-          cp "${{ matrix.binary_path }}" "vendor/${{ matrix.platform }}/platypus-mcp"
+          cp bazel-bin/platypus-mcp "vendor/${{ matrix.platform }}/platypus-mcp"
           chmod 755 "vendor/${{ matrix.platform }}/platypus-mcp"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          registry-url: https://registry.npmjs.org
 
       - name: Validate npm package contents
         env:
           PLATYPUS_NPM_REQUIRE_BINARY: "1"
           PLATYPUS_NPM_REQUIRED_PLATFORMS: ${{ matrix.platform }}
-        run: make npm-package
+        run: npm run package:validate
 
       - name: Upload npm binary artifact
         uses: actions/upload-artifact@v4
@@ -90,26 +121,36 @@ jobs:
   crates-io:
     name: Publish crate
     runs-on: ubuntu-latest
+    needs: release-meta
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show toolchain
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-crate
+          repository-cache: true
+
+      - name: Test
+        run: bazel test //...
+
+      - name: Build stamped crate metadata
+        env:
+          RELEASE_VERSION: ${{ needs.release-meta.outputs.version }}
+        run: bazel build --config=release //:release_cargo_toml //:release_cargo_lock
+
+      - name: Apply stamped crate metadata
         run: |
-          rustc --version
-          cargo --version
-
-      - name: Ensure rustfmt is installed
-        run: rustup component add rustfmt
-
-      - name: Verify
-        run: make check
+          cp bazel-bin/release/Cargo.toml Cargo.toml
+          cp bazel-bin/release/Cargo.lock Cargo.lock
 
       - name: Validate package
-        run: make publish-dry-run
+        run: cargo publish --dry-run --allow-dirty
 
       - name: Publish to crates.io
-        if: github.event_name == 'release' || inputs.dry_run == false
+        if: needs.release-meta.outputs.publish == 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
@@ -118,7 +159,7 @@ jobs:
             exit 2
           fi
           set +e
-          make publish > /tmp/cargo-publish.out 2> /tmp/cargo-publish.err
+          cargo publish --allow-dirty > /tmp/cargo-publish.out 2> /tmp/cargo-publish.err
           code="$?"
           set -e
           cat /tmp/cargo-publish.out
@@ -136,21 +177,32 @@ jobs:
     name: Publish npm package
     runs-on: ubuntu-latest
     needs:
+      - release-meta
       - npm-package
       - crates-io
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show Node version
-        run: |
-          node --version
-          npm --version
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-npm
+          repository-cache: true
 
-      - name: Configure npm registry
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           registry-url: https://registry.npmjs.org
+
+      - name: Build stamped npm metadata
+        env:
+          RELEASE_VERSION: ${{ needs.release-meta.outputs.version }}
+        run: bazel build --config=release //:release_package_json
+
+      - name: Apply stamped npm metadata
+        run: cp bazel-bin/release/package.json package.json
 
       - name: Download npm binary artifacts
         uses: actions/download-artifact@v4
@@ -176,13 +228,13 @@ jobs:
         env:
           PLATYPUS_NPM_REQUIRE_BINARY: "1"
           PLATYPUS_NPM_REQUIRED_PLATFORMS: ${{ env.NPM_RELEASE_PLATFORMS }}
-        run: make npm-package
+        run: npm run package:validate
 
       - name: Validate npm publish
         env:
           PLATYPUS_NPM_REQUIRE_BINARY: "1"
           PLATYPUS_NPM_REQUIRED_PLATFORMS: ${{ env.NPM_RELEASE_PLATFORMS }}
-        run: make npm-publish-dry-run
+        run: npm run publish:dry-run
 
       - name: Check npm package version
         id: npm-version
@@ -202,7 +254,7 @@ jobs:
           fi
 
       - name: Publish to npm
-        if: (github.event_name == 'release' || inputs.dry_run == false) && steps.npm-version.outputs.published != 'true'
+        if: needs.release-meta.outputs.publish == 'true' && steps.npm-version.outputs.published != 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PLATYPUS_NPM_REQUIRE_BINARY: "1"
@@ -212,8 +264,35 @@ jobs:
             echo "NPM_TOKEN secret is required for npm publishing." >&2
             exit 2
           fi
-          make npm-publish
+          npm run publish:release
 
       - name: Skip npm publish
-        if: (github.event_name == 'release' || inputs.dry_run == false) && steps.npm-version.outputs.published == 'true'
+        if: needs.release-meta.outputs.publish == 'true' && steps.npm-version.outputs.published == 'true'
         run: echo "npm package version already exists; treating publish as complete for rerun idempotency."
+
+  github-release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    needs:
+      - release-meta
+      - npm-publish
+    if: github.event_name == 'push' && needs.release-meta.outputs.publish == 'true'
+    steps:
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release-meta.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release-meta.outputs.version }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release edit "${RELEASE_TAG}" \
+              --title "platypus-mcp ${RELEASE_VERSION}" \
+              --latest
+          else
+            gh release create "${RELEASE_TAG}" \
+              --target "${GITHUB_SHA}" \
+              --title "platypus-mcp ${RELEASE_VERSION}" \
+              --generate-notes \
+              --latest
+          fi

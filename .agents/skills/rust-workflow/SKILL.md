@@ -5,28 +5,28 @@ description: Use when adding, changing, documenting, or running Rust development
 
 # Rust Workflow
 
-Use this when changing Rust code, Cargo metadata, or developer commands.
+Use this when changing Rust code, Cargo/Bazel metadata, or developer commands.
 
 ## Rules
 
-- Prefer `cargo` commands unless a repository Makefile is added later.
+- Prefer Bazel commands for repository-level build and test work.
 - Keep dependencies purposeful and avoid framework churn.
 - Use `cargo add` only when available and appropriate; otherwise edit
   `Cargo.toml` deliberately.
 - Commit `Cargo.lock` for this application/server repository.
-- Keep generated build output under `target/` and out of Git.
-- Use `cargo fmt` for formatting when `rustfmt` is installed.
-- Use `cargo check` for fast validation and `cargo test` for behavior.
+- Keep generated build output under `target/` and `bazel-*` out of Git.
+- Use `bazel test //:rustfmt_test` for formatting checks.
+- Use `bazel test //...` for behavior.
+- Cargo commands are fallback/debugging tools and registry-boundary checks.
 
 ## Verification
 
 Run:
 
 ```bash
-cargo fmt --check
-cargo check
-cargo test
+bazel test //...
+bazel build --config=release //:platypus_mcp_binary_tar //:release_metadata_tar
 ```
 
-If `rustfmt` is unavailable, report that blocker and still run `cargo check`
-and `cargo test`.
+If Bazel is unavailable locally, report that blocker and run
+`cargo fmt --check`, `cargo check`, and `cargo test` as fallback evidence.

@@ -5,14 +5,14 @@ product boundary is the MCP tool contract, not a custom UI or daemon.
 
 ## Prerequisites
 
-- Rust toolchain with `cargo`
+- Bazel or Bazelisk. The repository pins Bazel in `.bazelversion`.
 - Git for worktree-based lifecycle tools
 - An MCP host such as Codex, Claude, or opencode
 
 Build and verify the server from the repository root:
 
 ```bash
-make check
+bazel test //...
 ```
 
 Install the released crate:
@@ -49,13 +49,12 @@ packing the npm artifact or publish matching platform-specific binary packages.
 Validate npm package contents from the repository root:
 
 ```bash
-make npm-package
-make release-check
+bazel build --config=release //:platypus_mcp_binary_tar //:release_metadata_tar
 ```
 
-The npm validation uses `npm pack --dry-run` and checks that the package keeps
-extension files and binary resolver metadata while excluding build caches,
-local state, backlog files, and secrets.
+The release artifact build stages the Rust binary and stamped Cargo/npm
+metadata through Bazel. The publish workflow still runs npm package validation
+before upload because npm is the registry boundary.
 Release validation can set `PLATYPUS_NPM_REQUIRE_BINARY=1` after staging a
 platform binary under `bin/` or `vendor/`; the check then requires an
 executable package-local binary candidate.
@@ -71,10 +70,9 @@ vendor/darwin-x64/platypus-mcp
 vendor/darwin-arm64/platypus-mcp
 ```
 
-The Apple silicon build uses Rust target `aarch64-apple-darwin`; the other
-release binaries are built on native hosted runners. The macOS binaries are not
-currently codesigned or notarized; add that as a separate release hardening step
-if macOS distribution warnings become a blocker.
+Release binaries are built with Bazel on native hosted runners. The macOS
+binaries are not currently codesigned or notarized; add that as a separate
+release hardening step if macOS distribution warnings become a blocker.
 
 Configure an MCP host:
 
@@ -256,7 +254,7 @@ guidance is needed.
 ## Release
 
 The `Publish` GitHub Actions workflow publishes the Rust crate to crates.io and
-the Pi integration package to npm when a GitHub release is published. It can
+the Pi integration package to npm when a tag such as `v0.2.1` is pushed. It can
 also be run manually as a dry run.
 
 Repository setup:
@@ -265,16 +263,18 @@ Repository setup:
 2. Add it as the GitHub repository secret `CARGO_REGISTRY_TOKEN`.
 3. Create an npm automation token with publish rights for `platypus-pi`.
 4. Add it as the GitHub repository secret `NPM_TOKEN`.
-5. Publish a GitHub release for the version in `Cargo.toml` and `package.json`.
+5. Push a Git tag such as `v0.2.1`.
 
-The workflow always runs `make check`, `make publish-dry-run`, per-platform npm
-binary validation, combined npm package validation, and `make
-npm-publish-dry-run` before upload steps. npm publishing waits for the crate
-publish job, so a crates.io failure prevents the npm package from being
-published.
+The workflow derives the package version from the tag, runs Bazel test/build
+targets, stamps `Cargo.toml`, `Cargo.lock`, and `package.json` inside the CI
+workspace, validates crates.io and npm package uploads, publishes the packages,
+and creates the GitHub Release after package publishing succeeds. npm publishing
+waits for the crate publish job, so a crates.io failure prevents the npm package
+from being published.
 
 Manual `workflow_dispatch` runs default to `dry_run=true`, which validates both
-release paths without uploading. Set `dry_run=false` only when both
+release paths without uploading. Provide `version=0.2.1` to validate a specific
+future release version. Set `dry_run=false` only when both
 `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN` are configured and an actual publish is
 intended.
 
