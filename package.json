@@ -26,6 +26,11 @@
       "development Cargo.toml checkout",
       "platypus-mcp on PATH"
     ],
+    "packageLocalBinaryLayouts": [
+      "bin/{binary}",
+      "bin/{platform}/{binary}",
+      "vendor/{platform}/{binary}"
+    ],
     "platformBinaryPackages": {
       "linux-x64": "@platypus/mcp-linux-x64",
       "linux-arm64": "@platypus/mcp-linux-arm64",

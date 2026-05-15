@@ -16,6 +16,11 @@ const requiredMetadata = {
     "development Cargo.toml checkout",
     "platypus-mcp on PATH",
   ],
+  packageLocalBinaryLayouts: [
+    "bin/{binary}",
+    "bin/{platform}/{binary}",
+    "vendor/{platform}/{binary}",
+  ],
 };
 
 const forbiddenPrefixes = [
@@ -85,6 +90,12 @@ if (!metadata || typeof metadata !== "object") {
   if (JSON.stringify(fallbackOrder) !== JSON.stringify(requiredMetadata.binaryFallbackOrder)) {
     metadataErrors.push(`platypusMcp.binaryFallbackOrder must be ${requiredMetadata.binaryFallbackOrder.join(" -> ")}`);
   }
+  const packageLocalBinaryLayouts = Array.isArray(metadata.packageLocalBinaryLayouts) ? metadata.packageLocalBinaryLayouts : [];
+  for (const layout of requiredMetadata.packageLocalBinaryLayouts) {
+    if (!packageLocalBinaryLayouts.includes(layout)) {
+      metadataErrors.push(`platypusMcp.packageLocalBinaryLayouts must include ${layout}`);
+    }
+  }
   const platformPackages = metadata.platformBinaryPackages;
   if (!platformPackages || typeof platformPackages !== "object" || Object.keys(platformPackages).length === 0) {
     metadataErrors.push("platypusMcp.platformBinaryPackages must document supported optional binary packages");
@@ -104,6 +115,25 @@ if (requireBinary && binaryCandidates.length === 0) {
   metadataErrors.push("PLATYPUS_NPM_REQUIRE_BINARY=1 requires at least one executable bin/ or vendor/ binary in the package");
 }
 
+const requiredPlatforms = (process.env.PLATYPUS_NPM_REQUIRED_PLATFORMS ?? "")
+  .split(",")
+  .map((platform) => platform.trim())
+  .filter(Boolean);
+for (const platform of requiredPlatforms) {
+  const platformCandidates = [
+    `bin/${platform}/${requiredMetadata.binaryName}`,
+    `vendor/${platform}/${requiredMetadata.binaryName}`,
+  ];
+  const packedPlatformBinaries = packedFiles.filter((file) => platformCandidates.includes(file.path));
+  if (packedPlatformBinaries.length === 0) {
+    metadataErrors.push(`Required platform binary missing for ${platform}; expected ${platformCandidates.join(" or ")}`);
+    continue;
+  }
+  if (!packedPlatformBinaries.some((file) => typeof file?.mode === "number" && (file.mode & 0o111) !== 0)) {
+    metadataErrors.push(`Required platform binary for ${platform} must be executable`);
+  }
+}
+
 if (missing.length > 0 || forbidden.length > 0 || metadataErrors.length > 0) {
   if (missing.length > 0) console.error(`Missing required npm package files: ${missing.join(", ")}`);
   if (forbidden.length > 0) console.error(`Forbidden npm package files: ${forbidden.join(", ")}`);
@@ -116,4 +146,7 @@ if (binaryCandidates.length === 0) {
   console.log("No package-local MCP binary is present in this source checkout; release builds may add bin/ or vendor/ platform binaries before packing.");
 } else {
   console.log(`Included package-local binary candidate(s): ${binaryCandidates.join(", ")}`);
+}
+if (requiredPlatforms.length > 0) {
+  console.log(`Required platform binary validation passed: ${requiredPlatforms.join(", ")}`);
 }
