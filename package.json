@@ -1,0 +1,16 @@
+{
+  "name": "platypus-pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi package for first-class Platypus MCP project-management integration",
+  "keywords": ["pi-package", "platypus", "mcp", "project-management"],
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./extensions/platypus"]
+  }
+}
