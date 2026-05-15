@@ -191,7 +191,7 @@ PLATYPUS_MCP_ROOT=/path/to/project cargo run
 
 Use stdio while the tool contract stabilizes.
 
-Prefer the bootstrap command for supported hosts:
+Prefer the bootstrap command for supported MCP hosts:
 
 ```bash
 platypus-mcp bootstrap codex
@@ -199,6 +199,21 @@ platypus-mcp bootstrap claude
 platypus-mcp bootstrap opencode
 platypus-mcp bootstrap pi
 ```
+
+This repository also contains a Pi package manifest and extension. During local
+checkout development, `.pi/settings.json` loads the package from `..`, so Pi
+starts with `platypus_*` tools available in this repository. To try the same
+extension from another project before publishing, install this checkout or a Git
+URL as a Pi package:
+
+```bash
+cd /path/to/other-project
+pi install -l /path/to/platypus-mcp
+# or later: pi install -l git:github.com/junousia/platypus-mcp
+```
+
+The extension forwards each `platypus_*` Pi tool to the Rust tool CLI with the
+Platypus root fixed to Pi's current working directory.
 
 Add `--init-project` for fresh repositories so `AGENTS.md`, `CLAUDE.md`,
 `WORKFLOW.md`, `platy.yaml`, and `backlog/` are created alongside host MCP
