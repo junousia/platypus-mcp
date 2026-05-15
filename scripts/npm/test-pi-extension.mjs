@@ -26,9 +26,12 @@ import {
 } from "../../extensions/platypus/runtime.mjs";
 import {
 	buildImplementationPlanReviewPrompt,
+	buildPostImplementationReviewPrompt,
 	buildStoryReviewPrompt,
+	formatImplementationResultReview,
 	formatStoryReview,
 	implementationPlanReviewExpectation,
+	reviewImplementationResult,
 	reviewStoryDraft,
 } from "../../extensions/platypus/review.mjs";
 
@@ -160,6 +163,37 @@ assert.equal(directPlan.durable_task_plan_required, false);
 const durablePlan = implementationPlanReviewExpectation({ execution_path: "worker_handoff", planning_gate: "task_plan" });
 assert.equal(durablePlan.mode, "durable_task_plan");
 assert.equal(durablePlan.durable_task_plan_required, true);
+assert.match(buildPostImplementationReviewPrompt("MCP-135"), /platypus_get_backlog_item/);
+assert.match(buildPostImplementationReviewPrompt("MCP-135"), /platypus_list_findings/);
+assert.match(buildPostImplementationReviewPrompt("MCP-135"), /platypus_complete_backlog_item/);
+assert.match(buildPostImplementationReviewPrompt("task 123"), /platypus_finish_work/);
+const cleanResultReview = reviewImplementationResult({
+	changed_files: ["extensions/platypus/review.mjs"],
+	verification_status: "passed",
+	verification_refs: ["npm test"],
+	findings_reviewed: true,
+});
+assert.equal(cleanResultReview.status, "ready_to_complete");
+assert.equal(cleanResultReview.completion_tool, "platypus_complete_backlog_item");
+assert.match(formatImplementationResultReview(cleanResultReview), /Ready to complete/);
+const findingResultReview = reviewImplementationResult({
+	changed_files: ["src/lib.rs"],
+	verification_status: "passed",
+	verification_refs: ["cargo test"],
+	findings: [{ title: "Follow-up" }],
+});
+assert.equal(findingResultReview.status, "needs_action");
+assert.match(formatImplementationResultReview(findingResultReview), /platypus_record_finding/);
+const followUpResultReview = reviewImplementationResult({
+	execution_path: "worker_handoff",
+	changed_files: ["src/lib.rs"],
+	verification_status: "passed",
+	verification_refs: ["cargo test"],
+	findings_reviewed: true,
+	follow_up_items: [{ title: "Improve docs" }],
+});
+assert.equal(followUpResultReview.completion_tool, "platypus_finish_work");
+assert.match(formatImplementationResultReview(followUpResultReview), /platypus_create_backlog_items/);
 
 const vagueReview = reviewStoryDraft({ title: "Auth", goal: "Do auth" });
 assert.equal(vagueReview.status, "blocked");
@@ -237,6 +271,7 @@ for (const toolName of [
 	"list_task_plans",
 	"prepare_work",
 	"complete_backlog_item",
+	"record_finding",
 	"doctor_snapshot",
 ]) {
 	assert.match(extensionSource, new RegExp(`name:\\s*"${toolName}"`));

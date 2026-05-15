@@ -259,7 +259,7 @@ workflow instead of asking the agent to fill a generic JSON passthrough. The
 normal set is `platypus_inspect_session`, `platypus_inspect_work_queue`,
 `platypus_create_backlog_items`, `platypus_prepare_work`,
 `platypus_complete_backlog_item`, `platypus_finish_work`,
-`platypus_record_evidence`, `platypus_list_findings`,
+`platypus_record_evidence`, `platypus_record_finding`, `platypus_list_findings`,
 `platypus_update_finding_disposition`, `platypus_events_replay`, and
 `platypus_doctor_snapshot`. Use `platypus_call_tool` only when a less common
 Rust MCP tool has no dedicated Pi wrapper yet.
@@ -275,6 +275,10 @@ written through typed backlog create or update tools.
 Run `/platy-plan-review [item-id]` before non-trivial implementation. It asks
 the agent to decide between response-local direct planning and durable strict
 task-plan creation from project policy and user intent.
+Run `/platy-review-result [item-or-task-id]` after implementation and
+verification. It asks the agent to compare the result to acceptance criteria,
+record findings or approved follow-up items, and then use the correct direct or
+worker completion tool.
 Use `/platy-direction-revise` or `/platy-standards-revise` to update those
 files later without rerunning the whole setup flow.
 

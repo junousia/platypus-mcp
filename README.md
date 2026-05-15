@@ -242,7 +242,7 @@ uses dedicated typed tools for startup and execution, including
 `platypus_inspect_session`, `platypus_inspect_work_queue`,
 `platypus_create_backlog_items`, `platypus_prepare_work`,
 `platypus_complete_backlog_item`, `platypus_finish_work`,
-`platypus_record_evidence`, `platypus_list_findings`,
+`platypus_record_evidence`, `platypus_record_finding`, `platypus_list_findings`,
 `platypus_update_finding_disposition`, and `platypus_doctor_snapshot`.
 `platypus_call_tool` remains available only as a generic escape hatch for tools
 that do not yet have a dedicated Pi wrapper.
@@ -265,13 +265,16 @@ The Pi happy path is intentionally short:
 5. `/platy-plan-review` asks the agent to produce a lightweight implementation
    review for the next ready item or a selected item, creating durable task
    plans only when policy or user approval calls for them.
-6. `/platy-plan` asks the agent to create concrete backlog items when the queue
+6. `/platy-review-result` asks the agent to compare implemented work against
+   acceptance criteria, verification, findings, follow-ups, and the definition
+   of done before completing direct or worker-handoff work.
+7. `/platy-plan` asks the agent to create concrete backlog items when the queue
    is empty.
-7. `/platy-start` asks the agent to work the next ready item and complete it
+8. `/platy-start` asks the agent to work the next ready item and complete it
    with `platypus_complete_backlog_item`.
-8. `/platy-direction-revise` and `/platy-standards-revise` revisit captured
+9. `/platy-direction-revise` and `/platy-standards-revise` revisit captured
    guidance without rerunning the whole setup flow.
-9. `/platy-doctor` shows setup or recovery guidance when work is blocked.
+10. `/platy-doctor` shows setup or recovery guidance when work is blocked.
 
 Add `--init-project` for fresh repositories so `AGENTS.md`, `CLAUDE.md`,
 `WORKFLOW.md`, `platy.yaml`, `backlog/`, durable direction files, and

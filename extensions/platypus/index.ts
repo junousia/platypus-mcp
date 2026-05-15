@@ -23,6 +23,7 @@ import {
 } from "./renderers.mjs";
 import {
 	buildImplementationPlanReviewPrompt,
+	buildPostImplementationReviewPrompt,
 	buildStoryReviewPrompt,
 } from "./review.mjs";
 import { runPlatypusTool as runPlatypusToolRuntime } from "./runtime.mjs";
@@ -308,6 +309,7 @@ const CORE_TYPED_TOOL_NAMES = new Set<string>([
 	"complete_backlog_item",
 	"finish_work",
 	"record_evidence",
+	"record_finding",
 	"list_findings",
 	"validate_findings",
 	"update_finding_disposition",
@@ -473,6 +475,21 @@ const coreToolParameters: Record<string, unknown> = {
 		},
 		{ additionalProperties: false, description: "Record traceability evidence." },
 	),
+	record_finding: Type.Object(
+		{
+			id: Type.Optional(Type.String({ description: "Explicit finding id. Usually omit so Platypus allocates one." })),
+			source_item_id: Type.Optional(itemId("Source backlog item id.")),
+			source_task_id: Type.Optional(taskId),
+			source_finding_ref: Type.Optional(Type.String({ description: "External or worker-local finding reference." })),
+			title: Type.String({ description: "Human-readable finding title." }),
+			summary: Type.String({ description: "Finding summary, risk, limitation, or required follow-up." }),
+			severity: Type.Optional(findingSeverity),
+			required: Type.Optional(Type.Boolean({ description: "Whether this finding must be dispositioned before final integration." })),
+			evidence_refs: stringList("Evidence references supporting this finding."),
+			metadata: Type.Optional(Type.Object({}, { additionalProperties: true, description: "Free-form finding metadata." })),
+		},
+		{ additionalProperties: false, description: "Record a Platypus finding or follow-up discovered during review." },
+	),
 	list_findings: Type.Object(
 		{
 			source_item_id: Type.Optional(itemId("Source backlog item id.")),
@@ -616,6 +633,10 @@ const platypusTools: PlatypusTool[] = [
 	{
 		name: "record_evidence",
 		description: "Record Platypus evidence for verification, findings, handoff, or recovery.",
+	},
+	{
+		name: "record_finding",
+		description: "Record a Platypus finding, limitation, risk, or required follow-up.",
 	},
 	{
 		name: "list_findings",
@@ -884,6 +905,15 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
 			const input = Array.isArray(args) ? args.join(" ") : String(args ?? "");
 			pi.sendUserMessage(buildImplementationPlanReviewPrompt(input), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+		},
+	});
+
+	pi.registerCommand("platy-review-result", {
+		description: "Review implemented work, findings, and completion evidence",
+		handler: async (args, ctx) => {
+			if (!latestSnapshot) await refreshSnapshot(ctx);
+			const input = Array.isArray(args) ? args.join(" ") : String(args ?? "");
+			pi.sendUserMessage(buildPostImplementationReviewPrompt(input), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
 

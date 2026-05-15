@@ -102,3 +102,68 @@ export function buildImplementationPlanReviewPrompt(input = "") {
 		"For worker_handoff, task_plan, approved_task_plan, or user-approved durable planning, call platypus_write_task_plan and then platypus_validate_task_plan.",
 	].join(" ");
 }
+
+export function reviewImplementationResult(result = {}) {
+	const actions = [];
+	const changedFiles = asArray(result.changed_files);
+	const verificationStatus = result.verification_status ?? "unknown";
+	const verificationRefs = asArray(result.verification_refs);
+	const findings = asArray(result.findings);
+	const findingRefs = asArray(result.finding_refs);
+	const followUps = asArray(result.follow_up_items);
+	const acceptance = asArray(result.acceptance);
+	const acceptanceCovered = result.acceptance_covered === true || acceptance.every((item) => item?.covered === true);
+	const findingsReviewed = result.findings_reviewed === true || findings.length > 0 || findingRefs.length > 0;
+
+	if (acceptance.length > 0 && !acceptanceCovered) {
+		actions.push("Map each acceptance criterion to implemented behavior or a remaining gap.");
+	}
+	if (changedFiles.length === 0 && result.non_file_work !== true) {
+		actions.push("Confirm changed files or mark the review as non-file work.");
+	}
+	if (verificationStatus !== "passed" || verificationRefs.length === 0) {
+		actions.push("Add passed verification evidence or record the explicit risk before completion.");
+	}
+	if (!findingsReviewed) {
+		actions.push("Review findings and either record follow-up findings or set findings_reviewed=true.");
+	}
+	if (findings.length > 0) {
+		actions.push("Record implementation findings with platypus_record_finding before completion.");
+	}
+	if (followUps.length > 0) {
+		actions.push("Create approved follow-up backlog items with platypus_create_backlog_items.");
+	}
+
+	return {
+		status: actions.length > 0 ? "needs_action" : "ready_to_complete",
+		actions,
+		completion_tool: result.execution_path === "worker_handoff" ? "platypus_finish_work" : "platypus_complete_backlog_item",
+	};
+}
+
+export function formatImplementationResultReview(result) {
+	const actions = result.actions.length > 0 ? result.actions : ["Ready to complete."];
+	return [
+		`Implementation review: ${result.status}`,
+		`Completion tool: ${result.completion_tool}`,
+		"Actions:",
+		...actions.map((item) => `- ${item}`),
+	].join("\n");
+}
+
+export function buildPostImplementationReviewPrompt(input = "") {
+	const trimmed = String(input ?? "").trim();
+	const subject = trimmed.length > 0
+		? `Review completed Platypus implementation work for: ${trimmed}`
+		: "Review completed Platypus implementation work for the current or next ready item.";
+	return [
+		subject,
+		"First call platypus_inspect_session and platypus_inspect_work_queue. If an item id is supplied, call platypus_get_backlog_item. If a task id or worker handoff is supplied, inspect recent task events before reviewing.",
+		"Compare the result against acceptance criteria, owned surfaces, docs/engineering.md, changed files, and verification evidence.",
+		"Check findings explicitly: call platypus_list_findings and platypus_validate_findings for the item or task when applicable.",
+		"If the implementation discovered limitations, risks, or required follow-up, call platypus_record_finding before completion. If follow-up user stories are approved, call platypus_create_backlog_items with concrete follow-up items.",
+		"For direct manager-workspace work, complete with platypus_complete_backlog_item and include summary, changed_files, verification_status, verification_summary, verification_refs, and finding_refs or findings_reviewed context in the summary.",
+		"For worker-handoff work, finish with platypus_finish_work and include task_id or assignment_id, summary, changed_files, verification_status, verification_summary, verification_refs, findings, and findings_reviewed.",
+		"Do not close the item until unresolved required findings, missing verification, and acceptance gaps are either fixed, recorded as findings, or explicitly approved as deferred follow-up.",
+	].join(" ");
+}

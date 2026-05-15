@@ -89,6 +89,12 @@ non-trivial work starts. It asks the agent to decide between response-local
 direct guidance and durable task-plan creation, and typed wrappers are exposed
 for `platypus_write_task_plan`, `platypus_validate_task_plan`,
 `platypus_inspect_task_plan`, and `platypus_list_task_plans`.
+Use `/platy-review-result [item-or-task-id]` after implementation. It asks the
+agent to compare changes to acceptance criteria and engineering standards,
+inspect findings, call typed `platypus_record_finding` or
+`platypus_create_backlog_items` for approved follow-up work, then use
+`platypus_complete_backlog_item` for direct work or `platypus_finish_work` for
+worker handoff.
 
 A concrete minimal direct-work example is documented in
 [docs/workflow.md](workflow.md#minimal-direct-work-example). Use it for

@@ -330,13 +330,21 @@ need to memorize the underlying MCP tool surface:
 7. Run `/platy-start` to ask the agent to work on the next ready item. The
    prompt names the target item and tells the agent to finish with
    `platypus_complete_backlog_item`.
-8. Run `/platy-complete` when implementation is done but the agent has not yet
+8. Run `/platy-review-result [item-or-task-id]` after implementation and
+   verification when the result needs an explicit review. The agent should
+   compare changes to acceptance criteria, check verification, call
+   `platypus_list_findings` and `platypus_validate_findings`, record required
+   findings with `platypus_record_finding`, create approved follow-up items
+   with `platypus_create_backlog_items`, and then choose
+   `platypus_complete_backlog_item` for direct work or `platypus_finish_work`
+   for worker handoff.
+9. Run `/platy-complete` when implementation is done but the agent has not yet
    closed the item. The required fields are `item_id`, `summary`,
    `changed_files`, `verification_status`, `verification_summary`, and
    `verification_refs`.
-9. Run `/platy-direction-revise` or `/platy-standards-revise` to revise
+10. Run `/platy-direction-revise` or `/platy-standards-revise` to revise
    captured guidance without rerunning the whole setup flow.
-10. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
+11. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
 
 These commands surface current state and exact tools, but they do not choose a
 product direction for the user. The agent remains responsible for judgement and
@@ -562,6 +570,11 @@ so reconciliation can report the remaining gap.
     duplicate decision about a finding
   - `external_report`: imported issue, PR review, CI report, or external audit
 - Use `record_finding` for limitations or required follow-up work.
+- In Pi, `/platy-review-result [item-or-task-id]` is the normal post-work
+  review shortcut. It asks the agent to inspect the item or task, compare
+  acceptance criteria with the implementation, validate findings, record
+  required findings or approved follow-up items, and only then call the correct
+  completion tool.
 - Use `complete_backlog_item` to close direct manager-workspace work.
 - Use `validate_findings` before claiming a task is handled.
 - Use `integrate_worker_result` to bring a completed verified worktree back
