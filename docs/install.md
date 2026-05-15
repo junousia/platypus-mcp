@@ -253,6 +253,11 @@ platypus-mcp bootstrap pi --root /path/to/project --check --init-project
 If the check reports that the binary cannot be resolved, install the server with
 `cargo install platypus-mcp`, install a Pi npm package that contains a bundled
 platform binary, or set `PLATYPUS_MCP_BIN` to a working `platypus-mcp` path.
+If Pi starts but the Platypus commands are missing, rerun the bootstrap check,
+inspect `.pi/settings.json`, and make sure the `packages` array contains
+`npm:platypus-pi` or a local checkout path. The Rust server is still
+host-neutral; Pi supplies the typed command/UI layer and forwards calls to the
+same local `platypus-mcp` binary.
 
 The Pi extension exposes dedicated typed `platypus_*` tools for the showcase
 workflow instead of asking the agent to fill a generic JSON passthrough. The

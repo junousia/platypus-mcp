@@ -74,6 +74,20 @@ creation, direct completion, worker completion, evidence/findings, events, and
 doctor diagnostics. `platypus_call_tool` is intentionally retained as a generic
 escape hatch for uncommon tools, but it is not the normal showcase path.
 
+Pi command mapping:
+
+| Pi command | Primary MCP tools |
+| --- | --- |
+| `/platy-ready`, `/platy-refresh`, `/platy-next` | `inspect_session`, `inspect_work_queue` |
+| `/platy-direction`, `/platy-direction-revise` | typed backlog/update tools plus durable docs chosen by the agent |
+| `/platy-standards`, `/platy-standards-revise` | typed backlog/update tools plus `docs/engineering.md` edits chosen by the agent |
+| `/platy-story-review` | `get_backlog_item`, `create_backlog_items`, `update_backlog_item` |
+| `/platy-plan-review` | `inspect_work_queue`, `get_backlog_item`, `write_task_plan`, `validate_task_plan` |
+| `/platy-plan` | `inspect_session`, `create_backlog_items`, `inspect_work_queue` |
+| `/platy-start` | `get_backlog_item`, project edits, `complete_backlog_item` |
+| `/platy-review-result` | `get_backlog_item`, `list_findings`, `validate_findings`, `record_finding`, `create_backlog_items`, `complete_backlog_item`, `finish_work` |
+| `/platy-doctor` | `doctor_snapshot` |
+
 Direct quick path: read the startup guidance, call `inspect_session`, inspect
 for `direct_ready`, edit the manager workspace, then call
 `complete_backlog_item`. Call `prepare_work` first only when response-local

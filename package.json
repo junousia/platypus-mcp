@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": false,
   "description": "Pi package for first-class Platypus MCP project-management integration",
-  "keywords": ["pi-package", "platypus", "mcp", "project-management"],
+  "keywords": ["pi-package", "platypus", "mcp", "project-management", "workflow"],
   "license": "MIT",
   "type": "module",
   "publishConfig": {

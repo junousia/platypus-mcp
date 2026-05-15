@@ -361,6 +361,39 @@ package and Platypus scaffold, validate core tools, and write a dry-run
 that asks for structured feedback on setup, UI, workflow, schemas, result
 review, and closure behavior.
 
+### Pi End-To-End Example
+
+This example is intentionally small but follows the full sustainable-development
+shape. It starts from a product idea and ends with a closed direct backlog item:
+
+```text
+/platy-ready
+/platy-direction
+Goal: a small personal habit tracker for one user, built as a local web app.
+/platy-standards
+Use a simple module layout, keep verification as make check, and record
+follow-up risks as findings.
+/platy-plan
+Create the first two concrete backlog items for product baseline and the first
+static UI slice.
+/platy-story-review PROJ-001
+/platy-plan-review PROJ-001
+/platy-start
+```
+
+After implementation and verification:
+
+```text
+/platy-review-result PROJ-001
+```
+
+The agent should inspect the item, changed files, verification result, and
+findings. If the result is complete, it calls
+`platypus_complete_backlog_item` with summary, changed files, verification
+status, verification references, and any finding references. If the work exposed
+risks or missing requirements, it records them with `platypus_record_finding` or
+creates approved follow-up items before closing.
+
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime
 status, task attempts, PR metadata, or closure state.

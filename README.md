@@ -31,6 +31,38 @@ The preferred workflow is documented in [docs/workflow.md](docs/workflow.md),
 client setup is documented in [docs/install.md](docs/install.md), and the full
 tool surface is documented in [docs/tools.md](docs/tools.md).
 
+## Pi Showcase
+
+Pi is the showcase integration because it can expose Platypus as a native
+workflow instead of a generic MCP tool catalog. The Rust MCP server remains
+host-neutral: Pi is a first-class UI/control surface on top of the same
+deterministic tools that Codex, Claude, OpenCode, and other clients call.
+
+Try the local Pi package against a temporary project:
+
+```bash
+make pi-feedback
+```
+
+That dry run bootstraps `.pi/settings.json`, initializes Platypus project
+guidance, validates package resolution, checks core tools, and writes
+`FEEDBACK.md` in the temporary project. Use `PI_DRY_RUN=0 make pi-feedback`
+when Pi and a model are configured and you want live feedback.
+
+For an existing project:
+
+```bash
+platypus-mcp bootstrap pi --root /path/to/project --init-project
+cd /path/to/project
+pi
+```
+
+Inside Pi, the short path is `/platy-ready`, `/platy-direction`,
+`/platy-standards`, `/platy-plan`, `/platy-start`, and
+`/platy-review-result`. The extension also exposes typed `platypus_*` tools so
+agents can create backlog items, inspect queue state, record findings, and close
+work without filling opaque JSON.
+
 The roadmap now tracks the landed MCP baseline and candidate next directions
 instead of a manual queue index. See [docs/roadmap.md](docs/roadmap.md) for the
 current product direction.
