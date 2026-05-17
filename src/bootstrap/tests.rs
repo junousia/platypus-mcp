@@ -131,6 +131,34 @@ fn bootstrap_check_with_init_project_requires_scaffold_directories() {
 }
 
 #[test]
+fn bootstrap_check_with_init_project_requires_direction_docs() {
+    let temp = TempDir::new().expect("temp dir");
+    let config = temp.path().join("config.toml");
+    let apply = vec![
+        "codex".to_string(),
+        "--config".to_string(),
+        config.display().to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+    ];
+    assert_eq!(run_cli(&apply).expect("bootstrap"), 0);
+    fs::remove_file(temp.path().join("docs/product.md")).expect("remove product direction");
+
+    let check = vec![
+        "codex".to_string(),
+        "--check".to_string(),
+        "--config".to_string(),
+        config.display().to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+    ];
+
+    assert_eq!(run_cli(&check).expect("check missing direction doc"), 1);
+}
+
+#[test]
 fn codex_bootstrap_preserves_tool_sections() {
     let temp = TempDir::new().expect("temp dir");
     let config = temp.path().join("config.toml");

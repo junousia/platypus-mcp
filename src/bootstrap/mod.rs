@@ -202,7 +202,9 @@ fn print_plan(status: &str, plan: &BootstrapPlan) {
         );
     } else {
         println!("project init: not requested");
-        println!("next: run with --init-project to create AGENTS.md, WORKFLOW.md, and backlog/");
+        println!(
+            "next: run with --init-project to create AGENTS.md, WORKFLOW.md, docs/, and backlog/"
+        );
     }
 }
 
@@ -213,6 +215,7 @@ fn project_scaffold_ready(root: &std::path::Path) -> bool {
         "backlog/plans",
         "backlog/epics",
         "backlog/templates",
+        "docs",
     ]
     .iter()
     .all(|relative| root.join(relative).is_dir())
@@ -225,6 +228,10 @@ fn project_scaffold_ready(root: &std::path::Path) -> bool {
             "backlog/epics/general.md",
             "backlog/templates/item.md",
             "backlog/templates/plan.yaml",
+            "docs/product.md",
+            "docs/architecture.md",
+            "docs/testing.md",
+            "docs/engineering.md",
         ]
         .iter()
         .all(|relative| root.join(relative).is_file())
