@@ -49,6 +49,33 @@ assert.match(dashboard, /1 ready · 2 blocked · 0 active · 1 integration · 3\
 assert.match(dashboard, /MCP-125 P0 direct_ready/);
 assert.match(dashboard, /Blocked: MCP-126/);
 
+const closedSessionEnvelope = {
+	action: "inspect_session",
+	status: "completed",
+	summary: "Session inspected; use the recommended tool to continue.",
+	next_action: "All 135 backlog item(s) are closed. Use the host model to decide concrete follow-up work.",
+	data: {
+		compact: {
+			ok: true,
+			queue_state: "closed",
+			reason: "All 135 backlog item(s) are closed. Use the host model to decide concrete follow-up work.",
+			recommended_tool: "create_backlog_items",
+			root: "/home/jukka/work/mcp-rs",
+			runnable_items: 0,
+			total_items: 135,
+		},
+	},
+};
+const closedSnapshot = snapshotFromDetails(closedSessionEnvelope);
+assert.equal(closedSnapshot.status, "ok");
+assert.equal(closedSnapshot.ready, 0);
+assert.equal(closedSnapshot.closed, 135);
+assert.equal(closedSnapshot.total, 135);
+assert.equal(closedSnapshot.recommendedTool, "create_backlog_items");
+const closedDashboard = renderToolResultLines({ details: closedSessionEnvelope }).join("\n");
+assert.match(closedDashboard, /0 ready · 0 blocked · 0 active · 135\/135 closed/);
+assert.doesNotMatch(closedDashboard, /unavailable/i);
+
 const completion = renderToolResultLines({
 	details: {
 		action: "complete_backlog_item",

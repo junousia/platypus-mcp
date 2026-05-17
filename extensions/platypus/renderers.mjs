@@ -34,8 +34,12 @@ export function snapshotFromDetails(details) {
 	const data = asObject(envelope.data) ?? envelope;
 	const queue = asObject(data.queue);
 	const status = asObject(data.status);
+	const compact = asObject(data.compact);
+	const action = asString(envelope.action) ?? asString(data.action);
+	const compactQueueState = asString(compact?.queue_state);
+	const sessionCompact = compact && action === "inspect_session";
 	const inventory = asObject(queue?.inventory);
-	if (!queue && !status) return undefined;
+	if (!queue && !status && !sessionCompact) return undefined;
 	const items = asArray(queue?.items).map((item) => asObject(item)).filter(Boolean);
 	const readyItems = items.map(itemFromQueueEntry).filter(Boolean);
 	const blockedItems = asArray(inventory?.dependency_blocked_items)
@@ -47,19 +51,20 @@ export function snapshotFromDetails(details) {
 	const ready = asNumber(queue?.ready_count) ?? asNumber(inventory?.runnable_count) ?? asNumber(status?.runnable_backlog_items) ?? readyItems.length;
 	const blocked = asNumber(queue?.blocked_count) ?? asNumber(inventory?.dependency_blocked_count) ?? blockedItems.length;
 	const active = asNumber(queue?.active_count) ?? asNumber(inventory?.active_lifecycle_count) ?? 0;
+	const compactOk = sessionCompact && (compact?.ok === true || compactQueueState === "closed" || compactQueueState === "empty_backlog");
 
 	return {
-		ready,
+		ready: asNumber(compact?.runnable_items) ?? ready,
 		blocked,
 		active,
-		closed: asNumber(inventory?.closed_count),
-		total: asNumber(inventory?.total_count) ?? asNumber(status?.backlog_items),
+		closed: asNumber(inventory?.closed_count) ?? (compactQueueState === "closed" ? asNumber(compact?.total_items) : undefined),
+		total: asNumber(inventory?.total_count) ?? asNumber(status?.backlog_items) ?? asNumber(compact?.total_items),
 		pendingIntegration: asNumber(inventory?.pending_integration_count),
-		root: asString(data.root) ?? asString(status?.root),
-		status: envelope.status === "completed" || envelope.ok === true ? "ok" : envelope.status === "failed" ? "error" : "unknown",
-		summary: asString(data.summary) ?? asString(envelope.summary),
-		nextAction: asString(envelope.next_action) ?? asString(data.reason) ?? asString(queue?.reason),
-		recommendedTool: asString(data.recommended_tool) ?? asString(queue?.recommended_tool),
+		root: asString(compact?.root) ?? asString(data.root) ?? asString(status?.root),
+		status: envelope.status === "completed" || envelope.ok === true || compactOk ? "ok" : envelope.status === "failed" ? "error" : "unknown",
+		summary: asString(compact?.summary) ?? asString(data.summary) ?? asString(envelope.summary),
+		nextAction: asString(envelope.next_action) ?? asString(compact?.reason) ?? asString(data.reason) ?? asString(queue?.reason),
+		recommendedTool: asString(compact?.recommended_tool) ?? asString(data.recommended_tool) ?? asString(queue?.recommended_tool),
 		readyItems,
 		blockedItems,
 		updatedAt: Date.now(),
