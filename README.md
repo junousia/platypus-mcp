@@ -31,6 +31,39 @@ The preferred workflow is documented in [docs/workflow.md](docs/workflow.md),
 client setup is documented in [docs/install.md](docs/install.md), and the full
 tool surface is documented in [docs/tools.md](docs/tools.md).
 
+## Pi Showcase
+
+Pi is the showcase integration because it can expose Platypus as a native
+workflow instead of a generic MCP tool catalog. The Rust MCP server remains
+host-neutral: Pi is a first-class UI/control surface on top of the same
+deterministic tools that Codex, Claude, OpenCode, and other clients call.
+
+Try the local Pi package against a temporary project:
+
+```bash
+make pi-feedback
+```
+
+That dry run bootstraps `.pi/settings.json`, initializes Platypus project
+guidance, validates package resolution, checks core tools, and writes
+`FEEDBACK.md` in the temporary project. Use `PI_DRY_RUN=0 make pi-feedback`
+when Pi and a model are configured and you want live feedback.
+
+For an existing project:
+
+```bash
+platypus-mcp bootstrap pi --root /path/to/project --init-project
+cd /path/to/project
+pi
+```
+
+Inside Pi, the short path is `/platy-ready`, `/platy-direction`,
+`/platy-standards`, `/platy-steer` when direction changes, `/platy-plan`, `/platy-start`, and
+`/platy-review-result`. The extension also exposes typed `platypus_*` tools so
+agents can create backlog items, inspect queue state, record findings, and close
+work without filling opaque JSON. The full guided example is in
+[docs/workflow.md](docs/workflow.md#pi-end-to-end-example).
+
 The roadmap now tracks the landed MCP baseline and candidate next directions
 instead of a manual queue index. See [docs/roadmap.md](docs/roadmap.md) for the
 current product direction.
@@ -141,6 +174,7 @@ silicon (`darwin-arm64`) package-local binaries under
 `vendor/<platform>/platypus-mcp`. Validate npm package contents with:
 
 ```bash
+make pi-extension-test
 make npm-package
 ```
 
@@ -167,7 +201,7 @@ For a fresh project, configure the host and initialize repo-local guidance in
 one step:
 
 ```bash
-platypus-mcp bootstrap codex --root /path/to/project --init-project
+platypus-mcp bootstrap pi --root /path/to/project --init-project
 ```
 
 Inspect before writing or check an existing setup:
@@ -175,6 +209,7 @@ Inspect before writing or check an existing setup:
 ```bash
 platypus-mcp bootstrap codex --dry-run
 platypus-mcp bootstrap codex --check
+platypus-mcp bootstrap pi --root /path/to/project --check --init-project
 ```
 
 During local development:
@@ -219,11 +254,14 @@ platypus-mcp bootstrap opencode
 platypus-mcp bootstrap pi
 ```
 
-This repository also contains a Pi package manifest and extension. During local
-checkout development, `.pi/settings.json` loads the package from `..`, so Pi
-starts with `platypus_*` tools available in this repository. To try the same
-extension from another project before publishing, install this checkout or a Git
-URL as a Pi package:
+This repository also contains a Pi package manifest and extension. `bootstrap
+pi` writes Pi's native project settings file (`.pi/settings.json`) with
+`npm:platypus-pi` in `packages`, and `--init-project` creates the Platypus
+project guidance in the same pass. During local checkout development,
+`.pi/settings.json` can load the package from `..`, so Pi starts with
+`platypus_*` tools available in this repository. To try the same extension from
+another project before publishing, install this checkout or a Git URL as a Pi
+package:
 
 ```bash
 cd /path/to/other-project
@@ -232,11 +270,55 @@ pi install -l /path/to/platypus-mcp
 ```
 
 The extension forwards each `platypus_*` Pi tool to the Rust tool CLI with the
-Platypus root fixed to Pi's current working directory.
+Platypus root fixed to Pi's current working directory. The normal Pi workflow
+uses dedicated typed tools for startup and execution, including
+`platypus_inspect_session`, `platypus_inspect_work_queue`,
+`platypus_create_backlog_items`, `platypus_prepare_work`,
+`platypus_complete_backlog_item`, `platypus_finish_work`,
+`platypus_record_evidence`, `platypus_record_finding`, `platypus_list_findings`,
+`platypus_update_finding_disposition`, and `platypus_doctor_snapshot`.
+`platypus_call_tool` remains available only as a generic escape hatch for tools
+that do not yet have a dedicated Pi wrapper.
+
+The Pi extension has deterministic local harness tests for command prompt
+generation, tool execution wrappers, binary resolution guidance, and renderer
+fixtures. Run them with `make pi-extension-test`; `make check` includes them.
+Run `make pi-feedback` to create an isolated temporary Pi project, bootstrap the
+local package, validate core Platypus tools, and write a dry-run `FEEDBACK.md`.
+Use `PI_DRY_RUN=0 make pi-feedback` for a live Pi/model exercise.
+
+The Pi happy path is intentionally short:
+
+1. `/platy-refresh` or `/platy-ready` shows current queue state.
+2. `/platy-direction` asks the agent to capture durable product, architecture,
+   and testing direction in repository docs when direction is missing or stale.
+3. `/platy-standards` asks the agent to capture module boundaries, code
+   organization, verification, UI, review, evidence, and definition-of-done
+   expectations in `docs/engineering.md`.
+4. `/platy-steer` asks the agent to compare a requested direction change to
+   current guidance and backlog state, present tradeoffs, ask for approval, and
+   persist accepted docs/backlog/finding updates.
+5. `/platy-story-review` asks the agent to review a draft or existing backlog
+   item for concrete goal, acceptance criteria, dependencies, planning mode,
+   owned surfaces, and expected evidence before execution.
+6. `/platy-plan-review` asks the agent to produce a lightweight implementation
+   review for the next ready item or a selected item, creating durable task
+   plans only when policy or user approval calls for them.
+7. `/platy-review-result` asks the agent to compare implemented work against
+   acceptance criteria, verification, findings, follow-ups, and the definition
+   of done before completing direct or worker-handoff work.
+8. `/platy-plan` asks the agent to create concrete backlog items when the queue
+   is empty.
+9. `/platy-start` asks the agent to work the next ready item and complete it
+   with `platypus_complete_backlog_item`.
+10. `/platy-direction-revise` and `/platy-standards-revise` revisit captured
+   guidance without rerunning the whole setup flow.
+11. `/platy-doctor` shows setup or recovery guidance when work is blocked.
 
 Add `--init-project` for fresh repositories so `AGENTS.md`, `CLAUDE.md`,
-`WORKFLOW.md`, `platy.yaml`, and `backlog/` are created alongside host MCP
-configuration.
+`WORKFLOW.md`, `platy.yaml`, `backlog/`, durable direction files, and
+engineering standards under `docs/` are created alongside host MCP
+configuration or Pi package settings.
 
 If your host defers tool schemas, read resource
 `platypus://guidance/tool-preload` or prompt `platypus-tool-preload` at session

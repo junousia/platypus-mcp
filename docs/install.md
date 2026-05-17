@@ -49,13 +49,16 @@ packing the npm artifact or publish matching platform-specific binary packages.
 Validate npm package contents from the repository root:
 
 ```bash
+make pi-extension-test
 make npm-package
 make release-check
 ```
 
-The npm validation uses `npm pack --dry-run` and checks that the package keeps
-extension files and binary resolver metadata while excluding build caches,
-local state, backlog files, and secrets.
+The Pi extension test harness uses fake command execution and renderer fixtures,
+so it does not require a live Pi agent or network access. The npm validation
+uses `npm pack --dry-run` and checks that the package keeps extension files and
+binary resolver metadata while excluding build caches, local state, backlog
+files, test-only harness files, and secrets.
 Release validation can set `PLATYPUS_NPM_REQUIRE_BINARY=1` after staging a
 platform binary under `bin/` or `vendor/`; the check then requires an
 executable package-local binary candidate.
@@ -88,12 +91,16 @@ platypus-mcp bootstrap pi
 For a fresh project, initialize the repository guidance at the same time:
 
 ```bash
-platypus-mcp bootstrap codex --root /path/to/project --init-project
+platypus-mcp bootstrap pi --root /path/to/project --init-project
 ```
 
-That writes host MCP configuration and creates project-local guidance such as
-`AGENTS.md`, `CLAUDE.md`, `WORKFLOW.md`, `platy.yaml`, and `backlog/` in the
-target root. Existing files are preserved by default.
+That writes host configuration and creates project-local guidance such as
+`AGENTS.md`, `CLAUDE.md`, `WORKFLOW.md`, `platy.yaml`, `backlog/`, durable
+direction templates, and engineering standards under `docs/` in the target
+root. Existing files are preserved by default. For Pi specifically,
+bootstrap writes `.pi/settings.json` with the `npm:platypus-pi` package entry
+instead of writing a generic `.mcp.json` file; the Pi package supplies the
+`platypus_*` tools and forwards them to the Rust MCP tool CLI.
 
 Useful bootstrap options:
 
@@ -104,6 +111,7 @@ platypus-mcp bootstrap codex --global
 platypus-mcp bootstrap codex --root /path/to/project
 platypus-mcp bootstrap codex --root /path/to/project --init-project
 platypus-mcp bootstrap codex --root /path/to/project --init-project --project-name "My App"
+platypus-mcp bootstrap pi --root /path/to/project --check --init-project
 ```
 
 By default `bootstrap <host>` only wires the MCP server into the selected host.
@@ -224,6 +232,84 @@ For a fresh project:
 ```bash
 platypus-mcp bootstrap opencode --root /path/to/project --init-project
 ```
+
+## Pi
+
+Pi loads packages from project settings, so Platypus uses `.pi/settings.json`
+rather than a shared MCP config file:
+
+```bash
+platypus-mcp bootstrap pi --root /path/to/project --init-project
+```
+
+Then start Pi from that project and use the guided commands:
+
+```bash
+cd /path/to/project
+pi
+```
+
+```text
+/platy-ready
+/platy-direction
+/platy-standards
+/platy-plan
+/platy-start
+/platy-review-result
+```
+
+`/platy-direction` and `/platy-standards` write durable repository artifacts
+under `docs/`; they are not hidden chat state. Commit those docs with the code
+so future agents inherit the same project direction.
+
+The generated settings add `npm:platypus-pi` to the `packages` array while
+preserving existing Pi settings. Use `--check --init-project` to verify that the
+project has Pi settings and Platypus guidance files:
+
+```bash
+platypus-mcp bootstrap pi --root /path/to/project --check --init-project
+```
+
+If the check reports that the binary cannot be resolved, install the server with
+`cargo install platypus-mcp`, install a Pi npm package that contains a bundled
+platform binary, or set `PLATYPUS_MCP_BIN` to a working `platypus-mcp` path.
+If Pi starts but the Platypus commands are missing, rerun the bootstrap check,
+inspect `.pi/settings.json`, and make sure the `packages` array contains
+`npm:platypus-pi` or a local checkout path. The Rust server is still
+host-neutral; Pi supplies the typed command/UI layer and forwards calls to the
+same local `platypus-mcp` binary.
+
+The Pi extension exposes dedicated typed `platypus_*` tools for the showcase
+workflow instead of asking the agent to fill a generic JSON passthrough. The
+normal set is `platypus_inspect_session`, `platypus_inspect_work_queue`,
+`platypus_create_backlog_items`, `platypus_prepare_work`,
+`platypus_complete_backlog_item`, `platypus_finish_work`,
+`platypus_record_evidence`, `platypus_record_finding`, `platypus_list_findings`,
+`platypus_update_finding_disposition`, `platypus_events_replay`, and
+`platypus_doctor_snapshot`. Use `platypus_call_tool` only when a less common
+Rust MCP tool has no dedicated Pi wrapper yet.
+
+For first-time product steering, run `/platy-direction` inside Pi. It asks the
+agent to capture product, architecture, and testing direction in
+`docs/product.md`, `docs/architecture.md`, and `docs/testing.md`.
+Run `/platy-standards` to capture implementation structure, verification,
+review, evidence, and definition-of-done expectations in `docs/engineering.md`.
+Run `/platy-story-review <draft-or-item-id>` before execution when a story or
+manager proposal needs visible clarification; approved revisions can then be
+written through typed backlog create or update tools.
+Run `/platy-steer <new-direction>` when the user wants to redirect the product.
+It asks the agent to compare current guidance and backlog state with the new
+direction, present tradeoffs, ask for approval, and then persist accepted
+guidance, backlog, or finding updates.
+Run `/platy-plan-review [item-id]` before non-trivial implementation. It asks
+the agent to decide between response-local direct planning and durable strict
+task-plan creation from project policy and user intent.
+Run `/platy-review-result [item-or-task-id]` after implementation and
+verification. It asks the agent to compare the result to acceptance criteria,
+record findings or approved follow-up items, and then use the correct direct or
+worker completion tool.
+Use `/platy-direction-revise` or `/platy-standards-revise` to update those
+files later without rerunning the whole setup flow.
 
 ## First Project Smoke Flow
 

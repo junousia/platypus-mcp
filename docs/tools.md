@@ -68,10 +68,52 @@ the configured MCP server name plus tool separator; use unprefixed names in
 Platypus docs and tool arguments. Codex and opencode expose the same tool
 schemas through their own MCP discovery UI.
 
+Pi exposes the normal workflow through dedicated typed wrappers with the
+`platypus_` prefix. Prefer those wrappers for startup, queue inspection, backlog
+creation, direct completion, worker completion, evidence/findings, events, and
+doctor diagnostics. `platypus_call_tool` is intentionally retained as a generic
+escape hatch for uncommon tools, but it is not the normal showcase path.
+
+Pi command mapping:
+
+| Pi command | Primary MCP tools |
+| --- | --- |
+| `/platy-ready`, `/platy-refresh`, `/platy-next` | `inspect_session`, `inspect_work_queue` |
+| `/platy-direction`, `/platy-direction-revise` | typed backlog/update tools plus durable docs chosen by the agent |
+| `/platy-standards`, `/platy-standards-revise` | typed backlog/update tools plus `docs/engineering.md` edits chosen by the agent |
+| `/platy-steer` | `inspect_session`, `inspect_work_queue`, `update_backlog_item`, `create_backlog_items`, `record_finding` |
+| `/platy-story-review` | `get_backlog_item`, `create_backlog_items`, `update_backlog_item` |
+| `/platy-plan-review` | `inspect_work_queue`, `get_backlog_item`, `write_task_plan`, `validate_task_plan` |
+| `/platy-plan` | `inspect_session`, `create_backlog_items`, `inspect_work_queue` |
+| `/platy-start` | `get_backlog_item`, project edits, `complete_backlog_item` |
+| `/platy-review-result` | `get_backlog_item`, `list_findings`, `validate_findings`, `record_finding`, `create_backlog_items`, `complete_backlog_item`, `finish_work` |
+| `/platy-doctor` | `doctor_snapshot` |
+
+These commands are UI shortcuts and prompt builders. The MCP server remains
+deterministic: durable changes happen through typed tools and repository files,
+not hidden Pi chat state.
+
 Direct quick path: read the startup guidance, call `inspect_session`, inspect
 for `direct_ready`, edit the manager workspace, then call
 `complete_backlog_item`. Call `prepare_work` first only when response-local
 guidance is useful.
+
+Pi also includes `/platy-story-review` for story-quality review before
+execution. The review prompt asks the agent to use durable direction and
+engineering standards, separate blocking issues from improvement suggestions,
+and turn approved revisions into typed `platypus_create_backlog_items`
+previews or `platypus_update_backlog_item` calls.
+Use `/platy-plan-review [item-id]` for implementation planning before
+non-trivial work starts. It asks the agent to decide between response-local
+direct guidance and durable task-plan creation, and typed wrappers are exposed
+for `platypus_write_task_plan`, `platypus_validate_task_plan`,
+`platypus_inspect_task_plan`, and `platypus_list_task_plans`.
+Use `/platy-review-result [item-or-task-id]` after implementation. It asks the
+agent to compare changes to acceptance criteria and engineering standards,
+inspect findings, call typed `platypus_record_finding` or
+`platypus_create_backlog_items` for approved follow-up work, then use
+`platypus_complete_backlog_item` for direct work or `platypus_finish_work` for
+worker handoff.
 
 A concrete minimal direct-work example is documented in
 [docs/workflow.md](workflow.md#minimal-direct-work-example). Use it for

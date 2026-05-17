@@ -131,6 +131,34 @@ fn bootstrap_check_with_init_project_requires_scaffold_directories() {
 }
 
 #[test]
+fn bootstrap_check_with_init_project_requires_direction_docs() {
+    let temp = TempDir::new().expect("temp dir");
+    let config = temp.path().join("config.toml");
+    let apply = vec![
+        "codex".to_string(),
+        "--config".to_string(),
+        config.display().to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+    ];
+    assert_eq!(run_cli(&apply).expect("bootstrap"), 0);
+    fs::remove_file(temp.path().join("docs/product.md")).expect("remove product direction");
+
+    let check = vec![
+        "codex".to_string(),
+        "--check".to_string(),
+        "--config".to_string(),
+        config.display().to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+    ];
+
+    assert_eq!(run_cli(&check).expect("check missing direction doc"), 1);
+}
+
+#[test]
 fn codex_bootstrap_preserves_tool_sections() {
     let temp = TempDir::new().expect("temp dir");
     let config = temp.path().join("config.toml");
@@ -231,6 +259,112 @@ fn opencode_bootstrap_writes_local_mcp_shape() {
     assert_eq!(json["mcp"]["platypus"]["type"], "local");
     assert_eq!(json["mcp"]["platypus"]["command"][0], "sh");
     assert_eq!(json["mcp"]["platypus"]["enabled"], true);
+}
+
+#[test]
+fn pi_bootstrap_writes_project_package_settings_and_init_project() {
+    let temp = TempDir::new().expect("temp dir");
+    let args = vec![
+        "pi".to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+        "--project-name".to_string(),
+        "Pi Bootstrap Test".to_string(),
+    ];
+
+    assert_eq!(run_cli(&args).expect("bootstrap"), 0);
+
+    let settings_path = temp.path().join(".pi/settings.json");
+    let json: Value =
+        serde_json::from_str(&fs::read_to_string(settings_path).expect("settings")).expect("json");
+    assert_eq!(json["packages"][0], "npm:platypus-pi");
+    assert!(temp.path().join("AGENTS.md").is_file());
+    assert!(temp.path().join("CLAUDE.md").is_file());
+    assert!(temp.path().join("WORKFLOW.md").is_file());
+    assert!(temp.path().join("backlog/README.md").is_file());
+    let config = fs::read_to_string(temp.path().join("platy.yaml")).expect("project config");
+    assert!(config.contains("Pi Bootstrap Test"));
+}
+
+#[test]
+fn pi_bootstrap_dry_run_does_not_write_settings_or_project_files() {
+    let temp = TempDir::new().expect("temp dir");
+    let args = vec![
+        "pi".to_string(),
+        "--dry-run".to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+    ];
+
+    assert_eq!(run_cli(&args).expect("dry run"), 0);
+
+    assert!(!temp.path().join(".pi/settings.json").exists());
+    assert!(!temp.path().join("AGENTS.md").exists());
+}
+
+#[test]
+fn pi_bootstrap_check_requires_settings_and_requested_project_files() {
+    let temp = TempDir::new().expect("temp dir");
+    let check = vec![
+        "pi".to_string(),
+        "--check".to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+    ];
+    assert_eq!(run_cli(&check).expect("check missing"), 1);
+
+    let apply = vec![
+        "pi".to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+        "--init-project".to_string(),
+    ];
+    assert_eq!(run_cli(&apply).expect("bootstrap"), 0);
+    assert_eq!(run_cli(&check).expect("check configured"), 0);
+}
+
+#[test]
+fn pi_bootstrap_preserves_existing_settings_and_force_replaces_platypus_package() {
+    let temp = TempDir::new().expect("temp dir");
+    let settings = temp.path().join(".pi/settings.json");
+    fs::create_dir_all(settings.parent().expect("settings parent")).expect("settings dir");
+    fs::write(
+        &settings,
+        serde_json::json!({
+            "theme": "dark",
+            "packages": ["pi-skills", "git:github.com/junousia/platypus-mcp"]
+        })
+        .to_string(),
+    )
+    .expect("settings");
+
+    let apply = vec![
+        "pi".to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+    ];
+    assert_eq!(run_cli(&apply).expect("already configured"), 0);
+    let json: Value =
+        serde_json::from_str(&fs::read_to_string(&settings).expect("settings")).expect("json");
+    assert_eq!(json["theme"], "dark");
+    assert_eq!(json["packages"][0], "pi-skills");
+    assert_eq!(json["packages"][1], "git:github.com/junousia/platypus-mcp");
+
+    let force = vec![
+        "pi".to_string(),
+        "--force".to_string(),
+        "--root".to_string(),
+        temp.path().display().to_string(),
+    ];
+    assert_eq!(run_cli(&force).expect("force"), 0);
+    let json: Value =
+        serde_json::from_str(&fs::read_to_string(settings).expect("settings")).expect("json");
+    assert_eq!(json["theme"], "dark");
+    assert_eq!(json["packages"][0], "pi-skills");
+    assert_eq!(json["packages"][1], "npm:platypus-pi");
 }
 
 #[test]

@@ -12,10 +12,10 @@ ARGS ?=
 
 .PHONY: \
 	help \
-	check ci lint fmt-check fmt format test test-lib test-stdio test-one \
+	check ci lint fmt-check fmt format test test-lib test-stdio test-one pi-extension-test \
 	build doc clean package publish-dry-run publish npm-package npm-package-dry-run npm-publish-dry-run npm-publish release-check \
 	run run-root smoke smoke-queue smoke-storage \
-	feedback opencode-feedback claude-feedback codex-feedback \
+	feedback opencode-feedback claude-feedback codex-feedback pi-feedback \
 	metadata version
 
 help: ## Show categorized developer commands.
@@ -35,6 +35,7 @@ help: ## Show categorized developer commands.
 	@printf '  \033[36mtest-lib\033[0m    Run library/unit tests\n'
 	@printf '  \033[36mtest-stdio\033[0m  Run stdio protocol integration tests\n'
 	@printf '  \033[36mtest-one\033[0m    Run a filtered test: make test-one TEST=name\n\n'
+	@printf '  \033[36mpi-extension-test\033[0m Run deterministic Pi extension harness tests\n\n'
 	@printf '\033[1mBuild And Docs\033[0m\n'
 	@printf '  \033[36mbuild\033[0m       Build debug binary\n'
 	@printf '  \033[36mdoc\033[0m         Build Rust API docs without dependencies\n'
@@ -54,7 +55,8 @@ help: ## Show categorized developer commands.
 	@printf '  \033[36mfeedback\033[0m         Alias for opencode-feedback\n'
 	@printf '  \033[36mopencode-feedback\033[0m Create a temp OpenCode project and ask for workflow feedback\n'
 	@printf '  \033[36mclaude-feedback\033[0m   Create a temp Claude Code project and ask for workflow feedback\n'
-	@printf '  \033[36mcodex-feedback\033[0m    Create a temp Codex project and ask for workflow feedback\n\n'
+	@printf '  \033[36mcodex-feedback\033[0m    Create a temp Codex project and ask for workflow feedback\n'
+	@printf '  \033[36mpi-feedback\033[0m       Create a temp Pi project and validate or ask for workflow feedback\n\n'
 	@printf '\033[1mInspect\033[0m\n'
 	@printf '  \033[36msmoke\033[0m       Invoke inspect_status through the stdio tool helper\n'
 	@printf '  \033[36msmoke-queue\033[0m Invoke inspect_work_queue through the stdio tool helper\n'
@@ -84,8 +86,10 @@ help: ## Show categorized developer commands.
 	@printf '  CODEX_MODEL=<model> CODEX_PROFILE=<profile> for codex-feedback\n'
 	@printf '  CODEX_DANGEROUS=1 to bypass Codex approvals and sandboxing in the temp project\n'
 	@printf '  CODEX_DRY_RUN=1 to bootstrap and smoke-check without invoking Codex\n'
+	@printf '  PI_DRY_RUN=1 for setup-only Pi validation (default 1); PI_DRY_RUN=0 to invoke Pi\n'
+	@printf '  PI_MODEL=<model> PI_PROVIDER=<provider> for live pi-feedback\n'
 
-check: lint test ## Format check, build-check, and run all tests.
+check: lint test pi-extension-test ## Format check, build-check, and run all tests.
 
 ci: check ## Alias for check.
 
@@ -115,6 +119,9 @@ test-one: ## Run a filtered test: make test-one TEST=name.
 		exit 2; \
 	fi
 	$(CARGO) test $(TEST) $(ARGS)
+
+pi-extension-test: ## Run deterministic Pi extension harness tests.
+	npm_config_cache=$(NPM_CACHE_DIR) npm run pi:extension:test
 
 build: ## Build debug binary.
 	$(CARGO) build
@@ -164,6 +171,9 @@ claude-feedback: ## Create a temp Claude Code project and ask for workflow feedb
 
 codex-feedback: ## Create a temp Codex project and ask for workflow feedback.
 	CARGO="$(CARGO)" scripts/dev/codex-feedback.sh
+
+pi-feedback: ## Create a temp Pi project and validate or ask for workflow feedback.
+	CARGO="$(CARGO)" scripts/dev/pi-feedback.sh
 
 smoke: ## Invoke inspect_status through the stdio tool helper.
 	$(CARGO) run -- tool --root "$(ROOT)" inspect_status '{"limit":5}'

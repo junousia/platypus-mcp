@@ -6,6 +6,11 @@ import { join } from "node:path";
 const requiredFiles = new Set([
   "package.json",
   "extensions/platypus/index.ts",
+  "extensions/platypus/commands.mjs",
+  "extensions/platypus/direction.mjs",
+  "extensions/platypus/renderers.mjs",
+  "extensions/platypus/review.mjs",
+  "extensions/platypus/runtime.mjs",
 ]);
 
 const requiredMetadata = {
@@ -22,6 +27,57 @@ const requiredMetadata = {
     "vendor/{platform}/{binary}",
   ],
 };
+
+const requiredCoreTypedTools = [
+  "inspect_session",
+  "inspect_status",
+  "inspect_work_queue",
+  "inspect_queue_status",
+  "init_project",
+  "list_backlog",
+  "validate_backlog",
+  "get_backlog_item",
+  "create_backlog_item",
+  "create_backlog_items",
+  "update_backlog_item",
+  "write_task_plan",
+  "validate_task_plan",
+  "inspect_task_plan",
+  "list_task_plans",
+  "prepare_work",
+  "complete_backlog_item",
+  "finish_work",
+  "record_evidence",
+  "record_finding",
+  "list_findings",
+  "validate_findings",
+  "update_finding_disposition",
+  "events_replay",
+  "doctor_snapshot",
+  "inspect_workflow_config",
+];
+
+const requiredPiCommands = [
+  "platy",
+  "platypus-status",
+  "platy-refresh",
+  "platy-ready",
+  "platy-next",
+  "platy-plan",
+  "platy-steer",
+  "platy-direction",
+  "platy-direction-revise",
+  "platy-standards",
+  "platy-standards-revise",
+  "platy-story-review",
+  "platy-plan-review",
+  "platy-review-result",
+  "platy-start",
+  "platy-complete",
+  "platy-doctor",
+  "platy-hide",
+  "platy-show",
+];
 
 const forbiddenPrefixes = [
   "target/",
@@ -77,6 +133,7 @@ const files = Array.isArray(pack?.files) ? pack.files.map((file) => file.path) :
 const fileSet = new Set(files);
 const missing = [...requiredFiles].filter((file) => !fileSet.has(file));
 const forbidden = files.filter((file) => forbiddenPrefixes.some((prefix) => file === prefix || file.startsWith(prefix)));
+const forbiddenTestArtifacts = files.filter((file) => /(^|\/)test-pi-.*\.mjs$/.test(file));
 
 let metadataErrors = [];
 const metadata = JSON.parse(readFileSync("package.json", "utf8")).platypusMcp;
@@ -99,6 +156,37 @@ if (!metadata || typeof metadata !== "object") {
   const platformPackages = metadata.platformBinaryPackages;
   if (!platformPackages || typeof platformPackages !== "object" || Object.keys(platformPackages).length === 0) {
     metadataErrors.push("platypusMcp.platformBinaryPackages must document supported optional binary packages");
+  }
+}
+
+const extensionSource = readFileSync("extensions/platypus/index.ts", "utf8");
+const typedToolSetMatch = extensionSource.match(/CORE_TYPED_TOOL_NAMES\s*=\s*new Set<string>\(\[([\s\S]*?)\]\)/);
+if (!typedToolSetMatch) {
+  metadataErrors.push("extensions/platypus/index.ts must define CORE_TYPED_TOOL_NAMES");
+} else {
+  const typedToolSetSource = typedToolSetMatch[1];
+  for (const toolName of requiredCoreTypedTools) {
+    if (!typedToolSetSource.includes(`"${toolName}"`)) {
+      metadataErrors.push(`Core Pi tool ${toolName} must be listed in CORE_TYPED_TOOL_NAMES`);
+    }
+  }
+}
+for (const toolName of requiredCoreTypedTools) {
+  const typedObjectPattern = new RegExp(`\\b${toolName}:\\s*(?:Type\\.|noArgs\\()`);
+  if (!typedObjectPattern.test(extensionSource)) {
+    metadataErrors.push(`Core Pi tool ${toolName} must define explicit typed parameters`);
+  }
+  const directPassthroughPattern = new RegExp(`name:\\s*"${toolName}"[\\s\\S]{0,500}parameters:\\s*passthroughParameters`);
+  if (directPassthroughPattern.test(extensionSource)) {
+    metadataErrors.push(`Core Pi tool ${toolName} must not register passthroughParameters directly`);
+  }
+}
+if (!extensionSource.includes("platypus_call_tool")) {
+  metadataErrors.push("Pi extension must keep platypus_call_tool as the generic escape hatch");
+}
+for (const commandName of requiredPiCommands) {
+  if (!extensionSource.includes(`registerCommand("${commandName}"`)) {
+    metadataErrors.push(`Pi extension must register /${commandName}`);
   }
 }
 
@@ -134,9 +222,10 @@ for (const platform of requiredPlatforms) {
   }
 }
 
-if (missing.length > 0 || forbidden.length > 0 || metadataErrors.length > 0) {
+if (missing.length > 0 || forbidden.length > 0 || forbiddenTestArtifacts.length > 0 || metadataErrors.length > 0) {
   if (missing.length > 0) console.error(`Missing required npm package files: ${missing.join(", ")}`);
   if (forbidden.length > 0) console.error(`Forbidden npm package files: ${forbidden.join(", ")}`);
+  if (forbiddenTestArtifacts.length > 0) console.error(`Test-only npm package files must not be packed: ${forbiddenTestArtifacts.join(", ")}`);
   for (const error of metadataErrors) console.error(error);
   process.exit(1);
 }

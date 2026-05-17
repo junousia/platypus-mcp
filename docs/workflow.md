@@ -298,6 +298,125 @@ when verification fields are present, verification evidence. Explicit
 `record_auto_evidence=false` only when explicit evidence records already cover
 the closure.
 
+### Pi Happy Path
+
+Pi keeps the common Platypus workflow behind a small command set so users do not
+need to memorize the underlying MCP tool surface:
+
+1. Run `/platy-refresh` or `/platy-ready` to inspect current queue state.
+2. Run `/platy-direction` when product direction is missing or stale. The agent
+   should ask concise questions and write durable answers to
+   `docs/product.md`, `docs/architecture.md`, and `docs/testing.md`.
+3. Run `/platy-standards` when implementation standards are missing or stale.
+   The agent should capture module boundaries, code organization, test
+   strategy, required verification commands, UI design language, commit/PR
+   expectations, evidence expectations, and definition of done in
+   `docs/engineering.md`.
+4. Run `/platy-steer <new-direction>` when the product needs to move in a new
+   direction. The agent should summarize current direction, proposed direction,
+   affected docs, affected backlog items, tradeoffs, unresolved decisions, and
+   exact changes to persist. It must ask for approval before writing guidance
+   files, backlog updates, follow-up items, or findings.
+5. Run `/platy-story-review <draft-or-item-id>` before executing vague or
+   manager-proposed work. The agent should separate blocking issues from
+   improvement suggestions, and use `platypus_create_backlog_items` with
+   `preview=true` or `platypus_update_backlog_item` only after the revision is
+   approved.
+6. Run `/platy-plan-review [item-id]` before non-trivial work starts. The agent
+   should state whether response-local direct planning is enough or whether a
+   durable task plan is required by policy or user approval, then include
+   expected surfaces, tests, risks, verification command, and completion
+   evidence. Durable plans should be written with `platypus_write_task_plan`
+   and validated with `platypus_validate_task_plan`.
+7. If the queue is empty, run `/platy-plan`. The agent should inspect the
+   session, ask for missing product direction, and then call
+   `platypus_create_backlog_items` with concrete titles, goals, acceptance
+   criteria, owned surfaces, execution paths, and planning gates.
+8. Run `/platy-start` to ask the agent to work on the next ready item. The
+   prompt names the target item and tells the agent to finish with
+   `platypus_complete_backlog_item`.
+9. Run `/platy-review-result [item-or-task-id]` after implementation and
+   verification when the result needs an explicit review. The agent should
+   compare changes to acceptance criteria, check verification, call
+   `platypus_list_findings` and `platypus_validate_findings`, record required
+   findings with `platypus_record_finding`, create approved follow-up items
+   with `platypus_create_backlog_items`, and then choose
+   `platypus_complete_backlog_item` for direct work or `platypus_finish_work`
+   for worker handoff.
+10. Run `/platy-complete` when implementation is done but the agent has not yet
+   closed the item. The required fields are `item_id`, `summary`,
+   `changed_files`, `verification_status`, `verification_summary`, and
+   `verification_refs`.
+11. Run `/platy-direction-revise` or `/platy-standards-revise` to revise
+   captured guidance without rerunning the whole setup flow.
+12. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
+
+These commands surface current state and exact tools, but they do not choose a
+product direction for the user. The agent remains responsible for judgement and
+for asking clarifying questions when the goal is underspecified.
+
+The Pi package has a deterministic extension harness covering command prompt
+generation, fake Platypus tool execution, binary-resolution recovery guidance,
+project-root forwarding, and renderer snapshots for queue, creation,
+completion, doctor, and empty states. Run `make pi-extension-test` while
+iterating on Pi UI or command behavior; it is included in `make check`.
+Run `make pi-feedback` to create a temporary Pi project, bootstrap the local
+package and Platypus scaffold, validate core tools, and write a dry-run
+`FEEDBACK.md`. Use `PI_DRY_RUN=0 make pi-feedback` for a live Pi/model exercise
+that asks for structured feedback on setup, UI, workflow, schemas, result
+review, and closure behavior.
+
+### Pi End-To-End Example
+
+This example is intentionally small but follows the full sustainable-development
+shape. It starts from a product idea and ends with a closed direct backlog item:
+
+```text
+/platy-ready
+/platy-direction
+Goal: a small personal habit tracker for one user, built as a local web app.
+/platy-standards
+Use a simple module layout, keep verification as make check, and record
+follow-up risks as findings.
+/platy-steer Keep the first release local-only, but leave room for sync later.
+/platy-plan
+Create the first two concrete backlog items for product baseline and the first
+static UI slice.
+/platy-story-review PROJ-001
+/platy-plan-review PROJ-001
+/platy-start
+```
+
+After implementation and verification:
+
+```text
+/platy-review-result PROJ-001
+```
+
+The agent should inspect the item, changed files, verification result, and
+findings. If the result is complete, it calls
+`platypus_complete_backlog_item` with summary, changed files, verification
+status, verification references, and any finding references. If the work exposed
+risks or missing requirements, it records them with `platypus_record_finding` or
+creates approved follow-up items before closing.
+
+The same story as durable artifacts:
+
+| Phase | Pi command | Durable result |
+| --- | --- | --- |
+| First setup | `platypus-mcp bootstrap pi --init-project` | `.pi/settings.json`, `AGENTS.md`, `CLAUDE.md`, `WORKFLOW.md`, `platy.yaml`, `backlog/`, `docs/` templates |
+| Product direction | `/platy-direction` | `docs/product.md`, `docs/architecture.md`, `docs/testing.md` |
+| Engineering standards | `/platy-standards` | `docs/engineering.md` with module, testing, review, and definition-of-done rules |
+| Product steering | `/platy-steer` | approved guidance edits, backlog updates, findings, or follow-up items |
+| Story quality | `/platy-story-review` | reviewed backlog item updates or approved new item drafts |
+| Implementation planning | `/platy-plan-review` | response-local direct plan or strict `backlog/plans/*.yaml` when policy requires it |
+| Execution | `/platy-start` | code/doc changes plus `platypus_complete_backlog_item` or worker handoff state |
+| Result review | `/platy-review-result` | verification, findings, follow-up items, and closure evidence |
+
+The docs and backlog are the memory. Chat can help shape them, but a direction,
+standard, plan, finding, or completion is not considered durable until it has
+been written through repository files or Platypus tools.
+
 Backlog files should contain goal, implementation contract, acceptance
 criteria, dependencies, and owned surfaces. They should not contain runtime
 status, task attempts, PR metadata, or closure state.
@@ -512,6 +631,11 @@ so reconciliation can report the remaining gap.
     duplicate decision about a finding
   - `external_report`: imported issue, PR review, CI report, or external audit
 - Use `record_finding` for limitations or required follow-up work.
+- In Pi, `/platy-review-result [item-or-task-id]` is the normal post-work
+  review shortcut. It asks the agent to inspect the item or task, compare
+  acceptance criteria with the implementation, validate findings, record
+  required findings or approved follow-up items, and only then call the correct
+  completion tool.
 - Use `complete_backlog_item` to close direct manager-workspace work.
 - Use `validate_findings` before claiming a task is handled.
 - Use `integrate_worker_result` to bring a completed verified worktree back

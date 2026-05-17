@@ -34,6 +34,7 @@ pub fn init_project(
         "backlog/plans",
         "backlog/epics",
         "backlog/templates",
+        "docs",
     ] {
         if let Err(error) = ensure_directory(&root, directory, &mut entries) {
             return ActionResult::failed(action, "Could not initialize Platypus project.", error);
@@ -137,6 +138,16 @@ fn scaffold_files(project_name: &str) -> Vec<(&'static str, String)> {
         ("CLAUDE.md", claude_doc()),
         ("platy.yaml", project_config(project_name)),
         ("WORKFLOW.md", workflow_doc()),
+        ("docs/product.md", product_direction_doc(project_name)),
+        (
+            "docs/architecture.md",
+            architecture_direction_doc(project_name),
+        ),
+        ("docs/testing.md", testing_direction_doc(project_name)),
+        (
+            "docs/engineering.md",
+            engineering_standards_doc(project_name),
+        ),
         ("backlog/README.md", backlog_readme()),
         ("backlog/epics/general.md", general_epic()),
         ("backlog/templates/item.md", item_template()),
@@ -229,6 +240,12 @@ This project uses Platypus MCP for spec-driven development. Free-form goals
 should become structured backlog items, non-trivial backlog items should become
 reviewable task plans, and implementation should run through isolated task
 worktrees before integration.
+
+Durable project direction lives in `docs/product.md`,
+`docs/architecture.md`, `docs/testing.md`, and `docs/engineering.md`. Inspect
+and update those files before shaping backlog items when the product goal,
+stack, quality bar, verification expectations, or definition of done are
+unclear.
 
 ## Operating Loop
 
@@ -348,6 +365,173 @@ state, and Git closure trailers.
     .to_string()
 }
 
+fn product_direction_doc(project_name: &str) -> String {
+    format!(
+        r#"# Product Direction
+
+Durable product direction for `{}`. Keep this file current when the goal,
+audience, constraints, or quality bar changes. Use concrete answers rather than
+private chat context so future agents can plan from repository state.
+
+## Product Goal
+
+- Current goal: _TBD_
+
+## Target Users
+
+- Primary users: _TBD_
+- Important workflows: _TBD_
+
+## Product Domain
+
+- Problem being solved: _TBD_
+- Success criteria: _TBD_
+
+## UX Quality Bar
+
+- Interaction style: _TBD_
+- Visual or accessibility expectations: _TBD_
+
+## Security And Privacy
+
+- Sensitive data: _TBD_
+- Required safeguards: _TBD_
+
+## Performance And Scale
+
+- Expected usage: _TBD_
+- Performance constraints: _TBD_
+
+## Open Questions
+
+- _TBD_
+"#,
+        project_name
+    )
+}
+
+fn architecture_direction_doc(project_name: &str) -> String {
+    format!(
+        r#"# Architecture Direction
+
+Durable technical direction for `{}`. Update this when stack choices,
+repository structure, deployment, or integration constraints change.
+
+## Stack Preferences
+
+- Languages/frameworks: _TBD_
+- Package managers/build tools: _TBD_
+
+## Repository Structure
+
+- Preferred layout: _TBD_
+- Generated or vendored paths: _TBD_
+
+## Deployment Target
+
+- Runtime environment: _TBD_
+- Release/distribution model: _TBD_
+
+## Integrations
+
+- External services: _TBD_
+- Local tools or harnesses: _TBD_
+
+## Constraints
+
+- Compatibility requirements: _TBD_
+- Architectural tradeoffs already chosen: _TBD_
+"#,
+        project_name
+    )
+}
+
+fn testing_direction_doc(project_name: &str) -> String {
+    format!(
+        r#"# Testing Direction
+
+Durable verification direction for `{}`. Update this when the test strategy,
+required checks, or acceptance evidence changes.
+
+## Required Verification
+
+- Default command: _TBD_
+- Required pre-merge checks: _TBD_
+
+## Test Strategy
+
+- Unit coverage expectations: _TBD_
+- Integration/end-to-end coverage expectations: _TBD_
+- UI or accessibility checks: _TBD_
+
+## Manual Review
+
+- Human review checkpoints: _TBD_
+- Known areas needing exploratory testing: _TBD_
+
+## Evidence Expectations
+
+- Evidence to record in Platypus: _TBD_
+- Acceptable skipped-verification cases: _TBD_
+"#,
+        project_name
+    )
+}
+
+fn engineering_standards_doc(project_name: &str) -> String {
+    format!(
+        r#"# Engineering Standards
+
+Durable engineering standards for `{}`. Update this before agents start
+implementation when structure, testing, review, evidence, or completion
+expectations change.
+
+## Module Boundaries
+
+- Ownership boundaries: _TBD_
+- Public interfaces and contracts: _TBD_
+- Forbidden coupling or shortcuts: _TBD_
+
+## Code Organization
+
+- Preferred layout: _TBD_
+- Naming conventions: _TBD_
+- Generated code policy: _TBD_
+
+## Test Strategy
+
+- Required test levels: _TBD_
+- Test data and fixture rules: _TBD_
+- Flaky or slow test policy: _TBD_
+
+## Required Verification Commands
+
+- Before completion: _TBD_
+- Before integration or release: _TBD_
+
+## UI Design Language
+
+- Visual language: _TBD_
+- Interaction and accessibility expectations: _TBD_
+
+## Commit And PR Expectations
+
+- Commit scope: _TBD_
+- Review or PR requirements: _TBD_
+
+## Evidence Expectations
+
+- Evidence to record: _TBD_
+- Findings and follow-up rules: _TBD_
+
+## Definition Of Done
+
+- _TBD_
+"#,
+        project_name
+    )
+}
+
 fn agents_doc() -> String {
     agent_guidance_doc("Agent Instructions")
 }
@@ -362,6 +546,12 @@ fn claude_guidance_doc() -> String {
 This repository uses Platypus MCP as its spec-driven development control
 surface. When the MCP server is available, prefer Platypus tools over ad hoc
 task tracking.
+
+Durable project direction lives in `docs/product.md`,
+`docs/architecture.md`, `docs/testing.md`, and `docs/engineering.md`. Inspect
+those files before planning new backlog items, and update them when the user
+changes product goals, stack preferences, quality expectations, verification
+policy, or definition of done.
 
 ## Startup
 
@@ -452,6 +642,12 @@ fn agent_guidance_doc(title: &str) -> String {
 This repository uses Platypus MCP as its spec-driven development control
 surface. When the MCP server is available, prefer Platypus tools over ad hoc
 file edits or informal task tracking.
+
+Durable project direction lives in `docs/product.md`,
+`docs/architecture.md`, `docs/testing.md`, and `docs/engineering.md`. Inspect
+those files before planning new backlog items, and update them when the user
+changes product goals, stack preferences, quality expectations, verification
+policy, or definition of done.
 
 ## Default Flow
 
@@ -643,6 +839,8 @@ mod tests {
         assert!(config.contains("merge_style: merge_commit"));
         let agents = fs::read_to_string(temp.path().join("AGENTS.md")).expect("agents");
         assert!(agents.contains("spec-driven development"));
+        assert!(agents.contains("docs/product.md"));
+        assert!(agents.contains("docs/engineering.md"));
         assert!(agents.contains("inspect_queue_status"));
         assert!(agents.contains("inspect_work_queue"));
         assert!(agents.contains("first matching state"));
@@ -681,6 +879,8 @@ mod tests {
         assert!(agents.contains("finish_work"));
         let claude = fs::read_to_string(temp.path().join("CLAUDE.md")).expect("claude");
         assert!(claude.contains("spec-driven development"));
+        assert!(claude.contains("docs/product.md"));
+        assert!(claude.contains("docs/engineering.md"));
         assert!(claude.contains("Claude Instructions"));
         assert!(claude.contains("inspect_queue_status"));
         assert!(claude.contains("inspect_work_queue"));
@@ -721,6 +921,8 @@ mod tests {
         assert!(claude.len() < agents.len());
         let workflow = fs::read_to_string(temp.path().join("WORKFLOW.md")).expect("workflow");
         assert!(workflow.contains("matching state wins"));
+        assert!(workflow.contains("docs/product.md"));
+        assert!(workflow.contains("docs/engineering.md"));
         assert!(workflow.contains("queue_state == \"direct_ready\""));
         assert!(workflow.contains("completed_pending_integration"));
         assert!(workflow.contains("approval_blocked"));
@@ -743,6 +945,25 @@ mod tests {
         assert!(backlog_readme.contains("minimum loop"));
         assert!(temp.path().join("backlog/items").is_dir());
         assert!(temp.path().join("backlog/plans").is_dir());
+        assert!(temp.path().join("docs").is_dir());
+        let product =
+            fs::read_to_string(temp.path().join("docs/product.md")).expect("product direction");
+        assert!(product.contains("Product Goal"));
+        assert!(product.contains("UX Quality Bar"));
+        assert!(product.contains("Security And Privacy"));
+        let architecture = fs::read_to_string(temp.path().join("docs/architecture.md"))
+            .expect("architecture direction");
+        assert!(architecture.contains("Stack Preferences"));
+        assert!(architecture.contains("Repository Structure"));
+        let testing =
+            fs::read_to_string(temp.path().join("docs/testing.md")).expect("testing direction");
+        assert!(testing.contains("Required Verification"));
+        assert!(testing.contains("Evidence Expectations"));
+        let engineering = fs::read_to_string(temp.path().join("docs/engineering.md"))
+            .expect("engineering standards");
+        assert!(engineering.contains("Module Boundaries"));
+        assert!(engineering.contains("Required Verification Commands"));
+        assert!(engineering.contains("Definition Of Done"));
         assert!(!temp.path().join("backlog/index.md").exists());
         assert!(temp.path().join("backlog/epics/general.md").is_file());
         assert!(temp.path().join("backlog/templates/plan.yaml").is_file());
@@ -753,6 +974,12 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         fs::write(temp.path().join("platy.yaml"), "custom: true\n").expect("config");
         fs::write(temp.path().join("CLAUDE.md"), "# Custom Claude\n").expect("claude");
+        fs::create_dir(temp.path().join("docs")).expect("docs");
+        fs::write(
+            temp.path().join("docs/product.md"),
+            "# Custom Product Direction\n",
+        )
+        .expect("product direction");
         fs::write(temp.path().join(".gitignore"), "custom-ignore\n").expect("gitignore");
         let root = temp.path().to_string_lossy().into_owned();
 
@@ -774,6 +1001,13 @@ mod tests {
             fs::read_to_string(temp.path().join("CLAUDE.md")).expect("claude"),
             "# Custom Claude\n"
         );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("docs/product.md")).expect("product direction"),
+            "# Custom Product Direction\n"
+        );
+        assert!(temp.path().join("docs/architecture.md").is_file());
+        assert!(temp.path().join("docs/testing.md").is_file());
+        assert!(temp.path().join("docs/engineering.md").is_file());
         let gitignore = fs::read_to_string(temp.path().join(".gitignore")).expect("gitignore");
         assert!(gitignore.contains("custom-ignore"));
         assert!(gitignore.contains(".platy/"));
