@@ -1721,6 +1721,22 @@ fn finish_failed(
     }
 }
 
+fn partial_finish_recovery_action(
+    assignment: &WorkerAssignment,
+    underlying_next_action: Option<&str>,
+) -> String {
+    let prefix = format!(
+        "Inspect assignment `{}` with inspect_worker_assignment, review evidence with list_evidence, review task events with inspect_task_events, then retry finish_work for task `{}` or assignment `{}` to record any missing evidence/findings.",
+        assignment.id, assignment.task_id, assignment.id
+    );
+    match underlying_next_action {
+        Some(next_action) if !next_action.is_empty() => {
+            format!("{prefix} Underlying recovery: {next_action}")
+        }
+        _ => prefix,
+    }
+}
+
 fn finish_failed_with_assignment(
     action: &str,
     summary: String,
@@ -1732,12 +1748,16 @@ fn finish_failed_with_assignment(
     findings: Vec<crate::models::FindingRecord>,
 ) -> ActionResult<FinishWorkData> {
     let root = assignment_root(&None, &assignment);
+    let recovery_action = Some(partial_finish_recovery_action(
+        &assignment,
+        next_action.as_deref(),
+    ));
     ActionResult {
         action: action.to_string(),
         status: ActionStatus::Failed,
         summary,
-        next_action: next_action.clone(),
-        recovery_action: next_action,
+        next_action: recovery_action.clone(),
+        recovery_action,
         data: Some(FinishWorkData {
             root,
             assignment: Some(assignment.clone()),
@@ -1750,7 +1770,9 @@ fn finish_failed_with_assignment(
                 kind: "inspect_or_recover".to_string(),
                 summary: "Finish work stopped after a partial lifecycle update.".to_string(),
                 instructions: vec![
-                    "Inspect the assignment, evidence, findings, and task events before retrying."
+                    "Inspect the assignment, evidence, findings, and task events before retrying finish_work."
+                        .to_string(),
+                    "Retry finish_work with the same task_id or assignment_id after confirming which evidence or findings are still missing; completed assignments are reused, but successful evidence/finding recording is append-only."
                         .to_string(),
                 ],
                 task_id: Some(assignment.task_id.clone()),
@@ -1763,6 +1785,7 @@ fn finish_failed_with_assignment(
                     "list_evidence".to_string(),
                     "list_findings".to_string(),
                     "inspect_task_events".to_string(),
+                    "finish_work".to_string(),
                 ],
             },
         }),
@@ -3150,6 +3173,107 @@ mod tests {
             data.assignment.as_ref().expect("assignment").changed_files,
             vec!["src/lib.rs".to_string()]
         );
+    }
+
+    #[test]
+    fn finish_work_retries_completed_assignment_to_record_missing_verification_evidence() {
+        let project = prepared_assignment_project();
+        let prepared = prepare_work(
+            project.path(),
+            PrepareWorkParams {
+                root: None,
+                item_id: Some("PROJ-001".to_string()),
+                max_tasks: None,
+                worker: Some("coder".to_string()),
+                claimant: Some("host".to_string()),
+                execution_mode: None,
+                require_task_plan: Some(true),
+                require_planning_approval: None,
+                auto_commit_artifacts: None,
+                verification_command: Vec::new(),
+                include_queue_snapshot: None,
+            },
+        );
+        let action = prepared
+            .data
+            .expect("prepare data")
+            .host_actions
+            .into_iter()
+            .next()
+            .expect("host action");
+        let assignment_id = action.assignment_id.clone();
+        let task_id = action.task_id.clone();
+
+        let first = finish_work(
+            project.path(),
+            FinishWorkParams {
+                root: None,
+                item_id: None,
+                assignment_id: assignment_id.clone(),
+                task_id: task_id.clone(),
+                status: None,
+                summary: "Completed without verification evidence yet.".to_string(),
+                changed_files: Vec::new(),
+                verification_status: Some("not_run".to_string()),
+                verification_summary: None,
+                verification_refs: Vec::new(),
+                findings: Vec::new(),
+                findings_reviewed: Some(true),
+                auto_start_if_prepared: Some(true),
+                integrate_if_ready: Some(false),
+                allow_unverified: None,
+                integration_strategy: None,
+                cleanup_after: None,
+            },
+        );
+        assert_eq!(first.status, ActionStatus::Completed);
+        assert!(first.data.as_ref().expect("first data").evidence.is_empty());
+
+        let retried = finish_work(
+            project.path(),
+            FinishWorkParams {
+                root: None,
+                item_id: None,
+                assignment_id,
+                task_id: task_id.clone(),
+                status: None,
+                summary: "Retry records missing verification evidence.".to_string(),
+                changed_files: Vec::new(),
+                verification_status: Some("passed".to_string()),
+                verification_summary: Some("Retry verification passed.".to_string()),
+                verification_refs: vec!["cargo test finish_work".to_string()],
+                findings: Vec::new(),
+                findings_reviewed: Some(true),
+                auto_start_if_prepared: None,
+                integrate_if_ready: Some(false),
+                allow_unverified: None,
+                integration_strategy: None,
+                cleanup_after: None,
+            },
+        );
+        let data = retried.data.expect("retry data");
+        assert_eq!(retried.status, ActionStatus::Completed);
+        assert_eq!(data.evidence.len(), 1);
+        assert_eq!(
+            data.assignment.as_ref().expect("assignment").status,
+            "completed"
+        );
+
+        let evidence = evidence::list_evidence(
+            project.path(),
+            crate::models::ListEvidenceParams {
+                root: None,
+                source_item_id: Some("PROJ-001".to_string()),
+                source_task_id: task_id,
+                kind: Some("verification".to_string()),
+                limit: None,
+            },
+        )
+        .data
+        .expect("evidence data")
+        .evidence;
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].summary, "Retry verification passed.");
     }
 
     #[test]
