@@ -401,17 +401,16 @@ fn bootstrap_smoke_covers_supported_host_startup_shapes() {
         .expect("claude bootstrap"),
         0
     );
-    let claude: Value = serde_json::from_str(
-        &fs::read_to_string(&claude_config).expect("claude config"),
-    )
-    .expect("claude json");
+    let claude: Value =
+        serde_json::from_str(&fs::read_to_string(&claude_config).expect("claude config"))
+            .expect("claude json");
     assert_eq!(claude["mcpServers"]["platypus"]["command"], "sh");
     let claude_args = claude["mcpServers"]["platypus"]["args"]
         .as_array()
         .expect("claude args");
-    assert!(claude_args
-        .iter()
-        .any(|arg| arg.as_str().is_some_and(|value| value.contains("platypus-mcp"))));
+    assert!(claude_args.iter().any(|arg| arg
+        .as_str()
+        .is_some_and(|value| value.contains("platypus-mcp"))));
     assert_eq!(
         claude["mcpServers"]["platypus"]["env"]["PLATYPUS_MCP_ROOT"],
         temp.path().display().to_string()
@@ -429,10 +428,9 @@ fn bootstrap_smoke_covers_supported_host_startup_shapes() {
         .expect("opencode bootstrap"),
         0
     );
-    let opencode: Value = serde_json::from_str(
-        &fs::read_to_string(&opencode_config).expect("opencode config"),
-    )
-    .expect("opencode json");
+    let opencode: Value =
+        serde_json::from_str(&fs::read_to_string(&opencode_config).expect("opencode config"))
+            .expect("opencode json");
     assert_eq!(opencode["mcp"]["platypus"]["type"], "local");
     assert_eq!(opencode["mcp"]["platypus"]["command"][0], "sh");
     assert_eq!(opencode["mcp"]["platypus"]["enabled"], true);
