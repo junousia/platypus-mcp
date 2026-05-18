@@ -307,5 +307,8 @@ assert.match(extensionSource, /registerTool\(\{/);
 assert.match(extensionSource, /name:\s*"platypus_call_tool"/);
 assert.match(extensionSource, /promptSnippet/);
 assert.match(extensionSource, /addAutocompleteProvider/);
+assert.match(extensionSource, /let widgetVisible = false/);
+assert.match(extensionSource, /shouldShowFooterStatus/);
+assert.doesNotMatch(extensionSource, /platypus: loading/);
 
 console.log("pi extension harness ok");
