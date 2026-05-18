@@ -1772,7 +1772,7 @@ fn finish_failed_with_assignment(
                 instructions: vec![
                     "Inspect the assignment, evidence, findings, and task events before retrying finish_work."
                         .to_string(),
-                    "Retry finish_work with the same task_id or assignment_id; completed assignments are reused so missing evidence or findings can be recorded idempotently."
+                    "Retry finish_work with the same task_id or assignment_id after confirming which evidence or findings are still missing; completed assignments are reused, but successful evidence/finding recording is append-only."
                         .to_string(),
                 ],
                 task_id: Some(assignment.task_id.clone()),
