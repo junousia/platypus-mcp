@@ -1,0 +1,59 @@
+item_id: MCP-143
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Local validation covers expected npm package contents and platform binary fallback metadata.
+- id: R2
+  text: Release/install checks avoid network-only dependencies and are suitable for CI-style local verification.
+- id: R3
+  text: Release and install documentation describes the validated fresh-install path accurately.
+design:
+  summary: Extend existing Makefile/npm validation scripts and docs to pin package contents and binary resolution metadata. Keep checks local; do not require npm publish, GitHub release execution, or real provider network calls.
+  owned_surfaces:
+  - scripts
+  - package.json
+  - .github
+  - docs/install.md
+  - README.md
+  - Makefile
+  notes: null
+tasks:
+- id: MCP-143-T001
+  title: Expand local package validation
+  goal: Inspect package validation and Makefile targets, then add deterministic checks for npm package contents and platform binary fallback metadata where missing.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - scripts
+  - package.json
+  - Makefile
+  verification:
+  - npm run package:validate
+  - make pi-extension-test
+  acceptance:
+  - Package validation checks contents and fallback metadata.
+  - Checks are local and network-free.
+  notes: null
+- id: MCP-143-T002
+  title: Align release install docs
+  goal: Update README/install/release workflow wording only where needed to match validated package and fresh-install behavior.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-143-T001
+  owned_surfaces:
+  - .github
+  - docs/install.md
+  - README.md
+  verification:
+  - cargo fmt --check
+  - cargo check
+  - cargo test
+  - make check
+  acceptance:
+  - Docs accurately describe validated fresh-install and release package paths.
+  - Full verification passes.
+  notes: null

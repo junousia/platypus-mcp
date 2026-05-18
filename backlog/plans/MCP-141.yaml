@@ -1,0 +1,60 @@
+item_id: MCP-141
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: At least one failed or interrupted worker handoff path is covered by tests with safe retry or recovery guidance.
+- id: R2
+  text: Stale or obstructed worktree scenarios remain inspectable and provide concrete recovery guidance without source inspection.
+- id: R3
+  text: Any behavior changes preserve bounded Git operations and audit-friendly lifecycle state.
+design:
+  summary: Build on existing dispatch, workspace, reconcile, and stdio recovery tests. Prefer tests that pin current behavior; tighten recovery messages only where output is ambiguous or unsafe.
+  owned_surfaces:
+  - src/dispatch.rs
+  - src/workspace.rs
+  - src/reconcile.rs
+  - src/state
+  - tests
+  - docs/workflow.md
+  notes: null
+tasks:
+- id: MCP-141-T001
+  title: Cover failed handoff retry paths
+  goal: Add or strengthen tests for branch/worktree preparation failures and retry/recovery behavior across dispatch and stdio flows.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/dispatch.rs
+  - tests/stdio_protocol.rs
+  verification:
+  - cargo test dispatch::tests
+  - cargo test stdio_server_recovers_after_failed_worker_handoff
+  acceptance:
+  - A failed or interrupted handoff path is covered.
+  - Retry or recovery guidance is asserted.
+  notes: null
+- id: MCP-141-T002
+  title: Cover stale worktree inspection guidance
+  goal: Add or strengthen tests for stale, obstructed, or dirty recorded worktree scenarios and update recovery wording only if needed.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/workspace.rs
+  - src/reconcile.rs
+  - src/state
+  - tests
+  - docs/workflow.md
+  verification:
+  - cargo test workspace::tests
+  - cargo test reconcile::tests
+  - make check
+  acceptance:
+  - Stale or obstructed worktree behavior remains inspectable.
+  - Recovery messages include concrete next actions.
+  - Full verification passes.
+  notes: null

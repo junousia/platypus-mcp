@@ -1,0 +1,55 @@
+item_id: MCP-140
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Host bootstrap smoke coverage exercises representative Codex, Claude, OpenCode, and Pi configuration output without invoking external host binaries.
+- id: R2
+  text: Important startup paths, MCP command snippets, package/source entries, and init-project expectations are asserted deterministically.
+- id: R3
+  text: Install documentation stays aligned with supported bootstrap commands and local-only verification.
+design:
+  summary: Extend the existing bootstrap unit and/or stdio coverage around src/bootstrap helpers, keeping all checks local and deterministic. Update docs only if test coverage reveals stale host setup wording.
+  owned_surfaces:
+  - src/bootstrap
+  - tests
+  - docs/install.md
+  - README.md
+  notes: null
+tasks:
+- id: MCP-140-T001
+  title: Add bootstrap smoke assertions
+  goal: Inspect existing bootstrap tests and add representative smoke assertions for Codex, Claude, OpenCode, and Pi generated configuration/startup expectations.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/bootstrap
+  - tests
+  verification:
+  - cargo test bootstrap::tests
+  - cargo test stdio_server_initializes_project_scaffold
+  acceptance:
+  - Tests cover representative bootstrap output for all supported hosts.
+  - Tests do not invoke external host binaries or require network access.
+  notes: null
+- id: MCP-140-T002
+  title: Align install documentation with smoke coverage
+  goal: Update install or README wording only where needed so documented bootstrap commands match the validated host setup paths.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-140-T001
+  owned_surfaces:
+  - docs/install.md
+  - README.md
+  verification:
+  - cargo fmt --check
+  - cargo check
+  - cargo test
+  - make check
+  acceptance:
+  - Docs remain accurate for Codex, Claude, OpenCode, and Pi bootstrap commands.
+  - Full repository verification passes.
+  notes: null
