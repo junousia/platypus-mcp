@@ -52,6 +52,16 @@ impl From<rusqlite::Error> for RepositoryError {
                     message: "storage constraint violation".to_string(),
                 }
             }
+            rusqlite::Error::SqliteFailure(error, _)
+                if matches!(
+                    error.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) =>
+            {
+                Self::Conflict {
+                    message: "SQLite database remained locked after the bounded busy timeout; retry the operation after concurrent Platypus work finishes or inspect stuck processes holding the project state database.".to_string(),
+                }
+            }
             other => Self::Backend {
                 message: other.to_string(),
             },
@@ -64,6 +74,42 @@ impl From<serde_json::Error> for RepositoryError {
         Self::Serialization {
             message: error.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RepositoryError;
+    use rusqlite::Connection;
+    use tempfile::TempDir;
+
+    #[test]
+    fn sqlite_busy_errors_return_retryable_recovery_guidance() {
+        let temp = TempDir::new().expect("temp dir");
+        let db_path = temp.path().join("locked.sqlite3");
+        let locker = Connection::open(&db_path).expect("locker connection");
+        locker
+            .execute("CREATE TABLE records(id INTEGER PRIMARY KEY)", [])
+            .expect("create table");
+        let transaction = locker.unchecked_transaction().expect("start lock");
+        transaction
+            .execute("INSERT INTO records DEFAULT VALUES", [])
+            .expect("hold write lock");
+
+        let contender = Connection::open(&db_path).expect("contender connection");
+        contender
+            .busy_timeout(std::time::Duration::from_millis(1))
+            .expect("short busy timeout");
+        let error = contender
+            .execute("INSERT INTO records DEFAULT VALUES", [])
+            .expect_err("persistent lock should fail");
+
+        let mapped = RepositoryError::from(error);
+        assert!(mapped.is_conflict(), "unexpected error: {mapped}");
+        assert!(
+            mapped.to_string().contains("bounded busy timeout"),
+            "unexpected guidance: {mapped}"
+        );
     }
 }
 
