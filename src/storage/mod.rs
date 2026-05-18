@@ -195,9 +195,9 @@ pub fn connect_existing_read_only(
     ensure_inside_root(&project_root, &canonical_db)?;
     let connection = Connection::open_with_flags(&canonical_db, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|source| StorageError::OpenDatabase {
-            path: canonical_db.clone(),
-            source,
-        })?;
+        path: canonical_db.clone(),
+        source,
+    })?;
     configure_connection(&connection).map_err(|source| StorageError::OpenDatabase {
         path: canonical_db.clone(),
         source,
@@ -286,7 +286,10 @@ mod tests {
 
         let connection = Connection::open(&init.db_path).expect("open db");
         assert_eq!(read_user_version(&connection), SCHEMA_VERSION);
-        assert_eq!(read_busy_timeout(&connection), SQLITE_BUSY_TIMEOUT.as_millis() as i64);
+        assert_eq!(
+            read_busy_timeout(&connection),
+            SQLITE_BUSY_TIMEOUT.as_millis() as i64
+        );
         for table in [
             "metadata",
             "tasks",
