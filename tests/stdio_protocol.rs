@@ -2418,6 +2418,9 @@ async fn stdio_server_recovers_after_failed_worker_handoff() -> anyhow::Result<(
         .as_str()
         .expect("summary")
         .contains("worktree"));
+    let failed_next_action = failed["next_action"].as_str().expect("next action");
+    assert!(failed_next_action.contains("Inspect"));
+    assert!(failed_next_action.contains("retry prepare_worker_handoff"));
 
     let inspected = call_tool_json(
         &client,
