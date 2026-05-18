@@ -1,0 +1,43 @@
+item_id: MCP-144
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Documentation describes provider-neutral external intake snapshots and approved report dispatch as the adapter boundary.
+- id: R2
+  text: The boundary clearly separates Platypus MCP deterministic local state from host/plugin provider network clients and credentials.
+- id: R3
+  text: No real provider network clients, credentials, or hidden external mutations are introduced.
+design:
+  summary: Focus on docs and any light boundary comments around existing src/integrations report/intake code. Clarify adapter responsibilities for Linear, Jira, GitLab, and plugin-backed sources without implementing providers.
+  owned_surfaces:
+  - src/integrations
+  - docs/roadmap.md
+  - docs/tools.md
+  - docs/workflow.md
+  notes: null
+tasks:
+- id: MCP-144-T001
+  title: Document external adapter boundary
+  goal: Add provider-neutral adapter guidance for intake snapshots and approved report dispatch, including what belongs in Platypus versus host/plugin code.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - docs/roadmap.md
+  - docs/tools.md
+  - docs/workflow.md
+  - src/integrations
+  verification:
+  - cargo test integrations::tests
+  - cargo fmt --check
+  - cargo check
+  - cargo test
+  - make check
+  acceptance:
+  - Docs name the boundary and safety rules for future external adapters.
+  - No provider clients or credentials are added.
+  - Existing integration/report tests pass.
+  notes: null

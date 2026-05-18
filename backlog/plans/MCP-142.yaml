@@ -1,0 +1,57 @@
+item_id: MCP-142
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Queue-empty and tranche-shaping guidance explains how hosts should create a small reviewed backlog tranche without hiding model judgment in MCP tools.
+- id: R2
+  text: Backlog creation and task-plan responses point to accurate next inspection, planning, validation, or dispatch actions.
+- id: R3
+  text: Workflow/tool docs include a concise product-direction-to-backlog/task-plan example.
+design:
+  summary: Improve deterministic guidance strings, schema hints, and documentation around create_backlog_items, write_task_plan, inspect_session, and inspect_work_queue. Avoid adding pseudo-intelligent planning behavior to the server.
+  owned_surfaces:
+  - src/backlog
+  - src/guidance.rs
+  - src/host_guidance.rs
+  - docs/workflow.md
+  - docs/tools.md
+  notes: null
+tasks:
+- id: MCP-142-T001
+  title: Improve deterministic backlog planning guidance
+  goal: Review and adjust response next_action/schema-hint wording so empty queues and newly created items guide hosts to the correct next action.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/backlog
+  - src/guidance.rs
+  - src/host_guidance.rs
+  verification:
+  - cargo test backlog::tests
+  - cargo test guidance::tests
+  acceptance:
+  - Guidance distinguishes creating a tranche, writing task plans, inspecting queues, and direct completion.
+  - Existing response behavior remains deterministic and test-covered.
+  notes: null
+- id: MCP-142-T002
+  title: Document tranche shaping example
+  goal: Add a concise workflow/tools example showing how a host turns product direction into backlog items and task plans.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-142-T001
+  owned_surfaces:
+  - docs/workflow.md
+  - docs/tools.md
+  verification:
+  - cargo fmt --check
+  - cargo check
+  - cargo test
+  - make check
+  acceptance:
+  - Docs contain a concise example for product-direction-to-backlog/task-plan flow.
+  - Full verification passes.
+  notes: null
