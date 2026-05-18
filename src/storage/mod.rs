@@ -10,7 +10,10 @@ use std::{
     fmt::{self, Display, Formatter},
     fs,
     path::{Path, PathBuf},
+    time::Duration,
 };
+
+pub const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub use schema::SCHEMA_VERSION;
 
@@ -192,6 +195,10 @@ pub fn connect_existing_read_only(
     ensure_inside_root(&project_root, &canonical_db)?;
     let connection = Connection::open_with_flags(&canonical_db, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|source| StorageError::OpenDatabase {
+            path: canonical_db.clone(),
+            source,
+        })?;
+    configure_connection(&connection).map_err(|source| StorageError::OpenDatabase {
         path: canonical_db.clone(),
         source,
     })?;
@@ -220,6 +227,10 @@ fn connect_inner(
             path: db_path.clone(),
             source,
         })?;
+    configure_connection(&connection).map_err(|source| StorageError::OpenDatabase {
+        path: db_path.clone(),
+        source,
+    })?;
 
     schema::initialize(&mut connection).map_err(|source| StorageError::InitializeSchema {
         path: db_path.clone(),
@@ -234,6 +245,10 @@ fn connect_inner(
         schema_version: SCHEMA_VERSION,
     };
     Ok((init, connection))
+}
+
+fn configure_connection(connection: &Connection) -> rusqlite::Result<()> {
+    connection.busy_timeout(SQLITE_BUSY_TIMEOUT)
 }
 
 fn ensure_inside_root(root: &Path, path: &Path) -> StorageResult<()> {
@@ -271,6 +286,7 @@ mod tests {
 
         let connection = Connection::open(&init.db_path).expect("open db");
         assert_eq!(read_user_version(&connection), SCHEMA_VERSION);
+        assert_eq!(read_busy_timeout(&connection), SQLITE_BUSY_TIMEOUT.as_millis() as i64);
         for table in [
             "metadata",
             "tasks",
@@ -302,7 +318,11 @@ mod tests {
 
         let existing = connect_existing_read_only(project.path(), None).expect("read-only open");
 
-        assert!(existing.is_some());
+        let existing = existing.expect("initialized read-only connection");
+        assert_eq!(
+            read_busy_timeout(&existing.connection),
+            SQLITE_BUSY_TIMEOUT.as_millis() as i64
+        );
     }
 
     #[test]
@@ -339,6 +359,12 @@ mod tests {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("user version")
+    }
+
+    fn read_busy_timeout(connection: &Connection) -> i64 {
+        connection
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .expect("busy timeout")
     }
 
     fn table_exists(connection: &Connection, table: &str) -> bool {
