@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { Container, type SelectItem, SelectList, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
 	buildCompletePrompt,
@@ -692,16 +693,24 @@ function guidanceForSnapshot(snapshot?: PlatypusSnapshot): string | undefined {
 	return lines.join("\n");
 }
 
+function shouldShowFooterStatus(snapshot: PlatypusSnapshot | undefined): boolean {
+	if (!snapshot) return false;
+	if (snapshot.error) return true;
+	return snapshot.ready > 0 || snapshot.blocked > 0 || snapshot.active > 0 || (snapshot.pendingIntegration ?? 0) > 0;
+}
+
 function updateUi(ctx: ExtensionContext, snapshot: PlatypusSnapshot | undefined, widgetVisible: boolean) {
 	if (!ctx.hasUI) return;
 	const theme = ctx.ui.theme;
 	if (!snapshot) {
-		ctx.ui.setStatus(STATUS_KEY, theme.fg("dim", "platypus: idle"));
+		ctx.ui.setStatus(STATUS_KEY, undefined);
 		ctx.ui.setWidget(WIDGET_KEY, undefined);
 		return;
 	}
 
-	if (snapshot.error) {
+	if (!shouldShowFooterStatus(snapshot)) {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+	} else if (snapshot.error) {
 		ctx.ui.setStatus(STATUS_KEY, theme.fg("error", "platypus: error"));
 	} else if (snapshot.ready > 0) {
 		ctx.ui.setStatus(STATUS_KEY, theme.fg("success", compactStatus(snapshot)));
@@ -728,8 +737,17 @@ function updateUi(ctx: ExtensionContext, snapshot: PlatypusSnapshot | undefined,
 	}));
 }
 
-function renderToolDashboard(result: { details?: unknown; content?: Array<{ text?: string }> }, theme: { fg: (color: string, text: string) => string }) {
-	const lines = renderToolResultLines(result, { expanded: true });
+const EXPANDED_RESULT_TOOLS = new Set([
+	"inspect_session",
+	"inspect_status",
+	"inspect_work_queue",
+	"inspect_queue_status",
+	"doctor_snapshot",
+	"inspect_workflow_config",
+]);
+
+function renderToolDashboard(result: { details?: unknown; content?: Array<{ text?: string }> }, theme: { fg: (color: string, text: string) => string }, expanded = false) {
+	const lines = renderToolResultLines(result, { expanded });
 	return new Text(lines.map((line: string, index: number) => {
 		if (index === 0 && line.startsWith("!")) return theme.fg("error", line);
 		if (line.startsWith("▶") || line.startsWith("✓")) return theme.fg("success", line);
@@ -739,9 +757,57 @@ function renderToolDashboard(result: { details?: unknown; content?: Array<{ text
 	}).join("\n"), 0, 0);
 }
 
+function knownSnapshotItems(snapshot: PlatypusSnapshot | undefined, includeBlocked = true) {
+	const seen = new Set<string>();
+	const items: ReadyItem[] = [];
+	for (const item of [...(snapshot?.readyItems ?? []), ...(includeBlocked ? snapshot?.blockedItems ?? [] : [])]) {
+		if (seen.has(item.id)) continue;
+		seen.add(item.id);
+		items.push(item);
+	}
+	return items;
+}
+
+async function selectSnapshotItem(ctx: ExtensionContext, title: string, items: ReadyItem[]): Promise<ReadyItem | undefined> {
+	if (items.length === 0) return undefined;
+	if (items.length === 1 || !ctx.hasUI) return items[0];
+
+	const options: SelectItem[] = items.map((item) => ({
+		value: item.id,
+		label: `${item.id}${item.priority ? ` ${item.priority}` : ""}`,
+		description: item.state ? `${item.state} — ${item.title}` : item.title,
+	}));
+	const selectedId = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
+		const container = new Container();
+		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+		container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+		const selectList = new SelectList(options, Math.min(options.length, 10), {
+			selectedPrefix: (text: string) => theme.fg("accent", text),
+			selectedText: (text: string) => theme.fg("accent", text),
+			description: (text: string) => theme.fg("muted", text),
+			scrollInfo: (text: string) => theme.fg("dim", text),
+			noMatch: (text: string) => theme.fg("warning", text),
+		});
+		selectList.onSelect = (item) => done(String(item.value));
+		selectList.onCancel = () => done(null);
+		container.addChild(selectList);
+		container.addChild(new Text(theme.fg("dim", "↑↓ navigate • type to filter • enter select • esc cancel"), 1, 0));
+		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+		return {
+			render: (width: number) => container.render(width),
+			invalidate: () => container.invalidate(),
+			handleInput: (data: string) => {
+				selectList.handleInput?.(data);
+				tui.requestRender();
+			},
+		};
+	}, { overlay: true, overlayOptions: { width: "70%", minWidth: 48, maxHeight: "70%", anchor: "center" } });
+	return selectedId ? items.find((item) => item.id === selectedId) : undefined;
+}
+
 export default function platypusPiExtension(pi: ExtensionAPI) {
 	let latestSnapshot: PlatypusSnapshot | undefined;
-	let widgetVisible = true;
+	let widgetVisible = false;
 	let lastInjectedPrompt = "";
 
 	const applySnapshot = (ctx: ExtensionContext, snapshot: PlatypusSnapshot | undefined) => {
@@ -784,7 +850,7 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 				return new Text(theme.fg("toolTitle", `platypus_${tool.name}`) + theme.fg("dim", suffix), 0, 0);
 			},
 			renderResult(result, _options, theme) {
-				return renderToolDashboard(result, theme);
+				return renderToolDashboard(result, theme, EXPANDED_RESULT_TOOLS.has(tool.name));
 			},
 		});
 	}
@@ -807,7 +873,7 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 			return result;
 		},
 		renderResult(result, _options, theme) {
-			return renderToolDashboard(result, theme);
+			return renderToolDashboard(result, theme, false);
 		},
 	});
 
@@ -904,7 +970,11 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		description: "Review a story draft or backlog item before execution",
 		handler: async (args, ctx) => {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
-			const input = Array.isArray(args) ? args.join(" ") : String(args ?? "");
+			let input = Array.isArray(args) ? args.join(" ") : String(args ?? "");
+			if (!input.trim()) {
+				const item = await selectSnapshotItem(ctx, "Review Story", knownSnapshotItems(latestSnapshot));
+				if (item) input = item.id;
+			}
 			pi.sendUserMessage(buildStoryReviewPrompt(input), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
@@ -913,7 +983,11 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		description: "Review implementation planning before work starts",
 		handler: async (args, ctx) => {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
-			const input = Array.isArray(args) ? args.join(" ") : String(args ?? "");
+			let input = Array.isArray(args) ? args.join(" ") : String(args ?? "");
+			if (!input.trim()) {
+				const item = await selectSnapshotItem(ctx, "Review Implementation Plan", knownSnapshotItems(latestSnapshot));
+				if (item) input = item.id;
+			}
 			pi.sendUserMessage(buildImplementationPlanReviewPrompt(input), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
@@ -922,7 +996,11 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		description: "Review implemented work, findings, and completion evidence",
 		handler: async (args, ctx) => {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
-			const input = Array.isArray(args) ? args.join(" ") : String(args ?? "");
+			let input = Array.isArray(args) ? args.join(" ") : String(args ?? "");
+			if (!input.trim()) {
+				const item = await selectSnapshotItem(ctx, "Review Implementation Result", knownSnapshotItems(latestSnapshot));
+				if (item) input = item.id;
+			}
 			pi.sendUserMessage(buildPostImplementationReviewPrompt(input), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
@@ -931,7 +1009,7 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 		description: "Ask the agent to work on the next ready Platypus item",
 		handler: async (_args, ctx) => {
 			if (!latestSnapshot) await refreshSnapshot(ctx);
-			const item = latestSnapshot?.readyItems[0];
+			const item = await selectSnapshotItem(ctx, "Start Platypus Item", latestSnapshot?.readyItems ?? []);
 			if (!item) {
 				if (ctx.hasUI) ctx.ui.notify(noReadyItemMessage(), "warning");
 				return;
@@ -943,7 +1021,8 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 	pi.registerCommand("platy-complete", {
 		description: "Prompt the agent to complete the current direct Platypus item",
 		handler: async (_args, ctx) => {
-			const item = latestSnapshot?.readyItems[0];
+			if (!latestSnapshot) await refreshSnapshot(ctx);
+			const item = await selectSnapshotItem(ctx, "Complete Platypus Item", latestSnapshot?.readyItems ?? []);
 			pi.sendUserMessage(buildCompletePrompt(item), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
@@ -1005,7 +1084,8 @@ export default function platypusPiExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (ctx.hasUI) {
-			ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", "platypus: loading"));
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+			ctx.ui.setWidget(WIDGET_KEY, undefined);
 			ctx.ui.addAutocompleteProvider((current) => ({
 				async getSuggestions(lines, line, col, options) {
 					const beforeCursor = (lines[line] ?? "").slice(0, col);
