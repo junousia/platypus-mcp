@@ -476,6 +476,17 @@ external reference, use:
 This keeps provider credentials outside Platypus state while preserving an
 auditable local record of what was approved and reported.
 
+External adapter boundary:
+
+- Provider-specific readers and writers live in the MCP host or approved
+  plugins, where credentials and rate-limit handling belong.
+- Platypus accepts only sanitized intake snapshots, provider-neutral external
+  refs, drafted report payloads, approvals, and recorded dispatch outcomes.
+- Linear, Jira, GitLab, GitHub, and custom adapters should all map through the
+  same local backlog and report schemas before any local state changes.
+- Core Platypus tools must not hide external network calls behind deterministic
+  local inspection or mutation tool names.
+
 ## Task Planning
 
 Use `inspect_work_queue` to inspect task-plan state and setup blockers. The

@@ -99,7 +99,8 @@ standard or full work.
 - First-class host smoke tests for each supported bootstrap target.
 - Richer MCP guidance resources if hosts start consuming them consistently.
 - External intake adapters for Linear, Jira, GitLab, and custom plugin-backed
-  sources, all mapping into local executable backlog snapshots.
+  sources, all mapping provider records into local executable backlog snapshots
+  and approved report outcomes before any provider-side mutation is recorded.
 - A second runtime backend only after the storage capability probe and
   `ProjectState` contract suite demonstrate equivalent semantics to local
   SQLite.

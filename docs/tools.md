@@ -340,6 +340,23 @@ External intake adapters should map provider-specific records into the same
 draft shape before creating local backlog items. The local backlog item remains
 the stable executable snapshot.
 
+#### External Adapter Boundary
+
+Future Linear, Jira, GitLab, GitHub, or plugin-backed adapters should stop at a
+provider-neutral boundary:
+
+1. The host or approved plugin reads provider data using provider credentials.
+2. It passes sanitized records to Platypus as external intake snapshots or
+   provider-neutral report dispatch outcomes.
+3. Platypus stores local backlog items, external refs, evidence, approvals, and
+   dispatch audit records.
+4. Any network write back to the provider happens outside Platypus, after an
+   explicit approval, and is then recorded with `record_external_report_dispatch`.
+
+Provider clients therefore belong in the MCP host or an approved plugin, not in
+core Platypus tools. Core tools should remain deterministic local state
+transitions over snapshots, approvals, evidence, findings, and report payloads.
+
 #### External Reporting And Sync Policy
 
 Platypus should treat external trackers as integration surfaces, not hidden
