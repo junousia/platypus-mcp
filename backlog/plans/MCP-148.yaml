@@ -1,0 +1,58 @@
+item_id: MCP-148
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Unowned changed-file failures explain whether to update the task plan, split work, or discard out-of-scope changes.
+- id: R2
+  text: Selected task bundle surfaces are traceable to task-plan and item surfaces.
+- id: R3
+  text: 'Safety remains strict: out-of-scope worker changes are not silently accepted.'
+design:
+  summary: Improve changed-file validation messages and task-plan/bundle guidance so out-of-scope changes are recoverable without manual database edits. Keep validation fail-closed while making the correct planning or cleanup action explicit.
+  owned_surfaces:
+  - src/assignments
+  - src/backlog/plan.rs
+  - src/host_lifecycle.rs
+  - src/models.rs
+  - docs/workflow.md
+  - tests
+  notes: null
+tasks:
+- id: MCP-148-T001
+  title: Improve unowned changed-file recovery guidance
+  goal: Update validation and finish_work guidance for out-of-scope changed files to explain update-plan, split-work, or discard options.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/assignments
+  - src/host_lifecycle.rs
+  - src/models.rs
+  verification:
+  - cargo test assignments::tests
+  - cargo test host_lifecycle::tests
+  acceptance:
+  - Unowned changed-file errors include actionable recovery choices.
+  - Safety still rejects out-of-scope changes by default.
+  notes: null
+- id: MCP-148-T002
+  title: Document and test bundle surface traceability
+  goal: Ensure task bundle surface selection is documented/tested and traceable to task-plan and item surfaces.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-148-T001
+  owned_surfaces:
+  - src/backlog/plan.rs
+  - docs/workflow.md
+  - tests
+  verification:
+  - cargo test bundle::tests
+  - make check
+  acceptance:
+  - Tests or docs show where selected task surfaces come from.
+  - Full verification passes.
+  notes: null

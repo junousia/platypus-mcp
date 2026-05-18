@@ -1,0 +1,57 @@
+item_id: MCP-146
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Ordinary transient SQLite write lock contention during concurrent mutating tools is retried or serialized boundedly instead of surfacing as immediate database locked failures.
+- id: R2
+  text: Persistent database locks still fail closed with structured recovery guidance after a bounded wait or retry budget.
+- id: R3
+  text: Concurrency behavior is covered by deterministic tests.
+design:
+  summary: Review SQLite connection initialization and mutating tool state paths, then add a local-first bounded busy timeout/retry/serialization strategy at the storage boundary so all mutating tools benefit consistently. Add tests that exercise concurrent finish_work or lower-level state mutations.
+  owned_surfaces:
+  - src/storage
+  - src/state/sqlite
+  - src/host_lifecycle.rs
+  - src/dispatch.rs
+  - tests
+  notes: null
+tasks:
+- id: MCP-146-T001
+  title: Add bounded SQLite lock handling
+  goal: Implement bounded lock wait/retry or serialized write handling in the SQLite storage/state boundary and preserve structured errors for persistent locks.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/storage
+  - src/state/sqlite
+  verification:
+  - cargo test storage::tests
+  - cargo test state::sqlite::tests
+  acceptance:
+  - Transient lock contention is handled by a bounded retry/wait path.
+  - Persistent lock failures still return clear recovery guidance.
+  notes: null
+- id: MCP-146-T002
+  title: Cover concurrent mutating lifecycle calls
+  goal: Add deterministic coverage for concurrent finish_work or comparable state mutations that previously risked database locked failures.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on:
+  - MCP-146-T001
+  owned_surfaces:
+  - src/host_lifecycle.rs
+  - src/dispatch.rs
+  - tests
+  verification:
+  - cargo test host_lifecycle::tests
+  - cargo test stdio_protocol
+  - make check
+  acceptance:
+  - Tests exercise concurrent or lock-contention behavior.
+  - Full verification passes.
+  notes: null

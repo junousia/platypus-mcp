@@ -1,0 +1,57 @@
+item_id: MCP-149
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Worker handoff and completion guidance makes formatting verification expectations explicit before integration.
+- id: R2
+  text: Integration or review guidance flags formatting-sensitive changes before final manager-workspace integration where practical.
+- id: R3
+  text: MCP tools do not run arbitrary formatter commands automatically.
+design:
+  summary: Prefer guidance and verification-contract changes over tool-side command execution. Update worker bundle/completion/integration guidance so formatting checks happen in worker verification before integration, reducing manager cleanup commits.
+  owned_surfaces:
+  - src/workspace.rs
+  - src/dispatch.rs
+  - src/host_lifecycle.rs
+  - docs/workflow.md
+  - tests
+  notes: null
+tasks:
+- id: MCP-149-T001
+  title: Clarify formatting verification in worker guidance
+  goal: Update worker handoff/completion guidance to make formatting checks an expected part of worker verification where project commands define them.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/dispatch.rs
+  - src/host_lifecycle.rs
+  - docs/workflow.md
+  verification:
+  - cargo test host_lifecycle::tests
+  - cargo test dispatch::tests
+  acceptance:
+  - Worker guidance explicitly calls out formatting verification expectations.
+  - No arbitrary formatter execution is introduced.
+  notes: null
+- id: MCP-149-T002
+  title: Flag formatting-sensitive integration review path
+  goal: Adjust integration/review guidance or tests so hosts notice formatting-sensitive changes before final integration where practical.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-149-T001
+  owned_surfaces:
+  - src/workspace.rs
+  - tests
+  - docs/workflow.md
+  verification:
+  - cargo test workspace::tests
+  - make check
+  acceptance:
+  - Integration or review guidance covers formatting-sensitive verification path.
+  - Full verification passes.
+  notes: null

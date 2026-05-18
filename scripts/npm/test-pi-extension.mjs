@@ -309,6 +309,8 @@ assert.match(extensionSource, /promptSnippet/);
 assert.match(extensionSource, /addAutocompleteProvider/);
 assert.match(extensionSource, /let widgetVisible = false/);
 assert.match(extensionSource, /shouldShowFooterStatus/);
+assert.match(extensionSource, /ctx\.ui\.select\(title, fallbackLabels\)/);
+assert.match(extensionSource, /selectedId === null/);
 assert.doesNotMatch(extensionSource, /platypus: loading/);
 
 console.log("pi extension harness ok");

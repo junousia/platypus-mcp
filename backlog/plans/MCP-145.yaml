@@ -1,0 +1,40 @@
+item_id: MCP-145
+version: 1
+mode: minimal
+requirements:
+- id: R1
+  text: Pi renders a visible fallback status line for structured Platypus tool results that have no stdout.
+- id: R2
+  text: Mutating tool results remain compact but clearly show state transition status, summary, and next action where available.
+- id: R3
+  text: Existing compact and expanded renderer behavior remains compatible.
+design:
+  summary: Update the Pi extension result rendering path to derive visible fallback lines from structured Platypus result fields when textual output is absent. Cover the behavior in the npm renderer/extension harness without changing MCP server schemas.
+  owned_surfaces:
+  - extensions/platypus/index.ts
+  - extensions/platypus/renderers.mjs
+  - scripts/npm/test-pi-extension.mjs
+  - scripts/npm/test-pi-renderers.mjs
+  notes: null
+tasks:
+- id: MCP-145-T001
+  title: Add structured-result fallback rendering
+  goal: Implement and test a compact fallback display for Platypus structured results with empty stdout.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - extensions/platypus/index.ts
+  - extensions/platypus/renderers.mjs
+  - scripts/npm/test-pi-extension.mjs
+  - scripts/npm/test-pi-renderers.mjs
+  verification:
+  - make pi-extension-test
+  - make check
+  acceptance:
+  - Structured status/summary results with no stdout render visible Pi output.
+  - Mutating results show enough information to confirm state transition outcome.
+  - Existing result rendering tests pass.
+  notes: null

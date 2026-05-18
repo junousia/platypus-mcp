@@ -1,0 +1,56 @@
+item_id: MCP-147
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: finish_work does not leave ambiguous partial lifecycle state when verification evidence recording fails, or retrying finish_work is explicitly idempotent and completes missing evidence.
+- id: R2
+  text: Recovery guidance for partial finish_work failures names concrete inspection and retry tools.
+- id: R3
+  text: Tests cover failure after assignment completion but before evidence recording.
+design:
+  summary: Inspect finish_work ordering across assignment completion, evidence recording, finding handling, and integration guidance. Prefer transactional grouping where practical; otherwise make post-completion evidence recording idempotent and recoverable with explicit guidance.
+  owned_surfaces:
+  - src/host_lifecycle.rs
+  - src/evidence.rs
+  - src/state
+  - src/storage
+  - tests
+  notes: null
+tasks:
+- id: MCP-147-T001
+  title: Harden finish_work partial-failure recovery
+  goal: Refactor or guard finish_work so evidence-recording failures do not strand callers in ambiguous lifecycle state, and retries can complete safely.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/host_lifecycle.rs
+  - src/evidence.rs
+  - src/state
+  - src/storage
+  verification:
+  - cargo test host_lifecycle::tests
+  - cargo test evidence::tests
+  acceptance:
+  - finish_work either remains atomic through evidence recording or documents and implements a safe idempotent retry path.
+  - Recovery guidance names exact inspection/retry tools.
+  notes: null
+- id: MCP-147-T002
+  title: Test finish_work evidence failure recovery
+  goal: Add tests for a failure after assignment completion but before verification evidence recording and the expected recovery/retry outcome.
+  requirement_refs:
+  - R3
+  depends_on:
+  - MCP-147-T001
+  owned_surfaces:
+  - tests
+  - src/host_lifecycle.rs
+  verification:
+  - cargo test finish_work
+  - make check
+  acceptance:
+  - Partial failure scenario is test-covered.
+  - Full verification passes.
+  notes: null

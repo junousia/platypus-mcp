@@ -777,32 +777,44 @@ async function selectSnapshotItem(ctx: ExtensionContext, title: string, items: R
 		label: `${item.id}${item.priority ? ` ${item.priority}` : ""}`,
 		description: item.state ? `${item.state} — ${item.title}` : item.title,
 	}));
-	const selectedId = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
-		const container = new Container();
-		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-		container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
-		const selectList = new SelectList(options, Math.min(options.length, 10), {
-			selectedPrefix: (text: string) => theme.fg("accent", text),
-			selectedText: (text: string) => theme.fg("accent", text),
-			description: (text: string) => theme.fg("muted", text),
-			scrollInfo: (text: string) => theme.fg("dim", text),
-			noMatch: (text: string) => theme.fg("warning", text),
-		});
-		selectList.onSelect = (item) => done(String(item.value));
-		selectList.onCancel = () => done(null);
-		container.addChild(selectList);
-		container.addChild(new Text(theme.fg("dim", "↑↓ navigate • type to filter • enter select • esc cancel"), 1, 0));
-		container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-		return {
-			render: (width: number) => container.render(width),
-			invalidate: () => container.invalidate(),
-			handleInput: (data: string) => {
-				selectList.handleInput?.(data);
-				tui.requestRender();
-			},
-		};
-	}, { overlay: true, overlayOptions: { width: "70%", minWidth: 48, maxHeight: "70%", anchor: "center" } });
-	return selectedId ? items.find((item) => item.id === selectedId) : undefined;
+	let selectedId: string | null | undefined;
+	try {
+		selectedId = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
+			const container = new Container();
+			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+			container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+			const selectList = new SelectList(options, Math.min(options.length, 10), {
+				selectedPrefix: (text: string) => theme.fg("accent", text),
+				selectedText: (text: string) => theme.fg("accent", text),
+				description: (text: string) => theme.fg("muted", text),
+				scrollInfo: (text: string) => theme.fg("dim", text),
+				noMatch: (text: string) => theme.fg("warning", text),
+			});
+			selectList.onSelect = (item) => done(String(item.value));
+			selectList.onCancel = () => done(null);
+			container.addChild(selectList);
+			container.addChild(new Text(theme.fg("dim", "↑↓ navigate • type to filter • enter select • esc cancel"), 1, 0));
+			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+			return {
+				render: (width: number) => container.render(width),
+				invalidate: () => container.invalidate(),
+				handleInput: (data: string) => {
+					selectList.handleInput?.(data);
+					tui.requestRender();
+				},
+			};
+		}, { overlay: true, overlayOptions: { width: "70%", minWidth: 48, maxHeight: "70%", anchor: "center" } });
+	} catch {
+		selectedId = undefined;
+	}
+	if (selectedId === null) return undefined;
+	if (selectedId) return items.find((item) => item.id === selectedId);
+
+	const fallbackLabels = options.map((option) => `${option.label} — ${option.description ?? ""}`);
+	const selectedLabel = await ctx.ui.select(title, fallbackLabels);
+	if (!selectedLabel) return undefined;
+	const selectedIndex = fallbackLabels.indexOf(selectedLabel);
+	return selectedIndex >= 0 ? items[selectedIndex] : items[0];
 }
 
 export default function platypusPiExtension(pi: ExtensionAPI) {
