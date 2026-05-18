@@ -1,0 +1,53 @@
+item_id: MCP-150
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Workflow guidance explains what to do when a branch PR has merged but local follow-up commits are added.
+- id: R2
+  text: Any Pi affordance for PR merged awareness is optional and degrades gracefully without GitHub credentials, network, or gh installed.
+- id: R3
+  text: Core MCP tools do not depend on GitHub network access.
+design:
+  summary: Keep GitHub/provider-specific awareness in Pi or docs rather than core MCP server behavior. Add lightweight guidance and, only if practical, optional Pi-side detection messaging that does not block normal local workflows.
+  owned_surfaces:
+  - extensions/platypus
+  - docs/workflow.md
+  - docs/tools.md
+  notes: null
+tasks:
+- id: MCP-150-T001
+  title: Document merged-PR follow-up workflow
+  goal: Add workflow/tool guidance for noticing a merged source PR and routing follow-up commits to a new PR or branch intentionally.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - docs/workflow.md
+  - docs/tools.md
+  verification:
+  - cargo fmt --check
+  - cargo check
+  - cargo test
+  acceptance:
+  - Docs explain merged-PR follow-up branch/PR behavior.
+  - Core MCP remains provider-neutral.
+  notes: null
+- id: MCP-150-T002
+  title: Explore optional Pi merged-PR awareness
+  goal: Add or document a graceful Pi affordance if feasible without requiring gh, GitHub credentials, or network access.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-150-T001
+  owned_surfaces:
+  - extensions/platypus
+  verification:
+  - make pi-extension-test
+  - make check
+  acceptance:
+  - Any Pi behavior is optional and degrades gracefully.
+  - Full verification passes.
+  notes: null
