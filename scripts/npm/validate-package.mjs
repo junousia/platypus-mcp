@@ -26,6 +26,13 @@ const requiredMetadata = {
     "bin/{platform}/{binary}",
     "vendor/{platform}/{binary}",
   ],
+  platformBinaryPackages: {
+    "linux-x64": "@platypus/mcp-linux-x64",
+    "linux-arm64": "@platypus/mcp-linux-arm64",
+    "darwin-x64": "@platypus/mcp-darwin-x64",
+    "darwin-arm64": "@platypus/mcp-darwin-arm64",
+    "win32-x64": "@platypus/mcp-win32-x64",
+  },
 };
 
 const requiredCoreTypedTools = [
@@ -154,8 +161,14 @@ if (!metadata || typeof metadata !== "object") {
     }
   }
   const platformPackages = metadata.platformBinaryPackages;
-  if (!platformPackages || typeof platformPackages !== "object" || Object.keys(platformPackages).length === 0) {
+  if (!platformPackages || typeof platformPackages !== "object" || Array.isArray(platformPackages)) {
     metadataErrors.push("platypusMcp.platformBinaryPackages must document supported optional binary packages");
+  } else {
+    for (const [platform, packageName] of Object.entries(requiredMetadata.platformBinaryPackages)) {
+      if (platformPackages[platform] !== packageName) {
+        metadataErrors.push(`platypusMcp.platformBinaryPackages.${platform} must be ${packageName}`);
+      }
+    }
   }
 }
 
