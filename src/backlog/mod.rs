@@ -1167,6 +1167,10 @@ mod tests {
         assert_eq!(data.items[0].item_id, "WEB-001");
         assert_eq!(data.items[1].item_id, "WEB-002");
         assert_eq!(data.items[1].depends_on, vec!["WEB-001"]);
+        let next_action = result.next_action.as_deref().expect("next action");
+        assert!(next_action.contains("inspect_work_queue"));
+        assert!(next_action.contains("write_task_plan"));
+        assert!(next_action.contains("worker handoff"));
         assert!(temp.path().join("backlog/items/WEB-001.md").is_file());
         assert!(temp.path().join("backlog/items/WEB-002.md").is_file());
 

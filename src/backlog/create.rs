@@ -240,10 +240,7 @@ pub fn create_backlog_item(
         action: action.to_string(),
         status: ActionStatus::Completed,
         summary: format!("Created backlog item {}.", item_id),
-        next_action: Some(
-            "Inline validation passed. Call inspect_work_queue to continue; run validate_backlog only after manual edits or when an explicit audit record is needed."
-                .to_string(),
-        ),
+        next_action: Some(creation_success_next_action().to_string()),
         recovery_action: None,
         data: Some(CreatedBacklogItemData {
             item_id,
@@ -624,10 +621,7 @@ pub fn create_backlog_items(
         action: action.to_string(),
         status: ActionStatus::Completed,
         summary: format!("Created {} backlog item(s).", items.len()),
-        next_action: Some(
-            "Inline validation passed. Call inspect_work_queue to continue; run validate_backlog only after manual edits or when an explicit audit record is needed."
-                .to_string(),
-        ),
+        next_action: Some(creation_success_next_action().to_string()),
         recovery_action: None,
         data: Some(CreatedBacklogItemsData {
             root: root.display().to_string(),
@@ -639,6 +633,10 @@ pub fn create_backlog_items(
         }),
         error: None,
     }
+}
+
+fn creation_success_next_action() -> &'static str {
+    "Inline validation passed. Call inspect_work_queue to classify the new item(s) as direct-ready, needing write_task_plan, needing approval, or ready for worker handoff; run validate_backlog only after manual edits or when an explicit audit record is needed."
 }
 
 fn failed_with_next<T: serde::Serialize + schemars::JsonSchema>(
