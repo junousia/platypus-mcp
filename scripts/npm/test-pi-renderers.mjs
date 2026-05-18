@@ -128,6 +128,47 @@ assert.deepEqual(skipped, [
 	"Next: Run init_project first.",
 ]);
 
+const structuredContentOnly = renderToolResultLines({
+	content: [
+		{
+			type: "text",
+			text: JSON.stringify({
+				action: "complete_backlog_item",
+				status: "completed",
+				data: {
+					compact: {
+						status_line: "done MCP-145 closed; next=MCP-146",
+						next_ready_item_id: "MCP-146",
+					},
+				},
+			}),
+		},
+	],
+});
+assert.deepEqual(structuredContentOnly, [
+	"✓ done MCP-145 closed; next=MCP-146",
+	"Next ready: MCP-146",
+]);
+
+const genericStructuredContentOnly = renderToolResultLines({
+	content: [
+		{
+			type: "text",
+			text: JSON.stringify({
+				action: "record_finding",
+				status: "completed",
+				summary: "Recorded finding FND-001.",
+				next_action: "Disposition required findings before integration.",
+			}),
+		},
+	],
+});
+assert.deepEqual(genericStructuredContentOnly, [
+	"✓ record finding",
+	"Recorded finding FND-001.",
+	"Next: Disposition required findings before integration.",
+]);
+
 const failed = renderToolResultLines({
 	details: {
 		action: "doctor_snapshot",

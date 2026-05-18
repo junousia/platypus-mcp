@@ -147,6 +147,16 @@ function contentText(result) {
 	return result?.content?.map((part) => part?.text).filter(Boolean).join("\n");
 }
 
+function envelopeFromText(text) {
+	if (!text) return undefined;
+	try {
+		const parsed = JSON.parse(text);
+		return asObject(parsed);
+	} catch {
+		return undefined;
+	}
+}
+
 function renderCompletionLines(data) {
 	const compact = asObject(data.compact);
 	const lines = [`✓ ${asString(compact?.status_line) ?? asString(data.summary) ?? "backlog item completed"}`];
@@ -197,11 +207,11 @@ function renderEnvelopeLines(envelope, fallbackText) {
 }
 
 export function renderToolResultLines(result, options = {}) {
-	const snapshot = snapshotFromDetails(result?.details);
+	const fallbackText = contentText(result);
+	const envelope = asObject(result?.details) ?? envelopeFromText(fallbackText);
+	const snapshot = snapshotFromDetails(envelope);
 	if (snapshot) return renderDashboardLines(snapshot, options);
 
-	const envelope = asObject(result?.details);
-	const fallbackText = contentText(result);
 	if (envelope) return renderEnvelopeLines(envelope, fallbackText);
 	return [fallbackText ?? "Platypus tool completed."];
 }
