@@ -91,11 +91,18 @@ pub fn prepare_worker_assignment(
             "No queued task is available for assignment.",
             "Dispatch runnable backlog work first.",
         ),
-        Err(error) if error.to_string().contains("worktree") => ActionResult::failed(
-            action,
-            "Could not prepare task worktree.",
-            error.to_string(),
-        ),
+        Err(error) if error.to_string().contains("worktree") => {
+            let recovery_action = "Inspect the task events and queue state; after fixing the reported Git or worktree blocker, retry prepare_worker_handoff for the same task id.".to_string();
+            ActionResult {
+                action: action.to_string(),
+                status: ActionStatus::Failed,
+                summary: "Could not prepare task worktree.".to_string(),
+                next_action: Some(recovery_action.clone()),
+                recovery_action: Some(recovery_action),
+                data: None,
+                error: Some(error.to_string()),
+            }
+        }
         Err(error) if error.to_string().contains("bundle") => ActionResult::failed(
             action,
             "Could not generate assignment bundle.",
