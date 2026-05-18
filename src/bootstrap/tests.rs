@@ -368,6 +368,96 @@ fn pi_bootstrap_preserves_existing_settings_and_force_replaces_platypus_package(
 }
 
 #[test]
+fn bootstrap_smoke_covers_supported_host_startup_shapes() {
+    let temp = TempDir::new().expect("temp dir");
+
+    let codex_config = temp.path().join("codex.toml");
+    assert_eq!(
+        run_cli(&[
+            "codex".to_string(),
+            "--config".to_string(),
+            codex_config.display().to_string(),
+            "--root".to_string(),
+            temp.path().display().to_string(),
+        ])
+        .expect("codex bootstrap"),
+        0
+    );
+    let codex = fs::read_to_string(&codex_config).expect("codex config");
+    assert!(codex.contains("[mcp_servers.\"platypus\"]"));
+    assert!(codex.contains("PLATYPUS_MCP_ROOT"));
+    assert!(codex.contains(temp.path().to_string_lossy().as_ref()));
+    assert!(codex.contains("platypus-mcp"));
+
+    let claude_config = temp.path().join(".mcp.json");
+    assert_eq!(
+        run_cli(&[
+            "claude".to_string(),
+            "--config".to_string(),
+            claude_config.display().to_string(),
+            "--root".to_string(),
+            temp.path().display().to_string(),
+        ])
+        .expect("claude bootstrap"),
+        0
+    );
+    let claude: Value = serde_json::from_str(
+        &fs::read_to_string(&claude_config).expect("claude config"),
+    )
+    .expect("claude json");
+    assert_eq!(claude["mcpServers"]["platypus"]["command"], "sh");
+    let claude_args = claude["mcpServers"]["platypus"]["args"]
+        .as_array()
+        .expect("claude args");
+    assert!(claude_args
+        .iter()
+        .any(|arg| arg.as_str().is_some_and(|value| value.contains("platypus-mcp"))));
+    assert_eq!(
+        claude["mcpServers"]["platypus"]["env"]["PLATYPUS_MCP_ROOT"],
+        temp.path().display().to_string()
+    );
+
+    let opencode_config = temp.path().join("opencode.json");
+    assert_eq!(
+        run_cli(&[
+            "opencode".to_string(),
+            "--config".to_string(),
+            opencode_config.display().to_string(),
+            "--root".to_string(),
+            temp.path().display().to_string(),
+        ])
+        .expect("opencode bootstrap"),
+        0
+    );
+    let opencode: Value = serde_json::from_str(
+        &fs::read_to_string(&opencode_config).expect("opencode config"),
+    )
+    .expect("opencode json");
+    assert_eq!(opencode["mcp"]["platypus"]["type"], "local");
+    assert_eq!(opencode["mcp"]["platypus"]["command"][0], "sh");
+    assert_eq!(opencode["mcp"]["platypus"]["enabled"], true);
+
+    assert_eq!(
+        run_cli(&[
+            "pi".to_string(),
+            "--root".to_string(),
+            temp.path().display().to_string(),
+        ])
+        .expect("pi bootstrap"),
+        0
+    );
+    let pi: Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join(".pi/settings.json")).expect("pi settings"),
+    )
+    .expect("pi json");
+    assert!(pi["packages"]
+        .as_array()
+        .expect("packages")
+        .iter()
+        .any(|package| package == "npm:platypus-pi"));
+}
+
+#[test]
 fn bootstrap_refuses_unrecognized_existing_server_without_force() {
     let temp = TempDir::new().expect("temp dir");
     let config = temp.path().join(".mcp.json");
