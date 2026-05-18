@@ -1448,6 +1448,63 @@ mod tests {
     }
 
     #[test]
+    fn repository_serializes_concurrent_task_event_recording() {
+        let project = TempDir::new().expect("temp dir");
+        let storage = storage::connect(project.path(), None).expect("storage");
+        let task = storage
+            .repository()
+            .tasks()
+            .create(TaskInsert {
+                source_item_id: "PROJ-002".to_string(),
+                title: "Concurrent lifecycle".to_string(),
+                worker: Some("worker".to_string()),
+            })
+            .expect("create task");
+
+        let storages = (0..4)
+            .map(|_| storage::connect(project.path(), None).expect("thread storage"))
+            .collect::<Vec<_>>();
+        let barrier = Arc::new(Barrier::new(storages.len()));
+        let handles = storages
+            .into_iter()
+            .enumerate()
+            .map(|(index, storage)| {
+                let barrier = Arc::clone(&barrier);
+                let task_id = task.id.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    storage
+                        .repository()
+                        .tasks()
+                        .record_event(TaskEventInsert {
+                            task_id,
+                            sequence: None,
+                            event_type: "worker_progress".to_string(),
+                            summary: format!("Worker progress {index}."),
+                            payload: Some(json!({ "index": index })),
+                        })
+                        .map(|event| event.sequence)
+                        .map_err(|error| error.to_string())
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut sequences = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("thread").expect("record event"))
+            .collect::<Vec<_>>();
+        sequences.sort_unstable();
+        assert_eq!(sequences, vec![1, 2, 3, 4]);
+
+        let events = storage
+            .repository()
+            .tasks()
+            .list_events(&task.id, 10)
+            .expect("list events");
+        assert_eq!(events.len(), 4);
+    }
+
+    #[test]
     fn repository_returns_backend_neutral_not_found_errors() {
         let project = TempDir::new().expect("temp dir");
         let storage = storage::connect(project.path(), None).expect("storage");
