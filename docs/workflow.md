@@ -347,9 +347,14 @@ need to memorize the underlying MCP tool surface:
    closed the item. The required fields are `item_id`, `summary`,
    `changed_files`, `verification_status`, `verification_summary`, and
    `verification_refs`.
-11. Run `/platy-direction-revise` or `/platy-standards-revise` to revise
+11. Before pushing follow-up commits to a branch that already has a merged PR,
+   route the work intentionally: update local `main` from the remote, create a
+   fresh branch, and open a new PR for the follow-up item. If host-specific
+   tooling can tell that the current branch's PR is merged, treat that signal as
+   advisory workflow guidance rather than core Platypus state.
+12. Run `/platy-direction-revise` or `/platy-standards-revise` to revise
    captured guidance without rerunning the whole setup flow.
-12. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
+13. Run `/platy-doctor` when the queue is blocked or setup looks wrong.
 
 These commands surface current state and exact tools, but they do not choose a
 product direction for the user. The agent remains responsible for judgement and
