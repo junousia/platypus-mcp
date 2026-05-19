@@ -3882,7 +3882,7 @@ pub fn default_worker_completion_contract() -> WorkerCompletionContract {
             "findings or findings_reviewed=true".to_string(),
         ],
         changed_files_rule: "Report paths relative to the assignment worktree. Omit changed_files only when the host will infer them from inspect_worktree_changes.".to_string(),
-        verification_rule: "Report passed, failed, skipped, or not_run. Include verification_summary and verification_refs when a check passed or was deliberately skipped.".to_string(),
+        verification_rule: "Report passed, failed, skipped, or not_run. Run the assignment bundle verification commands before reporting passed; when project verification includes formatting checks, run those in the worker worktree before finish_work rather than relying on manager cleanup. Include verification_summary and verification_refs when a check passed or was deliberately skipped.".to_string(),
         findings_rule: "Record limitations, follow-up work, and impediments as findings. Set findings_reviewed=true only after checking that no follow-up finding is needed.".to_string(),
         acceptance_rule: "Summarize how the result satisfies each acceptance criterion, or record a required finding when it does not.".to_string(),
     }

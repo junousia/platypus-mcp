@@ -603,14 +603,20 @@ with item id, summary, changed files, verification status, and any evidence or
 finding references.
 Use `inspect_integration_gates` only for completed worker task/worktree
 integration when the host needs a read-only explanation of remaining blockers.
-Direct manager-workspace backlog items do not use integration gates; complete
-them with `complete_backlog_item`. Required findings block only while they are
-open; `accepted`, `deferred`, `resolved`, `rejected`, and `duplicate` are
-explicit dispositions that clear the integration gate.
+Treat the verification gate as a final formatting-sensitive review prompt too:
+when project verification includes formatter checks, confirm they ran in the
+worker worktree before final integration. Direct manager-workspace backlog items
+do not use integration gates; complete them with `complete_backlog_item`.
+Required findings block only while they are open; `accepted`, `deferred`,
+`resolved`, `rejected`, and `duplicate` are explicit dispositions that clear the
+integration gate.
 
 When a verification command is configured in the assignment bundle, run
 `run_task_verification` after completion to execute it in the task worktree and
-persist verification run evidence.
+persist verification run evidence. If the project verification command includes
+formatting checks such as `cargo fmt --check`, resolve formatting in the worker
+worktree before `finish_work`; do not rely on a manager-workspace
+formatting-only cleanup commit after integration.
 
 If verification did not pass, record explicit verification evidence or findings
 so reconciliation can report the remaining gap.
