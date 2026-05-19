@@ -1,0 +1,56 @@
+item_id: MCP-154
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Storage documentation explains readiness criteria for a future shared backend without proposing a new backend implementation.
+- id: R2
+  text: storage_capability_probe output points callers to ProjectState contract-test expectations when backend readiness is discussed.
+- id: R3
+  text: No new backend implementation, provider dependency, or backend-specific product dependency is introduced.
+design:
+  summary: Extend the existing capability probe response with deterministic readiness guidance and contract-test references, then document the same criteria in storage and roadmap docs. Keep SQLite as the reference backend and do not add provider-specific backend code.
+  owned_surfaces:
+  - src/storage
+  - src/state
+  - docs/storage.md
+  - docs/roadmap.md
+  - tests
+  notes: null
+tasks:
+- id: MCP-154-T001
+  title: Surface backend readiness guidance in capability probe
+  goal: Add read-only readiness guidance and contract-test references to storage_capability_probe output.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/storage/probe.rs
+  - src/models.rs
+  - tests/stdio_protocol.rs
+  verification:
+  - cargo test stdio_server_runs_storage_capability_probe
+  acceptance:
+  - Probe output identifies capability checks and ProjectState contract tests as readiness gates.
+  - Probe remains read-only and uses the isolated SQLite diagnostic path.
+  notes: null
+- id: MCP-154-T002
+  title: Document second-backend readiness criteria
+  goal: Clarify storage and roadmap docs for shared backend readiness, including capability probe, contract tests, reconciliation, leases, event ordering, migrations, and rollout criteria.
+  requirement_refs:
+  - R1
+  - R3
+  depends_on:
+  - MCP-154-T001
+  owned_surfaces:
+  - docs/storage.md
+  - docs/roadmap.md
+  verification:
+  - cargo test stdio_server_runs_storage_capability_probe
+  - make check
+  acceptance:
+  - Docs explain criteria for considering a second backend.
+  - Docs state that this item does not implement a second backend.
+  - Full verification passes.
+  notes: null

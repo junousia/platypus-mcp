@@ -101,8 +101,9 @@ standard or full work.
 - External intake adapters for Linear, Jira, GitLab, and custom plugin-backed
   sources, all mapping provider records into local executable backlog snapshots
   and approved report outcomes before any provider-side mutation is recorded.
-- A second runtime backend only after the storage capability probe and
-  `ProjectState` contract suite demonstrate equivalent semantics to local
-  SQLite.
+- A second runtime backend only after `storage_capability_probe` reports
+  readiness guidance, the `ProjectState` contract suite passes for the
+  candidate backend, reconciliation explains tasks/leases/approvals without
+  backend-specific inspection, and local SQLite remains the offline default.
 - Optional HTTP transport once stdio behavior is mature and an actual client
   needs attachable or remote transport semantics.

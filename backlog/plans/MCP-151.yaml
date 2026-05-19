@@ -1,0 +1,58 @@
+item_id: MCP-151
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Empty or fully closed queue guidance points hosts to durable roadmap, workflow, and project direction files before creating new backlog items.
+- id: R2
+  text: When product direction is missing or insufficient, guidance asks the host to collect direction from the user instead of inventing backlog details.
+- id: R3
+  text: Backlog creation guidance remains deterministic and does not add model-generated backlog content inside core MCP tools.
+design:
+  summary: Improve deterministic queue and backlog-authoring guidance for empty or closed backlog states. The server should describe source-of-truth files and recovery actions, while leaving product judgment and item shaping to the MCP host and user.
+  owned_surfaces:
+  - src/guidance.rs
+  - src/backlog/create.rs
+  - docs/workflow.md
+  - tests
+  notes: null
+tasks:
+- id: MCP-151-T001
+  title: Clarify empty-queue guidance sources
+  goal: Update empty or closed queue guidance so hosts look at durable roadmap, workflow, and project direction files before proposing backlog creation.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - src/guidance.rs
+  - docs/workflow.md
+  - tests
+  verification:
+  - cargo test guidance::tests
+  acceptance:
+  - Empty or closed queue guidance references durable direction sources.
+  - Guidance asks for missing direction instead of inventing backlog content.
+  - Tests cover the updated queue guidance behavior.
+  notes: null
+- id: MCP-151-T002
+  title: Align backlog creation recovery guidance
+  goal: Ensure backlog creation guidance and docs reinforce deterministic item authoring inputs without model-generated content inside MCP tools.
+  requirement_refs:
+  - R2
+  - R3
+  depends_on:
+  - MCP-151-T001
+  owned_surfaces:
+  - src/backlog/create.rs
+  - docs/workflow.md
+  - tests
+  verification:
+  - cargo test backlog::tests
+  - make check
+  acceptance:
+  - Backlog creation recovery guidance preserves deterministic tool behavior.
+  - Documentation explains that hosts use durable direction and user input to shape backlog items.
+  - Full verification passes.
+  notes: null

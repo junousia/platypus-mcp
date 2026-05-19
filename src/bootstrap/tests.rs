@@ -456,6 +456,20 @@ fn bootstrap_smoke_covers_supported_host_startup_shapes() {
 }
 
 #[test]
+fn install_docs_describe_bootstrap_verification_matrix() {
+    let docs = include_str!("../../docs/install.md");
+
+    assert!(docs.contains("Bootstrap Verification Matrix"));
+    assert!(docs.contains("bootstrap_smoke_covers_supported_host_startup_shapes"));
+    assert!(docs.contains("invoke Codex, Claude, OpenCode, Pi"));
+    assert!(docs.contains("| Codex | `codex.toml` |"));
+    assert!(docs.contains("| Claude | `.mcp.json` |"));
+    assert!(docs.contains("| OpenCode | `opencode.json` |"));
+    assert!(docs.contains("| Pi | `.pi/settings.json` |"));
+    assert!(docs.contains("`make check`"));
+}
+
+#[test]
 fn bootstrap_refuses_unrecognized_existing_server_without_force() {
     let temp = TempDir::new().expect("temp dir");
     let config = temp.path().join(".mcp.json");

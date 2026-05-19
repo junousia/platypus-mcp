@@ -1,0 +1,53 @@
+item_id: MCP-152
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Codex, Claude, OpenCode, and Pi bootstrap targets have explicit local smoke coverage or documented fixture coverage.
+- id: R2
+  text: The documented verification matrix explains that bootstrap smoke checks use local files only and require no network, host binaries, or credentials.
+- id: R3
+  text: Full verification continues to pass without host-specific credentials.
+design:
+  summary: Reuse the existing bootstrap smoke test that exercises supported host startup config shapes, and document the matrix in install guidance so release validation is explicit and local-only.
+  owned_surfaces:
+  - src/bootstrap/tests.rs
+  - docs/install.md
+  notes: null
+tasks:
+- id: MCP-152-T001
+  title: Verify supported host bootstrap smoke coverage
+  goal: Ensure Codex, Claude, OpenCode, and Pi bootstrap shapes are covered by local tests without invoking real hosts.
+  requirement_refs:
+  - R1
+  - R2
+  depends_on: []
+  owned_surfaces:
+  - src/bootstrap/tests.rs
+  verification:
+  - cargo test bootstrap::tests::bootstrap_smoke_covers_supported_host_startup_shapes
+  acceptance:
+  - The smoke test covers Codex, Claude, OpenCode, and Pi config outputs.
+  - The smoke test uses temporary local files and does not require network, host binaries, or credentials.
+  notes:
+  - Existing coverage already exercises these host shapes; this task verifies and preserves it.
+- id: MCP-152-T002
+  title: Document host bootstrap verification matrix
+  goal: Add install documentation that maps supported bootstrap targets to local config artifacts and verification commands.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-152-T001
+  owned_surfaces:
+  - docs/install.md
+  - src/bootstrap/tests.rs
+  verification:
+  - cargo test bootstrap::tests::bootstrap_smoke_covers_supported_host_startup_shapes
+  - make check
+  acceptance:
+  - Install docs describe the local bootstrap verification matrix.
+  - Documentation states the checks do not require network, real host binaries, or credentials.
+  - Full verification passes.
+  notes: null

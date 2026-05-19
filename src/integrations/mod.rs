@@ -539,6 +539,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn provider_neutral_adapter_contract_is_documented() {
+        let tools = include_str!("../../docs/tools.md");
+        let workflow = include_str!("../../docs/workflow.md");
+
+        assert!(tools.contains("External Adapter Boundary"));
+        assert!(tools.contains("Provider client ownership is outside core Platypus"));
+        assert!(tools.contains("import snapshots"));
+        assert!(tools.contains("approved reporting"));
+        assert!(tools.contains("mirror mode"));
+        assert!(tools.contains("bidirectional sync"));
+        assert!(tools.contains("Linear, Jira, GitLab, GitHub"));
+        assert!(workflow.contains("External adapter boundary"));
+        assert!(workflow.contains("SDKs, credentials, pagination, retries, rate-limit handling"));
+        assert!(workflow.contains("Core Platypus tools must not hide external network calls"));
+    }
+
+    #[test]
     fn host_adapter_maps_and_dedupes_records() {
         let mut existing = BTreeSet::new();
         existing.insert(ExternalRefKey {

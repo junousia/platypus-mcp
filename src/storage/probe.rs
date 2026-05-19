@@ -42,6 +42,8 @@ pub fn capability_probe(
         backend: "sqlite".to_string(),
         ok,
         checks,
+        readiness_guidance: readiness_guidance().to_string(),
+        contract_tests: contract_tests(),
     };
     if ok {
         ActionResult::completed(action, "Storage capability probe passed.", data)
@@ -58,6 +60,19 @@ pub fn capability_probe(
             error: Some("one or more storage capability checks failed".to_string()),
         }
     }
+}
+
+fn readiness_guidance() -> &'static str {
+    "A backend is ready for shared runtime evaluation only after storage_capability_probe passes, ProjectState contract tests pass for that backend, and reconciliation can explain tasks, leases, approvals, events, findings, and evidence without backend-specific inspection."
+}
+
+fn contract_tests() -> Vec<String> {
+    vec![
+        "cargo test state_contract".to_string(),
+        "cargo test storage::repository::tests".to_string(),
+        "cargo test storage::tests".to_string(),
+        "cargo test stdio_server_runs_storage_capability_probe".to_string(),
+    ]
 }
 
 fn run_check(name: &str, check: fn() -> Result<String, String>) -> StorageCapabilityCheck {

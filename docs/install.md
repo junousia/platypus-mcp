@@ -117,7 +117,24 @@ platypus-mcp bootstrap pi --root /path/to/project --check --init-project
 By default `bootstrap <host>` only wires the MCP server into the selected host.
 Add `--init-project` when you also want the repository guidance files created.
 Use host-only bootstrap for already initialized repositories or when you only
-want to update MCP client configuration. Hosts without a verified local
+want to update MCP client configuration.
+
+### Bootstrap Verification Matrix
+
+Local release confidence for host bootstrap behavior comes from
+`cargo test bootstrap::tests::bootstrap_smoke_covers_supported_host_startup_shapes`.
+That smoke test writes temporary local configuration files only; it does not
+invoke Codex, Claude, OpenCode, Pi, network services, host binaries, or
+credentials.
+
+| Host | Local artifact covered | Expected local signal |
+| --- | --- | --- |
+| Codex | `codex.toml` | `mcp_servers."platypus"` uses `PLATYPUS_MCP_ROOT` and `platypus-mcp` |
+| Claude | `.mcp.json` | `mcpServers.platypus` includes a stdio command and project root environment |
+| OpenCode | `opencode.json` | `mcp.platypus` is enabled as a local command with the OpenCode schema |
+| Pi | `.pi/settings.json` | `packages` contains `npm:platypus-pi` |
+
+Run the focused smoke test before changing bootstrap shapes, and keep `make check` as the full repository verification command. Hosts without a verified local
 instruction-file convention are steered through MCP server instructions,
 resources, prompts, and tool descriptions.
 

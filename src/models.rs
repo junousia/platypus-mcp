@@ -4164,6 +4164,10 @@ pub struct StorageCapabilityProbeData {
     pub ok: bool,
     /// Diagnostic checks included in this result.
     pub checks: Vec<StorageCapabilityCheck>,
+    /// Human-readable guidance for evaluating whether a backend is ready for shared runtime use.
+    pub readiness_guidance: String,
+    /// Contract-test suites or verification commands that future backends must satisfy.
+    pub contract_tests: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
