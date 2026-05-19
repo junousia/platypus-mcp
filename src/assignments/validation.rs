@@ -75,7 +75,7 @@ pub(crate) fn validate_changed_files(
         });
         if !allowed {
             return Err(format!(
-                "`{file}` is outside owned surfaces: {}",
+                "`{file}` is outside owned surfaces: {}. Recovery: if this change is required for the same task, update the task plan owned_surfaces and prepare a new assignment; if it is separate work, split it into a follow-up backlog item; otherwise discard or revert the out-of-scope change before retrying finish_work.",
                 surfaces.join(", ")
             ));
         }
@@ -134,5 +134,8 @@ mod tests {
 
         let error = validate_changed_files(&owned, &changed).expect_err("unowned file");
         assert!(error.contains("outside owned surfaces"));
+        assert!(error.contains("update the task plan owned_surfaces"));
+        assert!(error.contains("split it into a follow-up backlog item"));
+        assert!(error.contains("discard or revert"));
     }
 }

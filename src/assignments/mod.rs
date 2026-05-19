@@ -483,7 +483,15 @@ pub fn complete_worker_execution(
         Err(ProjectStateError::InvalidCommand { message })
             if message.contains("outside owned surfaces") =>
         {
-            return ActionResult::failed(action, "Worker result touched unowned files.", message)
+            return ActionResult {
+                action: action.to_string(),
+                status: ActionStatus::Failed,
+                summary: "Worker result touched unowned files.".to_string(),
+                next_action: Some(message.clone()),
+                recovery_action: Some(message.clone()),
+                data: None,
+                error: Some(message),
+            }
         }
         Err(error) => return state_error(action, "Could not complete worker execution.", error),
     };
