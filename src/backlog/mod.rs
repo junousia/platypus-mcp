@@ -881,6 +881,9 @@ mod tests {
         assert!(missing_fields.contains("title|goal"));
         assert!(!missing_fields.contains("implementation_contract|contract"));
         assert!(!missing_fields.contains("acceptance"));
+        let missing_next_action = missing.next_action.as_deref().expect("next action");
+        assert!(missing_next_action.contains("docs/product.md"));
+        assert!(missing_next_action.contains("ask the user"));
     }
 
     #[test]
@@ -1169,6 +1172,7 @@ mod tests {
         assert_eq!(data.items[1].depends_on, vec!["WEB-001"]);
         let next_action = result.next_action.as_deref().expect("next action");
         assert!(next_action.contains("inspect_work_queue"));
+        assert!(next_action.contains("caller-provided fields"));
         assert!(next_action.contains("write_task_plan"));
         assert!(next_action.contains("worker handoff"));
         assert!(temp.path().join("backlog/items/WEB-001.md").is_file());

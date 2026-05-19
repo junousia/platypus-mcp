@@ -193,31 +193,35 @@ mechanism is verified.
 
 ## Backlog Shaping
 
-1. Decide workflow strategy with the host model and user intent. Platypus MCP
+1. Inspect durable direction before shaping new backlog work: `docs/product.md`,
+   `docs/architecture.md`, `docs/testing.md`, `docs/roadmap.md`, and this
+   workflow guide when present. If direction is missing, stale, or too vague, ask
+   the user for product direction before creating backlog items.
+2. Decide workflow strategy with the host model and user intent. Platypus MCP
    exposes facts, schemas, validation, and state transitions; it does not infer
    product intent from goal text.
-2. Preview related work with `create_backlog_items` and `preview=true` when the
+3. Preview related work with `create_backlog_items` and `preview=true` when the
    host needs to show deterministic would-be IDs, target files, and markdown
    before changing the repository.
-3. Persist selected work with `create_backlog_items` when related items should
+4. Persist selected work with `create_backlog_items` when related items should
    be created atomically, `create_backlog_item` for a full single-item schema,
    or `quick_create_backlog_item` for a compact common-field single item.
-4. Use `update_backlog_item` for typed corrections or refinements after an item
+5. Use `update_backlog_item` for typed corrections or refinements after an item
    exists. Do this instead of hand-editing markdown when the change is a
    supported schema or section update.
-5. After successful `create_backlog_item(s)`, inline validation has already
+6. After successful `create_backlog_item(s)`, inline validation has already
    passed. Call `inspect_work_queue` to continue. Run `validate_backlog` only
    after manual markdown edits or when an explicit audit result is useful.
-6. Use `inspect_queue_status` for compact queue counts, top ready work, top
+7. Use `inspect_queue_status` for compact queue counts, top ready work, top
    blocked work, active tasks, and one-line queue-state descriptions.
-7. Use `inspect_work_queue` when the host needs full runnable candidates,
+8. Use `inspect_work_queue` when the host needs full runnable candidates,
    active task state, dependency-blocked items, closed items, task-plan state,
    setup blockers, and recommended tool parameters.
-8. Use `get_backlog_item` when the host only needs the bounded markdown for one
+9. Use `get_backlog_item` when the host only needs the bounded markdown for one
    item. Use `inspect_item` when one backlog item needs full state: markdown
    sections, dependencies, closure state, task plan, findings, evidence, and
    the recommended next tool.
-9. Use `list_backlog` only when a compact runnable-candidate list is enough.
+10. Use `list_backlog` only when a compact runnable-candidate list is enough.
    Use `queue_state` as the authoritative routing signal: `direct_ready` means
    the host should edit the manager workspace, verify, and complete with
    `complete_backlog_item`; `ready` means worker/worktree preparation is
@@ -484,7 +488,8 @@ auditable local record of what was approved and reported.
 External adapter boundary:
 
 - Provider-specific readers and writers live in the MCP host or approved
-  plugins, where credentials and rate-limit handling belong.
+  plugins, where SDKs, credentials, pagination, retries, rate-limit handling,
+  and network writes belong.
 - Platypus accepts only sanitized intake snapshots, provider-neutral external
   refs, drafted report payloads, approvals, and recorded dispatch outcomes.
 - Linear, Jira, GitLab, GitHub, and custom adapters should all map through the

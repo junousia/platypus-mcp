@@ -339,8 +339,10 @@ Platypus semantics instead of table compatibility.
 
 ## Backend Evaluation Checklist
 
-Before adding a second backend, run a capability probe through the
-implementation-independent state boundary:
+Before adding a second backend, treat readiness as a product gate, not a
+configuration switch. The candidate backend must pass the same MCP-facing
+behavior as SQLite before it can coordinate real work. Run a capability probe
+through the implementation-independent state boundary:
 
 1. Initialize a project-scoped runtime namespace.
 2. Create, replay, and order events from two simulated clients.
@@ -354,7 +356,16 @@ implementation-independent state boundary:
 The current probe is exposed as `storage_capability_probe`. It resolves the
 project root for identity reporting, then runs the backend checks against an
 isolated in-memory SQLite database so the diagnostic does not mutate project
-runtime state.
+runtime state. Its response includes readiness guidance and the contract-test
+commands a future backend must satisfy, including `cargo test state_contract`
+and the storage repository/probe suites.
+
+Passing this checklist is necessary but not sufficient for shared runtime
+storage. A second backend also needs documented deployment configuration,
+version compatibility checks, rollback guidance, reconciliation output that can
+explain stale tasks and leases, and a migration plan that preserves local
+SQLite as the offline default. This item documents and exposes readiness
+criteria only; it does not implement a second backend.
 
 Passing this checklist is the first implementation step toward shared runtime
 storage. It keeps local-first SQLite support intact while preventing any future

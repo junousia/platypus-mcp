@@ -25,6 +25,8 @@ use std::{
     process::Command,
 };
 
+const DIRECTION_SOURCE_GUIDANCE: &str = "Review durable direction in docs/product.md, docs/architecture.md, docs/testing.md, docs/roadmap.md, and docs/workflow.md when present; if direction is missing or stale, ask the user for product direction before creating backlog items.";
+
 pub fn inspect_session(
     default_root: &Path,
     params: InspectSessionParams,
@@ -506,8 +508,8 @@ pub fn inspect_work_queue(
     } else if items.is_empty() && inventory.total_count > 0 && inventory.runnable_count == 0 {
         recommended_tool = "create_backlog_items".to_string();
         reason = format!(
-            "All {} backlog item(s) are closed. Use the host model to decide concrete follow-up work, then call create_backlog_items and inspect_work_queue. validate_backlog is optional after successful typed creation.",
-            inventory.total_count
+            "All {} backlog item(s) are closed. {} Use the host model and user input to decide concrete follow-up work, then call create_backlog_items and inspect_work_queue. validate_backlog is optional after successful typed creation.",
+            inventory.total_count, DIRECTION_SOURCE_GUIDANCE
         );
         params = map_params([("root", root.as_str())]);
     }
@@ -887,7 +889,7 @@ fn claude_toolsearch_batch_selector(hints: &[SchemaDiscoveryHint]) -> Option<Str
 fn schema_hint_reason(tool: &str, phase: &str) -> String {
     match tool {
         "create_backlog_items" => {
-            "Create one or more concrete backlog items after the host model decides the work."
+            "Create one or more concrete backlog items after the host model uses durable direction and user input to decide the work."
                 .to_string()
         }
         "validate_backlog" => {
@@ -1234,7 +1236,9 @@ fn queue_state_description(queue_state: &str) -> &'static str {
             "An existing task lifecycle must continue before this item can be dispatched again."
         }
         "completed_pending_integration" => "Worker output is complete and awaiting integration.",
-        "closed" => "All known backlog items are closed.",
+        "closed" => {
+            "All known backlog items are closed; inspect durable direction and ask the user for missing direction before creating follow-up work."
+        },
         _ => "Inspect the item before choosing the next execution step.",
     }
 }
@@ -2160,7 +2164,10 @@ fn recommended_queue_action(
     let Some(first) = items.first() else {
         return (
             "create_backlog_items".to_string(),
-            "No backlog item exists yet. Use the host model to decide concrete work, then call create_backlog_items and inspect_work_queue. validate_backlog is optional after successful typed creation.".to_string(),
+            format!(
+                "No backlog item exists yet. {} Use the host model and user input to decide concrete work, then call create_backlog_items and inspect_work_queue. validate_backlog is optional after successful typed creation.",
+                DIRECTION_SOURCE_GUIDANCE
+            ),
             map_params([("root", root)]),
         );
     };
@@ -2318,6 +2325,8 @@ mod tests {
         assert_eq!(queue_data.queue_state, "empty_backlog");
         assert_eq!(queue_data.inventory.total_count, 0);
         assert_eq!(queue_data.recommended_tool, "create_backlog_items");
+        assert!(queue_data.reason.contains("docs/product.md"));
+        assert!(queue_data.reason.contains("ask the user"));
         assert_eq!(
             queue_data.claude_toolsearch_batch_selector.as_deref(),
             Some("select:mcp__platypus__create_backlog_items,mcp__platypus__inspect_work_queue")
@@ -2357,6 +2366,58 @@ mod tests {
             .state_descriptions
             .iter()
             .any(|state| state.queue_state == "empty_backlog"));
+    }
+
+    #[test]
+    fn inspect_work_queue_closed_state_points_to_direction_sources() {
+        let project = backlog_project();
+        init_git(project.path());
+        write_item(project.path(), "PROJ-001", "Closed work");
+        git(project.path(), &["add", "backlog"]);
+        git(
+            project.path(),
+            &[
+                "commit",
+                "-m",
+                "Close work",
+                "-m",
+                "Platypus-Closes: PROJ-001\nPlatypus-Verification: cargo test",
+            ],
+        );
+
+        let queue = inspect_work_queue(
+            project.path(),
+            InspectWorkQueueParams {
+                root: None,
+                limit: Some(10),
+                require_task_plan: None,
+                require_planning_approval: None,
+            },
+        );
+        let queue_data = queue.data.expect("queue data");
+
+        assert_eq!(queue.status, ActionStatus::Completed);
+        assert_eq!(queue_data.queue_state, "closed");
+        assert_eq!(queue_data.recommended_tool, "create_backlog_items");
+        assert!(queue_data.reason.contains("docs/product.md"));
+        assert!(queue_data.reason.contains("ask the user"));
+
+        let status = inspect_queue_status(
+            project.path(),
+            InspectQueueStatusParams {
+                root: None,
+                limit: Some(5),
+            },
+        );
+        let status_data = status.data.expect("status data");
+
+        assert_eq!(status_data.queue_state, "closed");
+        assert!(status_data
+            .state_descriptions
+            .iter()
+            .any(|state| state.queue_state == "closed"
+                && state.description.contains("durable direction")
+                && state.description.contains("ask the user")));
     }
 
     #[test]

@@ -353,9 +353,19 @@ provider-neutral boundary:
 4. Any network write back to the provider happens outside Platypus, after an
    explicit approval, and is then recorded with `record_external_report_dispatch`.
 
-Provider clients therefore belong in the MCP host or an approved plugin, not in
-core Platypus tools. Core tools should remain deterministic local state
+Provider client ownership is outside core Platypus: host adapters or
+approved plugins own provider SDKs, credentials, pagination, rate-limit
+handling, retries, and network writes. Core Platypus owns only
+provider-neutral schemas, local snapshots, approvals, evidence, findings, and
+recorded dispatch outcomes. Core tools should remain deterministic local state
 transitions over snapshots, approvals, evidence, findings, and report payloads.
+
+Adapter implementations should choose an explicit operating mode before writing
+local state: import snapshots copy approved external records into backlog items;
+approved reporting drafts payloads and records dispatch after user approval;
+mirror mode reflects selected local state outward and needs drift detection;
+bidirectional sync or external-source mode requires provider-specific conflict
+policy and explicit approval before it is safe.
 
 Merged-PR awareness follows the same boundary. If a host can discover that the
 current branch's provider PR has already merged, it may warn the user before

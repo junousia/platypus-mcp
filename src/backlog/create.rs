@@ -205,7 +205,7 @@ pub fn create_backlog_item(
                     "missing required field(s): {}. Provide at least title or goal. implementation_contract/contract and acceptance can be supplied explicitly; when omitted, Platypus writes a clear not-specified contract placeholder and one neutral tracking criterion.",
                     missing_fields.join(", ")
                 ),
-                "Provide title or goal. Add implementation_contract/contract and acceptance when the work needs a real execution contract.",
+                "Provide title or goal from durable direction or user input. Review docs/product.md, docs/architecture.md, docs/testing.md, docs/roadmap.md, and docs/workflow.md when present; if direction is missing, ask the user before creating backlog content. Add implementation_contract/contract and acceptance when the work needs a real execution contract.",
             );
         }
     };
@@ -494,7 +494,7 @@ pub fn create_backlog_items(
                         "missing required field(s): {}. Provide at least title or goal. implementation_contract/contract and acceptance can be supplied explicitly; when omitted, Platypus writes a clear not-specified contract placeholder and one neutral tracking criterion.",
                         missing_fields.join(", ")
                     ),
-                    "Provide title or goal. Add implementation_contract/contract and acceptance when the work needs a real execution contract.",
+                    "Provide title or goal from durable direction or user input. Review docs/product.md, docs/architecture.md, docs/testing.md, docs/roadmap.md, and docs/workflow.md when present; if direction is missing, ask the user before creating backlog content. Add implementation_contract/contract and acceptance when the work needs a real execution contract.",
                 )
             }
         };
@@ -636,7 +636,7 @@ pub fn create_backlog_items(
 }
 
 fn creation_success_next_action() -> &'static str {
-    "Inline validation passed. Call inspect_work_queue to classify the new item(s) as direct-ready, needing write_task_plan, needing approval, or ready for worker handoff; run validate_backlog only after manual edits or when an explicit audit record is needed."
+    "Inline validation passed. The created item content came from caller-provided fields; Platypus did not infer product intent. Call inspect_work_queue to classify the new item(s) as direct-ready, needing write_task_plan, needing approval, or ready for worker handoff; run validate_backlog only after manual edits or when an explicit audit record is needed."
 }
 
 fn failed_with_next<T: serde::Serialize + schemars::JsonSchema>(

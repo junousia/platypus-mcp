@@ -1945,6 +1945,16 @@ async fn stdio_server_runs_storage_capability_probe() -> anyhow::Result<()> {
     assert_stage_status("storage_capability_probe", &probe, "completed");
     assert_eq!(probe["data"]["backend"], "sqlite");
     assert_eq!(probe["data"]["ok"], true);
+    assert!(probe["data"]["readiness_guidance"]
+        .as_str()
+        .expect("readiness guidance")
+        .contains("ProjectState contract tests"));
+    let contract_tests = probe["data"]["contract_tests"]
+        .as_array()
+        .expect("contract tests");
+    assert!(contract_tests
+        .iter()
+        .any(|command| command == "cargo test state_contract"));
     let checks = probe["data"]["checks"].as_array().expect("checks");
     assert!(checks
         .iter()

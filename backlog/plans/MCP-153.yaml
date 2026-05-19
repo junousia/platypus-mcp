@@ -1,0 +1,53 @@
+item_id: MCP-153
+version: 1
+mode: standard
+requirements:
+- id: R1
+  text: Documentation describes the provider-neutral external adapter contract for future Linear, Jira, GitLab, GitHub, and plugin-backed providers.
+- id: R2
+  text: Documentation distinguishes import snapshots, approved reporting, mirror/sync modes, and provider-client ownership boundaries.
+- id: R3
+  text: Core MCP remains provider-neutral and does not add provider API dependencies or network calls.
+design:
+  summary: Extend existing external intake/report documentation rather than adding provider clients. Keep host/plugin adapters responsible for provider APIs, credentials, and live sync, while core MCP accepts sanitized snapshots and approval-gated report payloads.
+  owned_surfaces:
+  - docs/tools.md
+  - docs/workflow.md
+  - src/integrations
+  notes: null
+tasks:
+- id: MCP-153-T001
+  title: Document provider-neutral adapter contract
+  goal: Define provider-neutral records, snapshots, approved reporting, sync modes, and ownership boundaries in tool/workflow docs.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on: []
+  owned_surfaces:
+  - docs/tools.md
+  - docs/workflow.md
+  verification:
+  - cargo test integrations::tests::provider_neutral_adapter_contract_is_documented
+  acceptance:
+  - Docs name supported future provider classes without adding provider-specific core behavior.
+  - Docs describe import snapshots, approved reporting, mirror/sync modes, and provider-client ownership.
+  notes: null
+- id: MCP-153-T002
+  title: Add documentation regression coverage
+  goal: Add a local test that keeps provider-neutral adapter contract docs present and aligned with core MCP provider boundaries.
+  requirement_refs:
+  - R1
+  - R2
+  - R3
+  depends_on:
+  - MCP-153-T001
+  owned_surfaces:
+  - src/integrations
+  verification:
+  - cargo test integrations::tests::provider_neutral_adapter_contract_is_documented
+  - make check
+  acceptance:
+  - Regression test fails if the provider-neutral contract section or boundary language is removed.
+  - Full verification passes.
+  notes: null
