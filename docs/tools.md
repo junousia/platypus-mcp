@@ -357,6 +357,14 @@ Provider clients therefore belong in the MCP host or an approved plugin, not in
 core Platypus tools. Core tools should remain deterministic local state
 transitions over snapshots, approvals, evidence, findings, and report payloads.
 
+Merged-PR awareness follows the same boundary. If a host can discover that the
+current branch's provider PR has already merged, it may warn the user before
+pushing more commits and suggest creating a fresh branch from updated `main` for
+the next backlog item. That warning must be optional, non-blocking, and safe to
+skip when provider credentials, network access, or provider CLIs are unavailable.
+Core MCP tools should not call GitHub, GitLab, or other provider APIs to decide
+whether local work may continue.
+
 #### External Reporting And Sync Policy
 
 Platypus should treat external trackers as integration surfaces, not hidden
