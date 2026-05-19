@@ -244,10 +244,12 @@ fn refuses_completion_before_start_and_unowned_files() {
         },
     );
     assert!(matches!(unowned.status, ActionStatus::Failed));
-    assert!(unowned
-        .error
-        .expect("error")
-        .contains("outside owned surfaces"));
+    let error = unowned.error.expect("error");
+    assert!(error.contains("outside owned surfaces"));
+    assert!(error.contains("update the task plan owned_surfaces"));
+    assert!(error.contains("split it into a follow-up backlog item"));
+    assert!(error.contains("discard or revert"));
+    assert_eq!(unowned.recovery_action.as_deref(), Some(error.as_str()));
 }
 
 #[test]
