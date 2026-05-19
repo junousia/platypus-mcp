@@ -610,7 +610,10 @@ explicit dispositions that clear the integration gate.
 
 When a verification command is configured in the assignment bundle, run
 `run_task_verification` after completion to execute it in the task worktree and
-persist verification run evidence.
+persist verification run evidence. If the project verification command includes
+formatting checks such as `cargo fmt --check`, resolve formatting in the worker
+worktree before `finish_work`; do not rely on a manager-workspace
+formatting-only cleanup commit after integration.
 
 If verification did not pass, record explicit verification evidence or findings
 so reconciliation can report the remaining gap.
