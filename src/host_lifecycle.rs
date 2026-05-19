@@ -1480,6 +1480,7 @@ fn host_action_from_dispatch_item(item: &DispatchReadyWorkItem) -> Option<HostAc
             "Give the bundle brief and worktree path to the selected worker harness or human implementer.".to_string(),
             "Run edits only inside the returned assignment worktree.".to_string(),
             "Use start_worker_task if you need an explicit running transition.".to_string(),
+            "Run the bundle verification commands in the worker worktree before finish_work; if project checks include formatting, resolve formatting there instead of relying on a manager cleanup commit.".to_string(),
             "Finish through finish_work so changed files, verification, findings, integration guidance, and reconciliation stay connected.".to_string(),
         ],
         task_id: Some(assignment.task_id.clone()),
@@ -2934,6 +2935,14 @@ mod tests {
         assert_eq!(data.dispatch.as_ref().expect("dispatch").prepared, 1);
         let bundle = action.bundle.as_ref().expect("bundle");
         assert_eq!(bundle.completion_contract.required_fields[0], "status");
+        assert!(bundle
+            .completion_contract
+            .verification_rule
+            .contains("formatting checks"));
+        assert!(action
+            .instructions
+            .iter()
+            .any(|instruction| instruction.contains("resolve formatting")));
     }
 
     #[test]
