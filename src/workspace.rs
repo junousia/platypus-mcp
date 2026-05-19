@@ -961,9 +961,9 @@ pub fn inspect_integration_gates(
             "verification",
             "ready",
             false,
-            format!("Verification evidence is recorded: {summary}"),
+            format!("Verification evidence is recorded: {summary}. Confirm any project formatting checks were run in the worker worktree before integration."),
             None,
-            None,
+            Some("If verification did not include formatting-sensitive checks, run run_task_verification or record a finding before integrating.".to_string()),
         )),
         None if config.require_verification_evidence => gates.push(integration_gate(
             "verification",
@@ -2859,6 +2859,17 @@ mod tests {
             .gates
             .iter()
             .any(|gate| gate.name == "branch_changes" && !gate.blocking));
+        let verification = data
+            .gates
+            .iter()
+            .find(|gate| gate.name == "verification")
+            .expect("verification gate");
+        assert!(verification.summary.contains("formatting checks"));
+        assert!(verification
+            .next_action
+            .as_deref()
+            .unwrap_or("")
+            .contains("formatting-sensitive"));
     }
 
     #[test]
