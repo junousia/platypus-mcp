@@ -98,10 +98,21 @@ pub fn generate_task_bundle(
         .map(|planned| planned.acceptance.clone())
         .filter(|criteria| !criteria.is_empty())
         .unwrap_or_else(|| item.acceptance.clone());
-    let owned_surfaces = selected_plan_task
-        .map(|planned| planned.owned_surfaces.clone())
-        .filter(|surfaces| !surfaces.is_empty())
-        .unwrap_or_else(|| item.frontmatter.owned_surfaces.clone());
+    let (owned_surfaces, owned_surface_source) = selected_plan_task
+        .and_then(|planned| {
+            (!planned.owned_surfaces.is_empty()).then(|| {
+                (
+                    planned.owned_surfaces.clone(),
+                    format!("task plan task `{}` owned_surfaces", planned.id),
+                )
+            })
+        })
+        .unwrap_or_else(|| {
+            (
+                item.frontmatter.owned_surfaces.clone(),
+                "backlog item owned_surfaces".to_string(),
+            )
+        });
     let brief = bundle_brief(
         &task,
         &item,
@@ -109,6 +120,7 @@ pub fn generate_task_bundle(
         &verification_command,
         &acceptance,
         &owned_surfaces,
+        &owned_surface_source,
     );
     let bundle = TaskBundle {
         task_id: task.id.clone(),
@@ -330,6 +342,7 @@ fn bundle_brief(
     verification_command: &[String],
     acceptance_criteria: &[String],
     owned_surfaces: &[String],
+    owned_surface_source: &str,
 ) -> String {
     let verify = if verification_command.is_empty() {
         "Verification command: unspecified. Do not report `passed` unless you ran an explicit check; otherwise use verification_status `not_run`, `skipped`, or `failed` and explain why."
@@ -366,7 +379,7 @@ fn bundle_brief(
          ## Implementation Contract\n\n{contract}\n\n\
          ## Acceptance\n\n{acceptance}\n\n\
          ## Task Plan\n\n{task_plan}\n\n\
-         ## Owned Surfaces\n\n{surfaces}\n\n\
+         ## Owned Surfaces\n\nSource: {owned_surface_source}\n\n{surfaces}\n\n\
          ## Verification\n\n{verify}\n",
         item_id = item.frontmatter.id.as_str(),
         task_id = task.id.as_str(),
@@ -635,7 +648,9 @@ tasks:
         assert!(brief.contains("Add plan-aware bundle"));
         assert!(brief.contains("Worker must follow the implementation plan"));
         assert!(brief.contains("acceptance: Worker brief includes plan detail."));
+        assert!(brief.contains("Source: task plan task `PROJ-001-T01` owned_surfaces"));
         assert!(brief.contains("- `make check`"));
+        assert_eq!(bundle.owned_surfaces, vec!["src/bundle.rs"]);
         assert_eq!(bundle.verification_command, vec!["make check"]);
         assert!(!brief.contains("No verification command was provided"));
     }
@@ -719,6 +734,44 @@ tasks:
 
         assert!(bundle.verification_command.is_empty());
         assert!(bundle.brief.contains("Verification command: unspecified"));
+    }
+
+    #[test]
+    fn bundle_brief_traces_item_owned_surface_fallback() {
+        let project = project_with_backlog();
+        let task = create_task_record(
+            project.path(),
+            None,
+            NewTask {
+                source_item_id: "PROJ-001".to_string(),
+                title: "Bundle task".to_string(),
+                worker: Some("coder".to_string()),
+            },
+        )
+        .expect("task");
+        worktree_create(
+            project.path(),
+            WorktreeCreateParams {
+                root: None,
+                task_id: task.id.clone(),
+                base_ref: None,
+            },
+        )
+        .data
+        .expect("worktree");
+
+        let result = generate_task_bundle(
+            project.path(),
+            GenerateTaskBundleParams {
+                root: None,
+                task_id: task.id,
+                verification_command: Vec::new(),
+            },
+        );
+        let bundle = result.data.expect("bundle data").bundle;
+
+        assert_eq!(bundle.owned_surfaces, vec!["src/bundle.rs"]);
+        assert!(bundle.brief.contains("Source: backlog item owned_surfaces"));
     }
 
     #[test]
