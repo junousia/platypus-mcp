@@ -73,7 +73,7 @@ help: ## Show categorized developer commands.
 	@printf '  FEEDBACK_DRY_RUN=1 to bootstrap and smoke-check without invoking the host\n'
 	@printf '  FEEDBACK_TIMEOUT_SECONDS=600 to control host run timeout budget\n'
 	@printf '  FEEDBACK_DANGEROUS=1 to enable each host dangerous auto-approval mode\n'
-	@printf '  FEEDBACK_MODEL=<model> for all feedback targets\n'
+	@printf '  FEEDBACK_MODEL=<model> for all feedback targets (default gpt-5.5)\n'
 	@printf '  OPENCODE_MODEL=<model> OPENCODE_AGENT=<agent> for opencode-feedback\n'
 	@printf '  OPENCODE_DANGEROUS=1 to auto-approve OpenCode permissions in the temp project\n'
 	@printf '  OPENCODE_TIMEOUT_SECONDS=600 to control OpenCode run timeout budget\n'
@@ -87,7 +87,7 @@ help: ## Show categorized developer commands.
 	@printf '  CODEX_DANGEROUS=1 to bypass Codex approvals and sandboxing in the temp project\n'
 	@printf '  CODEX_DRY_RUN=1 to bootstrap and smoke-check without invoking Codex\n'
 	@printf '  PI_DRY_RUN=1 for setup-only Pi validation (default 1); PI_DRY_RUN=0 to invoke Pi\n'
-	@printf '  PI_MODEL=<model> PI_PROVIDER=<provider> for live pi-feedback\n'
+	@printf '  PI_MODEL=<model> PI_PROVIDER=<provider> for live pi-feedback (default gpt-5.5)\n'
 
 check: lint test pi-extension-test ## Format check, build-check, and run all tests.
 

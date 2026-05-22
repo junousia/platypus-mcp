@@ -17,7 +17,7 @@ case "$harness" in
   opencode)
     display_name=OpenCode
     executable=${OPENCODE_BIN:-opencode}
-    model=${OPENCODE_MODEL:-${FEEDBACK_MODEL:-}}
+    model=${OPENCODE_MODEL:-${FEEDBACK_MODEL:-gpt-5.5}}
     agent=${OPENCODE_AGENT:-}
     profile=${OPENCODE_PROFILE:-}
     dangerous=${OPENCODE_DANGEROUS:-${FEEDBACK_DANGEROUS:-0}}
@@ -32,7 +32,7 @@ case "$harness" in
   claude)
     display_name="Claude Code"
     executable=${CLAUDE_BIN:-claude}
-    model=${CLAUDE_MODEL:-${FEEDBACK_MODEL:-}}
+    model=${CLAUDE_MODEL:-${FEEDBACK_MODEL:-gpt-5.5}}
     agent=${CLAUDE_AGENT:-}
     profile=
     dangerous=${CLAUDE_DANGEROUS:-${FEEDBACK_DANGEROUS:-0}}
@@ -47,7 +47,7 @@ case "$harness" in
   codex)
     display_name=Codex
     executable=${CODEX_BIN:-codex}
-    model=${CODEX_MODEL:-${FEEDBACK_MODEL:-}}
+    model=${CODEX_MODEL:-${FEEDBACK_MODEL:-gpt-5.5}}
     agent=
     profile=${CODEX_PROFILE:-}
     dangerous=${CODEX_DANGEROUS:-${FEEDBACK_DANGEROUS:-0}}

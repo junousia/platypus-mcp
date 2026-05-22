@@ -8,7 +8,7 @@ project_root=${PROJECT_ROOT:-}
 keep_project=${KEEP_PROJECT:-1}
 dry_run=${PI_DRY_RUN:-${FEEDBACK_DRY_RUN:-1}}
 timeout_seconds=${PI_TIMEOUT_SECONDS:-${FEEDBACK_TIMEOUT_SECONDS:-900}}
-model=${PI_MODEL:-${FEEDBACK_MODEL:-}}
+model=${PI_MODEL:-${FEEDBACK_MODEL:-gpt-5.5}}
 provider=${PI_PROVIDER:-}
 created_temp_project=0
 

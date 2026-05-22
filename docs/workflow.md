@@ -373,7 +373,8 @@ Run `make pi-feedback` to create a temporary Pi project, bootstrap the local
 package and Platypus scaffold, validate core tools, and write a dry-run
 `FEEDBACK.md`. Use `PI_DRY_RUN=0 make pi-feedback` for a live Pi/model exercise
 that asks for structured feedback on setup, UI, workflow, schemas, result
-review, and closure behavior.
+review, and closure behavior. Feedback harnesses default to `gpt-5.5` unless
+`FEEDBACK_MODEL` or a host-specific model variable is set.
 
 ### Pi End-To-End Example
 
