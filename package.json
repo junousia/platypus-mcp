@@ -1,6 +1,6 @@
 {
   "name": "platypus-pi",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": false,
   "description": "Pi package for first-class Platypus MCP project-management integration",
   "keywords": ["pi-package", "platypus", "mcp", "project-management", "workflow"],
