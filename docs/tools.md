@@ -84,7 +84,7 @@ Pi command mapping:
 | `/platy-steer` | `inspect_session`, `inspect_work_queue`, `update_backlog_item`, `create_backlog_items`, `record_finding` |
 | `/platy-story-review` | `get_backlog_item`, `create_backlog_items`, `update_backlog_item` |
 | `/platy-plan-review` | `inspect_work_queue`, `get_backlog_item`, `write_task_plan`, `validate_task_plan` |
-| `/platy-plan` | `inspect_session`, `create_backlog_items`, `inspect_work_queue` |
+| `/platy-plan` | `inspect_session`, `inspect_workflow_config`, durable docs inspection, approved `create_backlog_items` |
 | `/platy-start` | `get_backlog_item`, project edits, `complete_backlog_item` |
 | `/platy-review-result` | `get_backlog_item`, `list_findings`, `validate_findings`, `record_finding`, `create_backlog_items`, `complete_backlog_item`, `finish_work` |
 | `/platy-doctor` | `doctor_snapshot` |
@@ -94,9 +94,15 @@ deterministic: durable changes happen through typed tools and repository files,
 not hidden Pi chat state.
 
 Direct quick path: read the startup guidance, call `inspect_session`, inspect
-for `direct_ready`, edit the manager workspace, then call
-`complete_backlog_item`. Call `prepare_work` first only when response-local
-guidance is useful.
+for `direct_ready`, and only edit the manager workspace when the item is an
+approved implementation task. Planning/intake items should confirm scope and
+assumptions before edits or completion. Call `prepare_work` first only when
+response-local guidance is useful.
+
+`/platy-plan` starts with project intake: inspect docs, Git/scaffold state,
+and workflow config defaults, summarize known facts, assumptions, open
+questions, proposed first milestone, and things not to do yet, then ask for
+approval before backlog creation.
 
 Pi also includes `/platy-story-review` for story-quality review before
 execution. The review prompt asks the agent to use durable direction and

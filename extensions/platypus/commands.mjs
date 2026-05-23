@@ -22,10 +22,12 @@ export const PI_COMMAND_NAMES = [
 
 export function buildPlanPrompt() {
 	return [
-		"Shape the current project goal into concrete Platypus backlog items.",
-		"First call platypus_inspect_session and inspect repository context and durable project direction files if needed.",
-		"Then call platypus_create_backlog_items with concrete titles, goals, acceptance criteria, owned_surfaces, execution_path, and planning_gate.",
-		"Present the created items and the next ready item. Ask for missing product direction instead of inventing details.",
+		"Start a Platypus project intake for the current planning request.",
+		"First call platypus_inspect_session, platypus_inspect_workflow_config, and inspect repository files, Git/scaffold state, existing docs, durable project direction, and engineering standards.",
+		"Review key Platypus defaults with the user: merge_style, require_clean_manager_workspace, require_verification_evidence, auto_commit_artifacts_default, default_path, direct_planning_gate, and worker_planning_gate.",
+		"Before any mutation, summarize sections named: What I understood, Known facts, Open questions, Assumptions, Proposed first milestone, Proposed backlog shape, and Things I will not do yet.",
+		"Ask clarifying questions and wait for explicit user approval before calling platypus_create_backlog_items or writing durable planning artifacts.",
+		"Do not start implementation, edit project files, commit, or call completion tools from this planning prompt.",
 	].join(" ");
 }
 

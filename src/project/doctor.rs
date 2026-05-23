@@ -19,19 +19,19 @@ pub fn doctor_snapshot(
         "project_config",
         &root.join("platy.yaml"),
         "platy.yaml exists.",
-        "Call init_project with this root to create platy.yaml and standard scaffold files, then rerun doctor_snapshot.",
+        "This will create platy.yaml and standard scaffold files. Ask for explicit user confirmation before calling init_project, then rerun doctor_snapshot.",
     ));
     checks.push(directory_check(
         "backlog_items",
         &root.join("backlog/items"),
         "backlog/items exists.",
-        "Call init_project with this root to create backlog/items and templates, then rerun doctor_snapshot.",
+        "This will create backlog/items and templates. Ask for explicit user confirmation before calling init_project, then rerun doctor_snapshot.",
     ));
     checks.push(directory_check(
         "backlog_epics",
         &root.join("backlog/epics"),
         "backlog/epics exists.",
-        "Call init_project with this root to create backlog/epics/general.md, then rerun doctor_snapshot.",
+        "This will create backlog/epics/general.md. Ask for explicit user confirmation before calling init_project, then rerun doctor_snapshot.",
     ));
     checks.push(git_check(&root));
     checks.push(backlog_count_check(&root));
@@ -167,7 +167,7 @@ fn backlog_count_check(root: &Path) -> DoctorCheck {
             status: DoctorCheckStatus::Warn,
             summary: "No backlog items found.".to_string(),
             next_action: Some(
-                "Use the host model to decide concrete backlog items, then call create_backlog_items and inspect_work_queue. validate_backlog is optional after successful typed creation."
+                "Run project intake before backlog creation: inspect docs, Git/scaffold state, and workflow config defaults; summarize facts, assumptions, questions, proposed first milestone, and things not to do yet; get user approval before calling create_backlog_items."
                     .to_string(),
             ),
         }
@@ -216,6 +216,11 @@ mod tests {
             .as_deref()
             .expect("recovery action")
             .contains("init_project"));
+        assert!(result
+            .recovery_action
+            .as_deref()
+            .expect("recovery action")
+            .contains("explicit user confirmation"));
         let data = result.data.expect("data");
         assert!(!data.ok);
         assert!(data.checks.iter().any(|check| {
@@ -268,6 +273,16 @@ mod tests {
             .as_ref()
             .expect("next action")
             .contains("create_backlog_items"));
+        assert!(backlog
+            .next_action
+            .as_ref()
+            .expect("next action")
+            .contains("project intake"));
+        assert!(backlog
+            .next_action
+            .as_ref()
+            .expect("next action")
+            .contains("workflow config defaults"));
     }
 
     fn project_fixture(with_backlog_dirs: bool) -> TempDir {

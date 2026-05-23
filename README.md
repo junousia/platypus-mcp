@@ -307,10 +307,11 @@ The Pi happy path is intentionally short:
 7. `/platy-review-result` asks the agent to compare implemented work against
    acceptance criteria, verification, findings, follow-ups, and the definition
    of done before completing direct or worker-handoff work.
-8. `/platy-plan` asks the agent to create concrete backlog items when the queue
-   is empty.
-9. `/platy-start` asks the agent to work the next ready item and complete it
-   with `platypus_complete_backlog_item`.
+8. `/platy-plan` asks the agent to run project intake, review key Platypus
+   config defaults, ask clarifying questions, propose backlog shape, and wait
+   for approval before creating backlog items.
+9. `/platy-start` asks the agent to work the next ready implementation
+   item and complete it with `platypus_complete_backlog_item`.
 10. `/platy-direction-revise` and `/platy-standards-revise` revisit captured
    guidance without rerunning the whole setup flow.
 11. `/platy-doctor` shows setup or recovery guidance when work is blocked.
