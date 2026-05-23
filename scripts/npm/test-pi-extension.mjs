@@ -138,7 +138,17 @@ try {
 assert.match(missingBinaryGuidance("platypus-mcp"), /PLATYPUS_MCP_BIN/);
 
 const item = { id: "MCP-127", title: "Add Pi extension test harness" };
+assert.match(buildPlanPrompt(), /project intake/);
+assert.match(buildPlanPrompt(), /platypus_inspect_workflow_config/);
+assert.match(buildPlanPrompt(), /merge_style/);
+assert.match(buildPlanPrompt(), /What I understood/);
+assert.match(buildPlanPrompt(), /Assumptions/);
+assert.match(buildPlanPrompt(), /Proposed first milestone/);
+assert.match(buildPlanPrompt(), /Things I will not do yet/);
+assert.match(buildPlanPrompt(), /explicit user approval/);
 assert.match(buildPlanPrompt(), /platypus_create_backlog_items/);
+assert.doesNotMatch(buildPlanPrompt(), /Work on Platypus backlog item/);
+assert.doesNotMatch(buildPlanPrompt(), /platypus_complete_backlog_item/);
 assert.match(buildStartPrompt(item), /MCP-127: Add Pi extension test harness/);
 assert.match(buildStartPrompt(item), /platypus_complete_backlog_item/);
 assert.match(buildStartPrompt(item), /docs\/engineering\.md/);

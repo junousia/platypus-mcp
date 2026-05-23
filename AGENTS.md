@@ -30,6 +30,10 @@ If `cargo fmt` is unavailable, report that `rustfmt` is missing and still run
 
 - Inspect before editing. Use `rg`, file reads, and existing tests to understand
   the target area.
+- For early product planning requests, do not create files, backlog items,
+  Git commits, implementation scaffolding, or other durable artifacts until the
+  user has answered clarifying questions or explicitly approved artifact
+  creation.
 - Use repository skills from `.agents/skills/<skill-name>/SKILL.md` when a task
   matches one.
 - Keep changes small and scoped to the MCP server.

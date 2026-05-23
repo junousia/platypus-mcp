@@ -25,7 +25,7 @@ use std::{
     process::Command,
 };
 
-const DIRECTION_SOURCE_GUIDANCE: &str = "Review durable direction in docs/product.md, docs/architecture.md, docs/testing.md, docs/roadmap.md, and docs/workflow.md when present; if direction is missing or stale, ask the user for product direction before creating backlog items.";
+const DIRECTION_SOURCE_GUIDANCE: &str = "Review durable direction in docs/product.md, docs/architecture.md, docs/testing.md, docs/roadmap.md, and docs/workflow.md when present; if direction is missing or stale, ask the user for product direction, review key workflow config defaults, summarize assumptions, and get approval before creating backlog items.";
 
 pub fn inspect_session(
     default_root: &Path,
@@ -508,7 +508,7 @@ pub fn inspect_work_queue(
     } else if items.is_empty() && inventory.total_count > 0 && inventory.runnable_count == 0 {
         recommended_tool = "create_backlog_items".to_string();
         reason = format!(
-            "All {} backlog item(s) are closed. {} Use the host model and user input to decide concrete follow-up work, then call create_backlog_items and inspect_work_queue. validate_backlog is optional after successful typed creation.",
+            "All {} backlog item(s) are closed. {} Run project intake first: inspect docs, Git/scaffold state, and workflow config defaults; summarize known facts, assumptions, open questions, proposed first milestone, and things not to do yet; get user approval before calling create_backlog_items.",
             inventory.total_count, DIRECTION_SOURCE_GUIDANCE
         );
         params = map_params([("root", root.as_str())]);
@@ -844,7 +844,7 @@ fn schema_hint_usage(tool: &str, phase: &str) -> &'static str {
     match (phase, tool) {
         ("direct_ready", "complete_backlog_item") => "required",
         ("direct_ready", "record_verification_evidence" | "prepare_work") => "optional",
-        ("empty_backlog", "create_backlog_items") => "required",
+        ("empty_backlog", "create_backlog_items") => "post_intake",
         ("empty_backlog", "inspect_work_queue") => "optional",
         ("planning_blocked", "write_task_plan" | "validate_task_plan") => "required",
         ("planning_blocked", "inspect_item") => "optional",
@@ -889,7 +889,7 @@ fn claude_toolsearch_batch_selector(hints: &[SchemaDiscoveryHint]) -> Option<Str
 fn schema_hint_reason(tool: &str, phase: &str) -> String {
     match tool {
         "create_backlog_items" => {
-            "Create one or more concrete backlog items after the host model uses durable direction and user input to decide the work."
+            "Create concrete backlog items only after project intake summarizes known facts, assumptions, workflow config defaults, open questions, and the user approves durable artifact creation."
                 .to_string()
         }
         "validate_backlog" => {
@@ -917,7 +917,7 @@ fn schema_hint_reason(tool: &str, phase: &str) -> String {
         }
         "approval_respond" => "Approve or deny a pending planning request.".to_string(),
         "doctor_snapshot" => "Diagnose setup, Git, and workflow blockers.".to_string(),
-        "init_project" => "Create missing Platypus project scaffold files.".to_string(),
+        "init_project" => "Create missing Platypus project scaffold files only after explicit user confirmation because this mutates the repository.".to_string(),
         "inspect_work_queue" => "Refresh queue state after resolving a blocker.".to_string(),
         "inspect_task" => "Inspect an active worker task lifecycle.".to_string(),
         "inspect_task_events" => "Replay activity for an active or completed task.".to_string(),
@@ -1222,7 +1222,7 @@ fn queue_state_descriptions() -> Vec<QueueStateDescription> {
 
 fn queue_state_description(queue_state: &str) -> &'static str {
     match queue_state {
-        "empty_backlog" => "No backlog items exist yet.",
+        "empty_backlog" => "No backlog items exist yet; run project intake, review workflow config defaults, ask clarifying questions, and get approval before creating backlog items.",
         "direct_ready" => "Ready for host-managed direct edits in the current workspace.",
         "ready" => "Ready for a worker handoff in an isolated worktree.",
         "planning_blocked" => "Requires a valid task plan before work can start.",
@@ -1927,7 +1927,7 @@ fn work_queue_item(
     {
         (
             "complete_backlog_item".to_string(),
-            "Direct work is ready: edit the manager workspace, verify, then call complete_backlog_item. Call prepare_work only when you need optional response-local guidance.".to_string(),
+            "Direct work is ready for implementation items: edit the manager workspace, verify, then call complete_backlog_item. For planning or intake items, confirm scope and assumptions before editing or completing work. Call prepare_work only when you need optional response-local guidance.".to_string(),
             "direct_ready".to_string(),
         )
     } else if ready_to_dispatch
@@ -2009,7 +2009,7 @@ fn execution_metadata(
             "direct_edit".to_string(),
             Some("complete_backlog_item".to_string()),
             true,
-            "Direct edit is ready from durable execution policy. Edit the manager workspace, verify, then call complete_backlog_item; prepare_work is optional response-local guidance only. inspect_work_queue stays direct_ready until completion records closure. To use a worktree handoff, set execution_path=worker_handoff on the backlog item or workflow.execution default.".to_string(),
+            "Direct edit is ready from durable execution policy. For implementation items, edit the manager workspace, verify, then call complete_backlog_item; prepare_work is optional response-local guidance only. For planning or intake items, first confirm scope and assumptions with the user before editing or completing work. inspect_work_queue stays direct_ready until completion records closure. To use a worktree handoff, set execution_path=worker_handoff on the backlog item or workflow.execution default.".to_string(),
         ),
         "ready" => (
             "worker_handoff".to_string(),
@@ -2165,7 +2165,7 @@ fn recommended_queue_action(
         return (
             "create_backlog_items".to_string(),
             format!(
-                "No backlog item exists yet. {} Use the host model and user input to decide concrete work, then call create_backlog_items and inspect_work_queue. validate_backlog is optional after successful typed creation.",
+                "No backlog item exists yet. {} Run project intake first: inspect docs, Git/scaffold state, and workflow config defaults; summarize known facts, assumptions, open questions, proposed first milestone, and things not to do yet; get user approval before calling create_backlog_items.",
                 DIRECTION_SOURCE_GUIDANCE
             ),
             map_params([("root", root)]),
@@ -2327,6 +2327,9 @@ mod tests {
         assert_eq!(queue_data.recommended_tool, "create_backlog_items");
         assert!(queue_data.reason.contains("docs/product.md"));
         assert!(queue_data.reason.contains("ask the user"));
+        assert!(queue_data.reason.contains("workflow config defaults"));
+        assert!(queue_data.reason.contains("assumptions"));
+        assert!(queue_data.reason.contains("approval"));
         assert_eq!(
             queue_data.claude_toolsearch_batch_selector.as_deref(),
             Some("select:mcp__platypus__create_backlog_items,mcp__platypus__inspect_work_queue")
@@ -2340,6 +2343,7 @@ mod tests {
             .iter()
             .any(|hint| hint.tool_name == "create_backlog_items"
                 && hint.host_neutral_query == "platypus tool create_backlog_items"
+                && hint.usage == "post_intake"
                 && hint.codex_tool_search_query
                     == "mcp__platypus__create_backlog_items platypus create_backlog_items"));
 
@@ -2401,6 +2405,9 @@ mod tests {
         assert_eq!(queue_data.recommended_tool, "create_backlog_items");
         assert!(queue_data.reason.contains("docs/product.md"));
         assert!(queue_data.reason.contains("ask the user"));
+        assert!(queue_data.reason.contains("workflow config defaults"));
+        assert!(queue_data.reason.contains("assumptions"));
+        assert!(queue_data.reason.contains("approval"));
 
         let status = inspect_queue_status(
             project.path(),
@@ -2817,6 +2824,9 @@ tasks:
         assert!(data.items[0]
             .execution_guidance
             .contains("prepare_work is optional"));
+        assert!(data.items[0]
+            .execution_guidance
+            .contains("confirm scope and assumptions"));
         assert!(data
             .schemas_likely_needed_next
             .iter()

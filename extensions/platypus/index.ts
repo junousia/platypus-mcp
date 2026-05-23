@@ -684,8 +684,8 @@ function guidanceForSnapshot(snapshot?: PlatypusSnapshot): string | undefined {
 		);
 	} else if ((snapshot.total ?? 0) === 0) {
 		lines.push(
-			"The backlog is empty. Ask the user for the product goal if needed, then call platypus_create_backlog_items with concrete items, acceptance criteria, owned_surfaces, execution_path, and planning_gate.",
-			"Do not invent implementation details that are not implied by the user goal or repository state.",
+			"The backlog is empty. Run project intake first: inspect durable docs, Git/scaffold state, and platypus_inspect_workflow_config; summarize facts, assumptions, open questions, proposed first milestone, and things not to do yet.",
+			"Ask for explicit user approval before calling platypus_create_backlog_items or writing durable artifacts. Do not start implementation from planning guidance.",
 		);
 	} else {
 		lines.push("No item is ready right now. Use platypus_inspect_work_queue or platypus_doctor_snapshot to explain blockers and the next safe action.");
@@ -1156,6 +1156,8 @@ This pi session has first-class Platypus project-management tools registered wit
 
 Workflow guidance:
 - For fresh project context, call \`platypus_inspect_session\` before planning or executing project-management work.
+- Treat planning discussion as distinct from planning artifacts: for early planning, inspect state, summarize facts and assumptions, ask clarifying questions, and get explicit user approval before calling mutating tools.
+- \`platypus_init_project\`, \`platypus_create_backlog_items\`, file writes, Git initialization, and commits are project-changing actions; do not run them from planning prompts until the user approves artifact creation.
 - If broad inspection is unavailable or insufficient, fall back to \`platypus_doctor_snapshot\`, \`platypus_inspect_status\`, \`platypus_inspect_workflow_config\`, \`platypus_inspect_queue_status\`, and \`platypus_inspect_work_queue\`.
 - Prefer direct work completion with \`platypus_complete_backlog_item\` after implementation and verification.
 - Call \`platypus_prepare_work\` only when response-local guidance is useful or worker handoff is needed.

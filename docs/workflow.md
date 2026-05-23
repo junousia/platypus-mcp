@@ -102,19 +102,19 @@ stateDiagram-v2
 | State | How to identify it | Required next action |
 | --- | --- | --- |
 | Unknown | Session start or stale chat context | `inspect_session` |
-| Needs scaffold | `doctor_snapshot` reports missing project files | `init_project`, then rerun `doctor_snapshot` |
-| Empty backlog | `inspect_work_queue` reports no items | Host decides concrete items, then `create_backlog_items` and `inspect_work_queue`; `validate_backlog` is optional after successful typed creation |
+| Needs scaffold | `doctor_snapshot` reports missing project files | Explain that `init_project` creates repository scaffold files; ask confirmation before calling it, then rerun `doctor_snapshot` |
+| Empty backlog | `inspect_work_queue` reports no items | Project intake: inspect docs, Git/scaffold state, and workflow config defaults; summarize facts, assumptions, open questions, proposed first milestone, and things not to do yet; ask approval before `create_backlog_items` |
 | Dependency blocked | `inspect_work_queue.inventory.dependency_blocked_count > 0` | `inspect_item` on the blocked item; close or create its dependencies |
 | Plan missing | `inspect_work_queue.items[].recommended_tool == "write_task_plan"` | Host writes exact plan with `write_task_plan`, then `validate_task_plan` |
 | Approval blocked | `queue_state == "approval_blocked"` | `request_planning_approval`, then `approval_respond` |
 | Config blocked | `queue_state == "config_blocked"` | `doctor_snapshot` and the reported recovery action |
 | Workspace blocked | `queue_state == "workspace_blocked"` | Commit, stash, or finish the manager-workspace change before worker dispatch |
-| Direct ready | `queue_state == "direct_ready"` | edit manager workspace, verify, `complete_backlog_item`; optional `prepare_work` only for guidance |
+| Direct ready | `queue_state == "direct_ready"` | For implementation items, edit, verify, `complete_backlog_item`; for planning/intake items, confirm scope and assumptions first |
 | Direct claimed | `queue_state == "active"` with `active_lease_id` | continue, renew, or release the task-scope lease before starting duplicate direct work |
 | Worker ready | `queue_state == "ready"` | `prepare_work` for one item or `dispatch_ready_work` for batch handoff |
 | Active work | `queue_state == "active"` or existing task id | `inspect_task`, `inspect_task_events`, `finish_work`, or recovery action |
 | Pending integration | `queue_state == "completed_pending_integration"` | `inspect_integration_gates`, then `integrate_worker_result` |
-| Closed queue | only closed items remain | Host decides whether to create more work; if yes, `create_backlog_items` |
+| Closed queue | only closed items remain | Project intake and user approval before creating follow-up backlog items |
 
 ### Lifecycle Output States
 
